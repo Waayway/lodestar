@@ -1,24 +1,17 @@
 import { useState } from "preact/hooks";
-import { toast } from "sonner";
-import { agentStatusText, applyChannel } from "@/api";
 import type { ChannelView } from "@/bindings/ChannelView";
 import type { Snapshot } from "@/bindings/Snapshot";
 import { PromoteDialog } from "@/components/PromoteDialog";
 import { Button } from "@/components/ui/button";
-import { shortRev } from "@/format";
+import { useActions } from "@/connection/hooks";
+import { shortRev } from "@/lib/format";
 
-export function ChannelBar({
-  snapshot,
-  onError,
-}: {
-  snapshot: Snapshot;
-  onError: (what: string, e: unknown) => void;
-}) {
+export function ChannelBar({ snapshot }: { snapshot: Snapshot }) {
   return (
     <section className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
       <div className="grid flex-1 gap-3 sm:grid-cols-2">
         {snapshot.channels.map((c) => (
-          <ChannelCard key={c.name} channel={c} snapshot={snapshot} onError={onError} />
+          <ChannelCard key={c.name} channel={c} snapshot={snapshot} />
         ))}
       </div>
       {snapshot.promote_candidate !== null && snapshot.promote !== null && (
@@ -36,7 +29,6 @@ export function ChannelBar({
             commit={snapshot.promote_candidate}
             pair={snapshot.promote}
             channels={snapshot.channels}
-            onError={onError}
           />
         </div>
       )}
@@ -47,12 +39,11 @@ export function ChannelBar({
 function ChannelCard({
   channel: c,
   snapshot,
-  onError,
 }: {
   channel: ChannelView;
   snapshot: Snapshot;
-  onError: (what: string, e: unknown) => void;
 }) {
+  const { applyChannel } = useActions();
   const [sending, setSending] = useState(false);
   const hosts = snapshot.hosts.filter((h) => h.channel === c.name);
   const behind = hosts.filter((h) => h.behind !== null && h.behind > 0).length;
@@ -60,25 +51,7 @@ function ChannelCard({
   async function applyAll() {
     setSending(true);
     try {
-      const r = await applyChannel(c.name);
-      const notes = Object.entries(r.agent_status)
-        .map(([host, s]) => agentStatusText(host, s))
-        .filter((n): n is string => n !== null);
-      const started = Object.values(r.agent_status).filter((s) => s === "202").length;
-      const total = Object.keys(r.apply_ids).length;
-      const summary = `Apply started on ${started} of ${total} ${total === 1 ? "host" : "hosts"} on ${c.name}`;
-      if (notes.length > 0) toast.warning(summary, {
-          description: (
-            <ul className="flex flex-col gap-1">
-              {notes.map((n) => (
-                <li key={n}>{n}</li>
-              ))}
-            </ul>
-          ),
-        });
-      else toast.success(summary);
-    } catch (e) {
-      onError(`Apply to ${c.name} failed`, e);
+      await applyChannel(c.name);
     } finally {
       setSending(false);
     }

@@ -1,6 +1,4 @@
 import { useState } from "preact/hooks";
-import { toast } from "sonner";
-import { promote } from "@/api";
 import type { ChannelView } from "@/bindings/ChannelView";
 import type { PromoteChannels } from "@/bindings/PromoteChannels";
 import { Button } from "@/components/ui/button";
@@ -14,7 +12,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { shortRev } from "@/format";
+import { useActions } from "@/connection/hooks";
+import { shortRev } from "@/lib/format";
 
 /**
  * "Promote from → to" (by default unstable → stable): fast-forwards `to` to `commit` after a
@@ -25,13 +24,12 @@ export function PromoteDialog({
   commit: candidate,
   pair,
   channels,
-  onError,
 }: {
   commit: string;
   pair: PromoteChannels;
   channels: ChannelView[];
-  onError: (what: string, e: unknown) => void;
 }) {
+  const { promote } = useActions();
   // What the open dialog promotes, captured when it opened.
   const [target, setTarget] = useState<{ commit: string; subject: string | null } | null>(null);
   const [sending, setSending] = useState(false);
@@ -44,11 +42,7 @@ export function PromoteDialog({
     if (target === null) return;
     setSending(true);
     try {
-      await promote(target.commit);
-      toast.success(`${pair.to} moved to ${shortRev(target.commit)}`);
-      setTarget(null);
-    } catch (e) {
-      onError("Promote failed", e);
+      if (await promote(target.commit, pair)) setTarget(null);
     } finally {
       setSending(false);
     }

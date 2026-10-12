@@ -1,6 +1,4 @@
 import { useLayoutEffect, useRef } from "preact/hooks";
-import type { HeldLog } from "@/applyLog";
-import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import { ApplyBadge } from "@/components/HostRow";
 import {
   Sheet,
@@ -9,29 +7,20 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { ago, durationLabel, shortRev } from "@/format";
+import { useActions, useApplyLog } from "@/connection/hooks";
+import { shortRev } from "@/lib/format";
+import { ago, durationLabel } from "@/lib/time";
 
 /** The log of one apply, appended live while it runs. */
-export function ApplyLogSheet({
-  open,
-  host,
-  applyId,
-  record,
-  log,
-  error,
-  now,
-  onClose,
-}: {
-  open: boolean;
-  host: string;
-  applyId: string;
-  /** The host's last apply when it is this one, so its state stays live; else null. */
-  record: ApplyRecord | null;
-  log: HeldLog | null;
-  error: string | null;
-  now: number;
-  onClose: () => void;
-}) {
+export function ApplyLogSheet({ now }: { now: number }) {
+  const view = useApplyLog();
+  const { closeLog: onClose } = useActions();
+  const open = view !== null;
+  const host = view?.host ?? "";
+  const applyId = view?.applyId ?? "";
+  const record = view?.record ?? null;
+  const log = view?.log ?? null;
+  const error = view?.error ?? null;
   const scroller = useRef<HTMLPreElement>(null);
   const pinned = useRef(true);
   const running = record?.state === "running";

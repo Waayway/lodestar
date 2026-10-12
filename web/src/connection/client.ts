@@ -1,4 +1,7 @@
 // REST calls to the Lodestar server. Errors carry the HTTP status and the server's `{error}` text.
+// The only module (with `feed.ts`) that talks to the network: components go through
+// `connection/hooks`.
+import type { AuditEvent } from "@/bindings/AuditEvent";
 import type { Snapshot } from "@/bindings/Snapshot";
 
 /** What the server got back from the agent when it sent an apply. */
@@ -78,18 +81,7 @@ export async function getApplyLog(host: string, applyId: string): Promise<string
   return (await request("GET", `/api/hosts/${enc(host)}/applies/${enc(applyId)}/log`)).text();
 }
 
-/** A sentence for an agent's answer to an apply the server sent it, or null when it started. */
-export function agentStatusText(host: string, s: AgentStatus): string | null {
-  switch (s) {
-    case "202":
-      return null;
-    case "200":
-      return `${host} already ran this apply`;
-    case "409":
-      return `${host} is busy with another apply. This one is sent when it finishes.`;
-    case "unreachable":
-      return `${host}: agent not answering. The apply is queued and sent when it is back.`;
-    case "error":
-      return `${host}: the agent returned an error`;
-  }
+/** The newest audit events, newest first. */
+export async function getAudit(limit: number): Promise<AuditEvent[]> {
+  return (await request("GET", `/api/audit?limit=${limit}`)).json();
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { finishFetch, fromText, mergeChunk, requestFetch, watchLog } from "@/applyLog";
+import { finishFetch, fromText, mergeChunk, requestFetch, watchLog } from "@/lib/applyLog";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { HostView } from "@/bindings/HostView";
 import type { WsMessage } from "@/bindings/WsMessage";

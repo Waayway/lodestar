@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { HostView } from "@/bindings/HostView";
-import { applyBadge, behindLabel, onlineLabel, shortRev, skipReasonText } from "@/format";
+import { applyBadge, behindLabel, onlineLabel, shortRev, skipReasonText } from "@/lib/format";
 
 const REV = "0123456789abcdef0123456789abcdef01234567";
 

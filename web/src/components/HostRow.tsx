@@ -1,8 +1,6 @@
 import { useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import { FileTextIcon, LoaderIcon } from "lucide-react";
-import { toast } from "sonner";
-import { agentStatusText, applyHost } from "@/api";
 import type { ActivationEvent } from "@/bindings/ActivationEvent";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { CheckoutStatus } from "@/bindings/CheckoutStatus";
@@ -12,17 +10,17 @@ import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  ago,
   applyBadge,
   applyTone,
   behindLabel,
-  durationLabel,
   hostTone,
   onlineLabel,
   shortRev,
   type Tone,
-} from "@/format";
-import { cn } from "@/lib/utils";
+} from "@/lib/format";
+import { cn } from "@/lib/cn";
+import { ago, durationLabel } from "@/lib/time";
+import { useActions } from "@/connection/hooks";
 
 /** Left edge of a row: one glance down the table shows which hosts need attention. */
 const stripe: Record<Tone, string> = {
@@ -73,14 +71,11 @@ const stripDirty = (rev: string) => rev.replace(/-dirty$/, "");
 export function HostRow({
   host: h,
   now,
-  onShowLog,
-  onError,
 }: {
   host: HostView;
   now: number;
-  onShowLog: (host: string, applyId: string) => void;
-  onError: (what: string, e: unknown) => void;
 }) {
+  const { applyHost, showLog: onShowLog } = useActions();
   const [sending, setSending] = useState(false);
   const tone = hostTone(h);
   const applying = h.last_apply?.state === "running";
@@ -94,12 +89,7 @@ export function HostRow({
   async function apply() {
     setSending(true);
     try {
-      const r = await applyHost(h.name);
-      const note = agentStatusText(h.name, r.agent_status);
-      if (note) toast.warning(note);
-      else toast.success(`Apply started on ${h.name}`);
-    } catch (e) {
-      onError(`Apply on ${h.name} failed`, e);
+      await applyHost(h.name);
     } finally {
       setSending(false);
     }

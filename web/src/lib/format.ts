@@ -2,6 +2,8 @@
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { HostView } from "@/bindings/HostView";
 import type { SkipReason } from "@/bindings/SkipReason";
+import type { AgentStatus } from "@/connection/client";
+import { ago } from "@/lib/time";
 
 /** First 7 characters of a revision, keeping a `-dirty` suffix. */
 export function shortRev(rev: string): string {
@@ -13,15 +15,6 @@ export function shortRev(rev: string): string {
 export function behindLabel(n: number | null): string {
   if (n === null) return "unknown";
   return n === 0 ? "up to date" : `${n} behind`;
-}
-
-/** "5m ago", "2h ago", "3d ago"; "just now" under a minute. */
-export function ago(time: number, now: number): string {
-  const s = Math.max(0, now - time);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }
 
 export function onlineLabel(h: HostView, now: number): string {
@@ -109,10 +102,18 @@ export function hostTone(h: HostView): Tone {
   return h.behind === 0 ? "ok" : "idle";
 }
 
-/** "45s" or "2m 05s": how long an apply ran (or has been running). */
-export function durationLabel(start: number | null, end: number | null, now: number): string {
-  if (start === null) return "";
-  const s = Math.max(0, (end ?? now) - start);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+/** A sentence for an agent's answer to an apply the server sent it, or null when it started. */
+export function agentStatusText(host: string, s: AgentStatus): string | null {
+  switch (s) {
+    case "202":
+      return null;
+    case "200":
+      return `${host} already ran this apply`;
+    case "409":
+      return `${host} is busy with another apply. This one is sent when it finishes.`;
+    case "unreachable":
+      return `${host}: agent not answering. The apply is queued and sent when it is back.`;
+    case "error":
+      return `${host}: the agent returned an error`;
+  }
 }

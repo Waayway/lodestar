@@ -2,18 +2,14 @@ import type { ComponentChildren } from "preact";
 import type { HostView } from "@/bindings/HostView";
 import { HostRow } from "@/components/HostRow";
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/cn";
 
 export function HostTable({
   hosts,
   now,
-  onShowLog,
-  onError,
 }: {
   hosts: HostView[];
   now: number;
-  onShowLog: (host: string, applyId: string) => void;
-  onError: (what: string, e: unknown) => void;
 }) {
   if (hosts.length === 0) {
     return (
@@ -43,7 +39,7 @@ export function HostTable({
         </TableHeader>
         <TableBody>
           {sorted.map((h) => (
-            <HostRow key={h.name} host={h} now={now} onShowLog={onShowLog} onError={onError} />
+            <HostRow key={h.name} host={h} now={now} />
           ))}
         </TableBody>
       </Table>

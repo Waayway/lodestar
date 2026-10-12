@@ -78,7 +78,7 @@ pub fn load(path: &Path) -> anyhow::Result<AgentConfig> {
 mod tests {
     use super::*;
 
-    fn cfg(os: &str, attr: Option<&str>) -> AgentConfig {
+    fn config(os: &str, attr: Option<&str>) -> AgentConfig {
         serde_json::from_value(serde_json::json!({
             "host": "box", "user": "alice", "channel": "main", "flake_path": "/home/alice/infra",
             "repo_url": "https://example.com/infra.git", "manager_host": "manager",
@@ -90,15 +90,15 @@ mod tests {
     #[test]
     fn flake_attr_defaults_per_os_and_can_be_overridden() {
         assert_eq!(
-            cfg("linux", None).flake_attr(),
+            config("linux", None).flake_attr(),
             "nixosConfigurations.box.config.system.build.toplevel"
         );
         assert_eq!(
-            cfg("darwin", None).flake_attr(),
+            config("darwin", None).flake_attr(),
             "darwinConfigurations.box.system"
         );
         assert_eq!(
-            cfg("linux", Some("packages.x86_64-linux.box")).flake_attr(),
+            config("linux", Some("packages.x86_64-linux.box")).flake_attr(),
             "packages.x86_64-linux.box"
         );
     }

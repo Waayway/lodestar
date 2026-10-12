@@ -15,17 +15,17 @@ pub const DAEMON_PATH: &str =
     "/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 /// Root's home directory for the wrapper: `/var/root` on macOS, `/root` elsewhere.
-pub fn daemon_home(cfg: &AgentConfig) -> &'static str {
-    if cfg.os == "darwin" {
+pub fn daemon_home(config: &AgentConfig) -> &'static str {
+    if config.os == "darwin" {
         "/var/root"
     } else {
         "/root"
     }
 }
 
-fn exe_path(cfg: &AgentConfig) -> anyhow::Result<PathBuf> {
-    match &cfg.agent_exe {
-        Some(p) => Ok(p.clone()),
+fn exe_path(config: &AgentConfig) -> anyhow::Result<PathBuf> {
+    match &config.agent_exe {
+        Some(path) => Ok(path.clone()),
         None => std::env::current_exe().context("locating own executable"),
     }
 }
@@ -33,7 +33,7 @@ fn exe_path(cfg: &AgentConfig) -> anyhow::Result<PathBuf> {
 /// Program and argv for starting the wrapper. Pure, so it can be unit-tested.
 /// `--` keeps a hostile positional from being parsed as a flag.
 pub fn launch_command(
-    cfg: &AgentConfig,
+    config: &AgentConfig,
     config_path: &Path,
     id: &str,
     commit: &str,
@@ -44,7 +44,7 @@ pub fn launch_command(
     if !is_commit_hash(commit) {
         bail!("invalid commit");
     }
-    let exe = exe_path(cfg)?;
+    let executable = exe_path(config)?;
     let wrapper = [
         "apply".to_string(),
         "--config".into(),
@@ -53,7 +53,7 @@ pub fn launch_command(
         id.into(),
         commit.into(),
     ];
-    Ok(match cfg.launcher {
+    Ok(match config.launcher {
         Launcher::SystemdRun => {
             let mut args = vec![
                 "--unit".to_string(),
@@ -61,23 +61,28 @@ pub fn launch_command(
                 "--collect".into(),
                 "--property=Type=exec".into(),
                 format!("--setenv=PATH={DAEMON_PATH}"),
-                format!("--setenv=HOME={}", daemon_home(cfg)),
-                exe.to_string_lossy().into_owned(),
+                format!("--setenv=HOME={}", daemon_home(config)),
+                executable.to_string_lossy().into_owned(),
             ];
             args.extend(wrapper);
             (PathBuf::from("systemd-run"), args)
         }
-        Launcher::Detach | Launcher::Inline => (exe, wrapper.to_vec()),
+        Launcher::Detach | Launcher::Inline => (executable, wrapper.to_vec()),
     })
 }
 
-pub fn launch(cfg: &AgentConfig, config_path: &Path, id: &str, commit: &str) -> anyhow::Result<()> {
-    let (program, args) = launch_command(cfg, config_path, id, commit)?;
-    let mut cmd = Command::new(program);
-    cmd.args(args);
-    match cfg.launcher {
+pub fn launch(
+    config: &AgentConfig,
+    config_path: &Path,
+    id: &str,
+    commit: &str,
+) -> anyhow::Result<()> {
+    let (program, args) = launch_command(config, config_path, id, commit)?;
+    let mut command = Command::new(program);
+    command.args(args);
+    match config.launcher {
         Launcher::SystemdRun => {
-            let status = cmd
+            let status = command
                 .stdin(Stdio::null())
                 .status()
                 .context("running systemd-run")?;
@@ -86,25 +91,28 @@ pub fn launch(cfg: &AgentConfig, config_path: &Path, id: &str, commit: &str) -> 
             }
         }
         Launcher::Detach => {
-            cmd.env("PATH", DAEMON_PATH)
-                .env("HOME", daemon_home(cfg))
+            command
+                .env("PATH", DAEMON_PATH)
+                .env("HOME", daemon_home(config))
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             // SAFETY: setsid is async-signal-safe and the hook does nothing else.
             unsafe {
-                cmd.pre_exec(|| {
+                command.pre_exec(|| {
                     if libc::setsid() == -1 {
                         return Err(std::io::Error::last_os_error());
                     }
                     Ok(())
                 });
             }
-            reap(cmd.spawn().context("spawning apply wrapper")?);
+            reap(command.spawn().context("spawning apply wrapper")?);
         }
         Launcher::Inline => {
-            cmd.env("PATH", DAEMON_PATH).env("HOME", daemon_home(cfg));
-            reap(cmd.spawn().context("spawning apply wrapper")?);
+            command
+                .env("PATH", DAEMON_PATH)
+                .env("HOME", daemon_home(config));
+            reap(command.spawn().context("spawning apply wrapper")?);
         }
     }
     Ok(())

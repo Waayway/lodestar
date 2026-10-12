@@ -22,8 +22,8 @@ struct RawEvent {
 /// `next` is the number of complete lines in the file.
 pub fn read_since(path: &Path, since: u64) -> ActivationsResponse {
     let data = std::fs::read(path).unwrap_or_default();
-    let complete = match data.iter().rposition(|b| *b == b'\n') {
-        Some(i) => &data[..i],
+    let complete = match data.iter().rposition(|byte| *byte == b'\n') {
+        Some(index) => &data[..index],
         None => {
             return ActivationsResponse {
                 events: vec![],
@@ -33,21 +33,21 @@ pub fn read_since(path: &Path, since: u64) -> ActivationsResponse {
     };
     let mut events = Vec::new();
     let mut next = 0u64;
-    for (n, line) in complete.split(|b| *b == b'\n').enumerate() {
-        let n = n as u64;
-        next = n + 1;
-        if n < since {
+    for (line_number, line) in complete.split(|byte| *byte == b'\n').enumerate() {
+        let line_number = line_number as u64;
+        next = line_number + 1;
+        if line_number < since {
             continue;
         }
-        if let Ok(r) = serde_json::from_slice::<RawEvent>(line) {
+        if let Ok(raw) = serde_json::from_slice::<RawEvent>(line) {
             events.push(ActivationEvent {
-                line: n,
-                time: r.time,
-                store_path: r.store_path,
-                revision: r.revision,
-                generation: r.generation,
-                trigger: r.trigger,
-                sudo_user: r.sudo_user,
+                line: line_number,
+                time: raw.time,
+                store_path: raw.store_path,
+                revision: raw.revision,
+                generation: raw.generation,
+                trigger: raw.trigger,
+                sudo_user: raw.sudo_user,
             });
         }
     }

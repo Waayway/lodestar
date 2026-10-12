@@ -31,8 +31,8 @@ enum Command {
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(code) => code,
-        Err(e) => {
-            eprintln!("lodestar-agent: {e:#}");
+        Err(error) => {
+            eprintln!("lodestar-agent: {error:#}");
             ExitCode::FAILURE
         }
     }
@@ -40,16 +40,22 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
-        Command::Serve { config } => {
-            let cfg = config::load(&config)?;
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(lodestar_agent::api::serve(cfg, config))?;
+        Command::Serve {
+            config: config_path,
+        } => {
+            let config = config::load(&config_path)?;
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(lodestar_agent::daemon::serve(config, config_path))?;
             Ok(ExitCode::FAILURE)
         }
-        Command::Apply { config, id, commit } => {
-            let cfg = config::load(&config)?;
-            let rec = apply::run_apply(&cfg, &id, &commit);
-            Ok(match rec.state {
+        Command::Apply {
+            config: config_path,
+            id,
+            commit,
+        } => {
+            let config = config::load(&config_path)?;
+            let record = apply::run_apply(&config, &id, &commit);
+            Ok(match record.state {
                 ApplyState::Ok | ApplyState::Skipped => ExitCode::SUCCESS,
                 _ => ExitCode::FAILURE,
             })

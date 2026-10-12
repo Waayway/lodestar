@@ -39,7 +39,7 @@ let
     version = "0.1.0";
     # Flake sources never contain the git-ignored node_modules/ and dist/.
     src = ./web;
-    npmDepsHash = "sha256-rlgrxzQHsXK/+VqE0b3Uf366uybhdeehRnKU464bHQc=";
+    npmDepsHash = "sha256-xaxAoobAdGT8iykDM7bPuiSBbRQVJbvOUfjbPEBQlEs=";
     installPhase = ''
       runHook preInstall
       cp -r dist $out

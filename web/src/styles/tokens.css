@@ -1,0 +1,151 @@
+/*
+ * Lodestar design tokens: the "Nautical chart" (light) and its night watch (dark).
+ * Values are the approved mockup's (docs/plans/2026-10-12-web-restyle-mockup.html,
+ * stylesheets 3 and 5); docs/style-guide.md explains each one.
+ *
+ * The theme follows prefers-color-scheme unless <html data-theme="light|dark"> overrides it
+ * (lib/theme.ts). The dark block appears twice so the override wins in both directions.
+ */
+:root {
+  color-scheme: light;
+
+  --bg: #f3eee1;
+  --panel: #fbf8f0;
+  --chip: #ebe4d2;
+  --fg: #17233d;
+  --muted: #5d6577;
+  --line: #cfc5ad;
+  --line-soft: #e3dcc8;
+
+  --accent: #a8324a;
+  --accent-soft: rgba(168, 50, 74, 0.1);
+  --accent-line: #a8324a;
+  --mark-bg: #17233d;
+  --mark-fg: #f3eee1;
+
+  --ok: #1f6e5b;
+  --ok-soft: rgba(31, 110, 91, 0.12);
+  --warn: #8a5a00;
+  --warn-soft: rgba(176, 123, 20, 0.16);
+  --bad: #a8261d;
+  --bad-soft: rgba(168, 38, 29, 0.11);
+  --info: #1f4f8f;
+  --info-soft: rgba(31, 79, 143, 0.11);
+
+  --nix: #2f5aa8;
+  --stable: #17233d;
+  --stable-line: #17233d;
+  --unstable: #7a5a1e;
+  --unstable-line: #b08d3c;
+
+  --btn-bg: #17233d;
+  --btn-fg: #fbf8f0;
+  --btn-line: #17233d;
+
+  --log-bg: #17233d;
+  --log-fg: #e6dfcc;
+  --log-cmd: #e7c27a;
+
+  --grid: rgba(23, 35, 61, 0.06);
+  --overlay: rgba(23, 35, 61, 0.45);
+
+  --r: 4px;
+  --r-sm: 3px;
+
+  --font: "IBM Plex Sans", system-ui, sans-serif;
+  --display: "IBM Plex Serif", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --display-w: 600;
+  --display-ls: 0.02em;
+  --label-ls: 0.14em;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --bg: #0e1626;
+    --panel: #142035;
+    --chip: #1c2a45;
+    --fg: #ebe3cd;
+    --muted: #a69e88;
+    --line: #2d3b58;
+    --line-soft: #1f2c46;
+
+    --accent: #e07a8c;
+    --accent-soft: rgba(224, 122, 140, 0.13);
+    --accent-line: #e07a8c;
+    --mark-bg: #ebe3cd;
+    --mark-fg: #0e1626;
+
+    --ok: #63c9a8;
+    --ok-soft: rgba(99, 201, 168, 0.13);
+    --warn: #e2b25a;
+    --warn-soft: rgba(226, 178, 90, 0.14);
+    --bad: #f07468;
+    --bad-soft: rgba(240, 116, 104, 0.14);
+    --info: #86aee8;
+    --info-soft: rgba(134, 174, 232, 0.14);
+
+    --nix: #93b0ef;
+    --stable: #ebe3cd;
+    --stable-line: #a69e88;
+    --unstable: #e2b25a;
+    --unstable-line: rgba(226, 178, 90, 0.6);
+
+    --btn-bg: #ebe3cd;
+    --btn-fg: #0e1626;
+    --btn-line: #ebe3cd;
+
+    --log-bg: #09101d;
+    --log-fg: #d8d0ba;
+    --log-cmd: #e2b25a;
+
+    --grid: rgba(235, 227, 205, 0.045);
+    --overlay: rgba(5, 9, 18, 0.6);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0e1626;
+  --panel: #142035;
+  --chip: #1c2a45;
+  --fg: #ebe3cd;
+  --muted: #a69e88;
+  --line: #2d3b58;
+  --line-soft: #1f2c46;
+
+  --accent: #e07a8c;
+  --accent-soft: rgba(224, 122, 140, 0.13);
+  --accent-line: #e07a8c;
+  --mark-bg: #ebe3cd;
+  --mark-fg: #0e1626;
+
+  --ok: #63c9a8;
+  --ok-soft: rgba(99, 201, 168, 0.13);
+  --warn: #e2b25a;
+  --warn-soft: rgba(226, 178, 90, 0.14);
+  --bad: #f07468;
+  --bad-soft: rgba(240, 116, 104, 0.14);
+  --info: #86aee8;
+  --info-soft: rgba(134, 174, 232, 0.14);
+
+  --nix: #93b0ef;
+  --stable: #ebe3cd;
+  --stable-line: #a69e88;
+  --unstable: #e2b25a;
+  --unstable-line: rgba(226, 178, 90, 0.6);
+
+  --btn-bg: #ebe3cd;
+  --btn-fg: #0e1626;
+  --btn-line: #ebe3cd;
+
+  --log-bg: #09101d;
+  --log-fg: #d8d0ba;
+  --log-cmd: #e2b25a;
+
+  --grid: rgba(235, 227, 205, 0.045);
+  --overlay: rgba(5, 9, 18, 0.6);
+}

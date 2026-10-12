@@ -16,14 +16,14 @@ afterEach(() => {
 });
 
 describe("request headers", () => {
-  it("sends X-Fleet on every request (CSRF guard)", async () => {
+  it("sends X-Lodestar on every request (CSRF guard)", async () => {
     const fetchMock = stubFetch();
     await getSnapshot();
     await applyHost("hermes");
     await promote("a".repeat(40));
     expect(fetchMock).toHaveBeenCalledTimes(3);
     for (const call of fetchMock.mock.calls) {
-      expect(headersOf(call)["x-fleet"]).toBe("1");
+      expect(headersOf(call)["x-lodestar"]).toBe("1");
     }
     expect(headersOf(fetchMock.mock.calls[0])["content-type"]).toBeUndefined();
     expect(headersOf(fetchMock.mock.calls[2])["content-type"]).toBe("application/json");

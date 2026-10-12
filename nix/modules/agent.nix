@@ -1,5 +1,5 @@
-# Installs and runs fleet-agent (systemd on Linux, launchd on darwin) and
-# writes its JSON config to /etc/fleet-agent/config.json.
+# Installs and runs lodestar-agent (systemd on Linux, launchd on darwin) and
+# writes its JSON config to /etc/lodestar-agent/config.json.
 {
   config,
   lib,
@@ -12,13 +12,13 @@
   ...
 }:
 let
-  cfg = config.services.fleet-agent;
-  configPath = "/etc/fleet-agent/config.json";
+  cfg = config.services.lodestar-agent;
+  configPath = "/etc/lodestar-agent/config.json";
   daemonPath = "/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-  exe = "${cfg.package}/bin/fleet-agent";
+  exe = "${cfg.package}/bin/lodestar-agent";
 in
 {
-  options.services.fleet-agent = {
+  options.services.lodestar-agent = {
     enable = lib.mkOption {
       type = lib.types.bool;
       default = fleet.member;
@@ -62,8 +62,8 @@ in
     };
     package = lib.mkOption {
       type = lib.types.package;
-      default = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.fleet-agent;
-      description = "The fleet-agent package.";
+      default = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.lodestar-agent;
+      description = "The lodestar-agent package.";
     };
     ctlPackage = lib.mkOption {
       type = lib.types.package;
@@ -76,7 +76,7 @@ in
     lib.mkMerge [
       {
         environment.systemPackages = [ cfg.ctlPackage ];
-        environment.etc."fleet-agent/config.json".text = builtins.toJSON {
+        environment.etc."lodestar-agent/config.json".text = builtins.toJSON {
           host = currentSystemName;
           user = user.name;
           channel = fleet.channel;
@@ -85,7 +85,7 @@ in
           inherit (cfg) port;
           manager_host = cfg.managerHost;
           inherit (cfg) listen;
-          state_dir = "/var/lib/fleet-agent";
+          state_dir = "/var/lib/lodestar-agent";
           rebuild_command = cfg.rebuildCommand;
           launcher = if hostPlatform.isDarwin then "detach" else "systemd_run";
           os = if hostPlatform.isDarwin then "darwin" else "linux";
@@ -97,7 +97,7 @@ in
         # The firewall (modules/networking/firewall.nix) only opens 22; the manager
         # reaches the agent over the tailnet.
         networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ cfg.port ];
-        systemd.services.fleet-agent = {
+        systemd.services.lodestar-agent = {
           description = "Fleet agent";
           wantedBy = [ "multi-user.target" ];
           after = [
@@ -108,7 +108,7 @@ in
           environment.PATH = lib.mkForce daemonPath;
           serviceConfig = {
             ExecStart = "${exe} serve --config ${configPath}";
-            StateDirectory = "fleet-agent";
+            StateDirectory = "lodestar-agent";
             Restart = "always";
             RestartSec = 5;
           };
@@ -117,7 +117,7 @@ in
         };
       })
       (lib.optionalAttrs hostPlatform.isDarwin {
-        launchd.daemons.fleet-agent.serviceConfig = {
+        launchd.daemons.lodestar-agent.serviceConfig = {
           ProgramArguments = [
             exe
             "serve"
@@ -131,11 +131,11 @@ in
             PATH = daemonPath;
             HOME = "/var/root";
           };
-          StandardOutPath = "/var/log/fleet-agent.log";
-          StandardErrorPath = "/var/log/fleet-agent.log";
+          StandardOutPath = "/var/log/lodestar-agent.log";
+          StandardErrorPath = "/var/log/lodestar-agent.log";
         };
         system.activationScripts.postActivation.text = ''
-          mkdir -p /var/lib/fleet-agent
+          mkdir -p /var/lib/lodestar-agent
         '';
       })
     ]

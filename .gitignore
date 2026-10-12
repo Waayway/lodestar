@@ -1,4 +1,4 @@
 target/
 web/node_modules
 web/dist
-fleet-proto/bindings/
+lodestar-proto/bindings/

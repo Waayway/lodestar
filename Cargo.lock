@@ -658,79 +658,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
-name = "fleet-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "clap",
- "fleet-proto",
- "if-addrs",
- "libc",
- "nix 0.29.0",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower",
-]
-
-[[package]]
-name = "fleet-migration"
-version = "0.1.0"
-dependencies = [
- "sea-orm-migration",
-]
-
-[[package]]
-name = "fleet-proto"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "ts-rs",
-]
-
-[[package]]
-name = "fleet-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "chrono",
- "clap",
- "fleet-migration",
- "fleet-proto",
- "futures",
- "mime_guess",
- "reqwest",
- "rust-embed",
- "sea-orm",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-tungstenite 0.26.2",
- "tower",
- "uuid",
-]
-
-[[package]]
-name = "fleetctl"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "fleet-proto",
- "fleet-server",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "flume"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1358,6 +1285,79 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
  "scopeguard",
+]
+
+[[package]]
+name = "lodestar-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "if-addrs",
+ "libc",
+ "lodestar-proto",
+ "nix 0.29.0",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+]
+
+[[package]]
+name = "lodestar-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "lodestar-proto",
+ "lodestar-server",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "lodestar-migration"
+version = "0.1.0"
+dependencies = [
+ "sea-orm-migration",
+]
+
+[[package]]
+name = "lodestar-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ts-rs",
+]
+
+[[package]]
+name = "lodestar-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "chrono",
+ "clap",
+ "futures",
+ "lodestar-migration",
+ "lodestar-proto",
+ "mime_guess",
+ "reqwest",
+ "rust-embed",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "tower",
+ "uuid",
 ]
 
 [[package]]

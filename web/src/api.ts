@@ -1,4 +1,4 @@
-// REST calls to the fleet server. Errors carry the HTTP status and the server's `{error}` text.
+// REST calls to the Lodestar server. Errors carry the HTTP status and the server's `{error}` text.
 import type { Snapshot } from "@/bindings/Snapshot";
 
 /** What the server got back from the agent when it sent an apply. */
@@ -20,8 +20,8 @@ export class ApiError extends Error {
 }
 
 async function request(method: string, path: string, body?: unknown): Promise<Response> {
-  // X-Fleet: the server refuses state-changing requests without it (CSRF guard).
-  const headers: Record<string, string> = { "x-fleet": "1" };
+  // X-Lodestar: the server refuses state-changing requests without it (CSRF guard).
+  const headers: Record<string, string> = { "x-lodestar": "1" };
   if (body !== undefined) headers["content-type"] = "application/json";
   let res: Response;
   try {
@@ -31,7 +31,7 @@ async function request(method: string, path: string, body?: unknown): Promise<Re
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new ApiError(0, "The fleet server is not answering");
+    throw new ApiError(0, "The Lodestar server is not answering");
   }
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`.trim();

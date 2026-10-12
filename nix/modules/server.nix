@@ -1,5 +1,5 @@
-# Runs fleet-server (the dashboard + control plane) and writes its JSON config to
-# /etc/fleet-server/config.json and the host list to /etc/fleet-server/hosts.json.
+# Runs lodestar-server (the dashboard + control plane) and writes its JSON config to
+# /etc/lodestar-server/config.json and the host list to /etc/lodestar-server/hosts.json.
 # Linux only.
 {
   config,
@@ -11,16 +11,16 @@
   ...
 }:
 let
-  cfg = config.services.fleet-server;
-  configPath = "/etc/fleet-server/config.json";
+  cfg = config.services.lodestar-server;
+  configPath = "/etc/lodestar-server/config.json";
 in
 {
-  options.services.fleet-server = {
+  options.services.lodestar-server = {
     enable = lib.mkEnableOption "the fleet server (dashboard and control plane)";
     package = lib.mkOption {
       type = lib.types.package;
-      default = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.fleet-server;
-      description = "The fleet-server package (with the dashboard embedded).";
+      default = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.lodestar-server;
+      description = "The lodestar-server package (with the dashboard embedded).";
     };
     listenAddress = lib.mkOption {
       type = lib.types.str;
@@ -50,8 +50,8 @@ in
       default = null;
       description = ''
         SSH deploy key (write access to pushUrl); a path outside the Nix store.
-        The server runs as the `fleet-server` user, so the key must be readable by it,
-        e.g. `sops.secrets.<name> = { owner = "fleet-server"; mode = "0400"; };` and
+        The server runs as the `lodestar-server` user, so the key must be readable by it,
+        e.g. `sops.secrets.<name> = { owner = "lodestar-server"; mode = "0400"; };` and
         `deployKeyFile = config.sops.secrets.<name>.path;`.
       '';
     };
@@ -65,7 +65,7 @@ in
       default = [
         "tag:nixos"
         "tag:personal"
-        "tag:fleet"
+        "tag:lodestar"
       ];
       description = "Tailscale node tags allowed to use the dashboard.";
     };
@@ -90,31 +90,31 @@ in
 
   config = lib.mkIf cfg.enable (
     lib.optionalAttrs hostPlatform.isLinux {
-      users.users.fleet-server = {
+      users.users.lodestar-server = {
         isSystemUser = true;
-        group = "fleet-server";
+        group = "lodestar-server";
         # ssh (StrictHostKeyChecking=accept-new) keeps its known_hosts under $HOME.
-        home = "/var/lib/fleet-server";
+        home = "/var/lib/lodestar-server";
       };
-      users.groups.fleet-server = { };
+      users.groups.lodestar-server = { };
 
       # Lets the unprivileged server use `tailscale status` / `tailscale whois`.
-      services.tailscale.extraSetFlags = [ "--operator=fleet-server" ];
+      services.tailscale.extraSetFlags = [ "--operator=lodestar-server" ];
 
       # The firewall (modules/networking/firewall.nix) only opens 22; the dashboard is
       # reached over the tailnet.
       networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ cfg.listenPort ];
 
-      environment.etc."fleet-server/hosts.json".text = builtins.toJSON fleet.hosts;
-      environment.etc."fleet-server/config.json".text = builtins.toJSON (
+      environment.etc."lodestar-server/hosts.json".text = builtins.toJSON fleet.hosts;
+      environment.etc."lodestar-server/config.json".text = builtins.toJSON (
         {
           listen = "${cfg.listenAddress}:${toString cfg.listenPort}";
-          agent_port = config.services.fleet-agent.port;
-          hosts_file = "/etc/fleet-server/hosts.json";
+          agent_port = config.services.lodestar-agent.port;
+          hosts_file = "/etc/lodestar-server/hosts.json";
           repo_url = cfg.repoUrl;
           push_url = cfg.pushUrl;
           deploy_key_file = cfg.deployKeyFile;
-          state_dir = "/var/lib/fleet-server";
+          state_dir = "/var/lib/lodestar-server";
           access =
             if cfg.testing.disableAccess then
               { kind = "disabled"; }
@@ -137,7 +137,7 @@ in
         // lib.optionalAttrs (cfg.testing.pollSecs != null) { poll_secs = cfg.testing.pollSecs; }
       );
 
-      systemd.services.fleet-server = {
+      systemd.services.lodestar-server = {
         description = "Fleet server";
         wantedBy = [ "multi-user.target" ];
         after = [
@@ -145,21 +145,21 @@ in
           "network-online.target"
         ];
         wants = [ "network-online.target" ];
-        environment.HOME = "/var/lib/fleet-server";
+        environment.HOME = "/var/lib/lodestar-server";
         path = with pkgs; [
           git
           openssh
           config.services.tailscale.package
         ];
         restartTriggers = [
-          config.environment.etc."fleet-server/config.json".source
-          config.environment.etc."fleet-server/hosts.json".source
+          config.environment.etc."lodestar-server/config.json".source
+          config.environment.etc."lodestar-server/hosts.json".source
         ];
         serviceConfig = {
-          ExecStart = "${cfg.package}/bin/fleet-server serve --config ${configPath}";
-          User = "fleet-server";
-          Group = "fleet-server";
-          StateDirectory = "fleet-server";
+          ExecStart = "${cfg.package}/bin/lodestar-server serve --config ${configPath}";
+          User = "lodestar-server";
+          Group = "lodestar-server";
+          StateDirectory = "lodestar-server";
           # The tailnet address may not exist yet at boot: retry until it does.
           Restart = "on-failure";
           RestartSec = 5;

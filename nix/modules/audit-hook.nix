@@ -1,6 +1,6 @@
 # Activation hook: appends one JSON line per system activation (including
 # manual `nixos-rebuild`/`darwin-rebuild` runs and boots) to the audit file
-# that fleet-agent serves at GET /activations.
+# that lodestar-agent serves at GET /activations.
 {
   config,
   lib,
@@ -9,8 +9,8 @@
   ...
 }:
 let
-  cfg = config.services.fleet-agent;
-  stateDir = "/var/lib/fleet-agent";
+  cfg = config.services.lodestar-agent;
+  stateDir = "/var/lib/lodestar-agent";
   bin.jq = "${pkgs.jq}/bin/jq";
 
   hook = ''
@@ -72,7 +72,7 @@ in
   config = lib.mkIf cfg.enable (
     lib.mkMerge [
       (lib.optionalAttrs hostPlatform.isLinux {
-        system.activationScripts.fleetAudit = {
+        system.activationScripts.lodestarAudit = {
           deps = [ ];
           text = hook;
         };

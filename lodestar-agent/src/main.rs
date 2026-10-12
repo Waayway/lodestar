@@ -1,0 +1,58 @@
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+use lodestar_agent::{apply, config};
+use lodestar_proto::ApplyState;
+
+#[derive(Parser)]
+#[command(name = "lodestar-agent", version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the agent daemon.
+    Serve {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Run one apply (started by the daemon, outside its process).
+    Apply {
+        #[arg(long)]
+        config: PathBuf,
+        id: String,
+        commit: String,
+    },
+}
+
+fn main() -> ExitCode {
+    match run(Cli::parse()) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("lodestar-agent: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(cli: Cli) -> anyhow::Result<ExitCode> {
+    match cli.command {
+        Command::Serve { config } => {
+            let cfg = config::load(&config)?;
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(lodestar_agent::api::serve(cfg, config))?;
+            Ok(ExitCode::FAILURE)
+        }
+        Command::Apply { config, id, commit } => {
+            let cfg = config::load(&config)?;
+            let rec = apply::run_apply(&cfg, &id, &commit);
+            Ok(match rec.state {
+                ApplyState::Ok | ApplyState::Skipped => ExitCode::SUCCESS,
+                _ => ExitCode::FAILURE,
+            })
+        }
+    }
+}

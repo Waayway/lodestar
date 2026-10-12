@@ -1,0 +1,26 @@
+[package]
+name = "lodestar-cli"
+version.workspace = true
+edition.workspace = true
+publish = false
+license.workspace = true
+
+[lib]
+name = "lodestar_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lodestar"
+path = "src/main.rs"
+
+[dependencies]
+lodestar-proto = { path = "../lodestar-proto" }
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+[dev-dependencies]
+lodestar-server = { path = "../lodestar-server" }

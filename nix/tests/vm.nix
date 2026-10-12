@@ -24,7 +24,7 @@ let
 
   # The fake rebuild records the commit it was asked to apply; the fake revision
   # command reports it back, so "running" follows the last apply.
-  revFile = "/var/lib/fleet-agent/fake-revision";
+  revFile = "/var/lib/lodestar-agent/fake-revision";
   fakeRebuild = pkgs.writeShellScript "fake-rebuild" ''
     echo "$2" > ${revFile}
   '';
@@ -38,7 +38,7 @@ let
       ../modules/fleet/audit-hook.nix
     ];
     _module.args.currentSystemName = name;
-    services.fleet-agent = {
+    services.lodestar-agent = {
       inherit repoUrl;
       managerHost = "manager";
       listen = "0.0.0.0:7461";
@@ -101,7 +101,7 @@ pkgs.testers.runNixOSTest {
         # TEST ONLY: as for the agent port, the dashboard port is opened on tailscale0
         # by the module; there is no tailscale0 here.
         networking.firewall.interfaces.eth1.allowedTCPPorts = [ 8080 ];
-        services.fleet-server = {
+        services.lodestar-server = {
           enable = true;
           inherit repoUrl;
           pushUrl = repoUrl;
@@ -135,7 +135,7 @@ pkgs.testers.runNixOSTest {
 
     def apply(name):
         out = manager.succeed(
-            f"curl -s -w '\\n%{{http_code}}' -X POST -H 'X-Fleet: 1' localhost:8080/api/hosts/{name}/apply"
+            f"curl -s -w '\\n%{{http_code}}' -X POST -H 'X-Lodestar: 1' localhost:8080/api/hosts/{name}/apply"
         )
         body, code = out.strip().rsplit("\n", 1)
         assert code == "202", f"apply {name}: HTTP {code}: {body}"
@@ -159,10 +159,10 @@ pkgs.testers.runNixOSTest {
     head1 = remote.succeed("git -C /tmp/work rev-parse unstable").strip()
 
     # 1. Units are up; every agent user has a checkout one commit behind unstable.
-    manager.wait_for_unit("fleet-server.service")
+    manager.wait_for_unit("lodestar-server.service")
     manager.wait_for_open_port(8080)
     for m in agents:
-        m.wait_for_unit("fleet-agent.service")
+        m.wait_for_unit("lodestar-agent.service")
         m.wait_for_open_port(7461)
         m.succeed("su - alice -c 'git clone -q -b unstable git://remote/fleet.git ~/.flake && git -C ~/.flake reset -q --hard HEAD~1'")
 
@@ -196,7 +196,7 @@ pkgs.testers.runNixOSTest {
 
     # 6. Agent down: the apply cannot be delivered. After the agent is back, the
     # server's poller re-sends it within two poll intervals (poll_secs = 5).
-    laptop1.systemctl("stop fleet-agent.service")
+    laptop1.systemctl("stop lodestar-agent.service")
     remote.succeed("""
       set -e
       export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -208,7 +208,7 @@ pkgs.testers.runNixOSTest {
     assert head2 != head1
     res = apply("laptop1")
     assert res["agent_status"] == "unreachable", res
-    laptop1.systemctl("start fleet-agent.service")
+    laptop1.systemctl("start lodestar-agent.service")
     manager.wait_until_succeeds(
         f"curl -sf localhost:8080/api/snapshot | jq -e '.hosts[] | select(.name==\"laptop1\") | .running == \"{head2}\"'",
         timeout=30,

@@ -5,17 +5,17 @@ use lodestar_cli::{Cli, Client};
 async fn main() {
     let cli = Cli::parse();
     let server = match lodestar_cli::resolve_server(cli.server) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("lodestar: {e:#}");
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("lodestar: {error:#}");
             std::process::exit(2);
         }
     };
     let client = Client::new(&server);
     let code = match lodestar_cli::run(&client, cli.command, &mut std::io::stdout()).await {
         Ok(code) => code,
-        Err(e) => {
-            eprintln!("lodestar: {e:#}");
+        Err(error) => {
+            eprintln!("lodestar: {error:#}");
             2
         }
     };

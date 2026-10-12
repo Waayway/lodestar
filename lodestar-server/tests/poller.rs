@@ -138,6 +138,7 @@ fn agent_status(running: &str, apply: Option<ApplyRecord>) -> AgentStatus {
             untracked: 0,
             ahead: None,
             last_fetch_at: None,
+            flake_path: None,
         },
         apply,
     }
@@ -214,6 +215,7 @@ async fn env(agent: SocketAddr, online: Option<Arc<dyn OnlineProvider>>) -> Env 
         mirror_fetch_secs: 300,
         poll_secs: 60,
         tailscale_bin: PathBuf::from("tailscale"),
+        promote: Some(lodestar_proto::PromoteChannels::default()),
     };
     let conn = db::connect(&cfg.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&cfg).await.unwrap());

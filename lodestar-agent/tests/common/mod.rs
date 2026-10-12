@@ -73,6 +73,7 @@ pub fn fixture() -> Fixture {
         user: std::env::var("USER").unwrap_or_else(|_| "root".into()),
         channel: "unstable".into(),
         flake_path: clone.clone(),
+        flake_attr: None,
         repo_url: remote.to_string_lossy().into_owned(),
         port: 7461,
         manager_host: "m".into(),

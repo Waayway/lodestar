@@ -228,6 +228,7 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         mirror_fetch_secs: scaled_secs(MIRROR_FETCH_SECS, speed),
         poll_secs: scaled_secs(POLL_SECS, speed),
         tailscale_bin: "tailscale".into(),
+        promote: Some(lodestar_proto::PromoteChannels::default()),
     };
     let server = server::start(cfg, hosts, Arc::new(DemoOnline::new(peers)), true).await?;
 

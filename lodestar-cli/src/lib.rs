@@ -14,13 +14,10 @@ use serde_json::{Value, json};
 #[derive(Parser)]
 #[command(name = "lodestar", about = "Talk to the Lodestar server")]
 pub struct Cli {
-    /// Lodestar server URL.
-    #[arg(
-        long,
-        env = "LODESTAR_SERVER",
-        default_value = "http://nixos-manager:8080"
-    )]
-    pub server: String,
+    /// Lodestar server URL (e.g. `http://manager:8080`). Falls back to `server = "..."` in
+    /// `$XDG_CONFIG_HOME/lodestar/config.toml` (default `~/.config/lodestar/config.toml`).
+    #[arg(long, env = "LODESTAR_SERVER")]
+    pub server: Option<String>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -48,7 +45,7 @@ pub enum Command {
         host: String,
         apply_id: Option<String>,
     },
-    /// Move stable to the promote candidate.
+    /// Fast-forward the promote target channel (default `stable`) to the candidate.
     Promote {
         /// Actually promote (otherwise only show the candidate).
         #[arg(long)]
@@ -59,6 +56,70 @@ pub enum Command {
         #[arg(long, default_value_t = 20)]
         limit: u64,
     },
+}
+
+/// The config file the CLI reads when neither `--server` nor `LODESTAR_SERVER` is given.
+pub fn config_path() -> Option<std::path::PathBuf> {
+    let base = match std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::path::PathBuf::from(std::env::var_os("HOME")?).join(".config"),
+    };
+    Some(base.join("lodestar").join("config.toml"))
+}
+
+/// Reads `server = "..."` from the CLI config file's text. Only top-level `key = "string"`
+/// lines are understood; anything else (comments, other keys) is ignored.
+pub fn server_from_config(text: &str) -> Option<String> {
+    let mut in_table = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_table = true;
+            continue;
+        }
+        if in_table || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "server" {
+            continue;
+        }
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.split_once('"'))
+            .map(|(v, _)| v)
+            .or_else(|| {
+                value
+                    .strip_prefix('\'')
+                    .and_then(|v| v.split_once('\''))
+                    .map(|(v, _)| v)
+            })?;
+        return Some(value.to_string()).filter(|v| !v.is_empty());
+    }
+    None
+}
+
+/// The server URL: `--server` / `LODESTAR_SERVER`, else the config file.
+pub fn resolve_server(flag: Option<String>) -> Result<String> {
+    if let Some(s) = flag.filter(|s| !s.is_empty()) {
+        return Ok(s);
+    }
+    let path = config_path();
+    if let Some(p) = &path
+        && let Ok(text) = std::fs::read_to_string(p)
+        && let Some(s) = server_from_config(&text)
+    {
+        return Ok(s);
+    }
+    bail!(
+        "no server given: pass --server <url>, set LODESTAR_SERVER, or put `server = \"http://<host>:8080\"` in {}",
+        path.map_or("~/.config/lodestar/config.toml".into(), |p| p
+            .display()
+            .to_string())
+    )
 }
 
 pub struct Client {
@@ -409,14 +470,17 @@ async fn rebuild(
 
 async fn promote(client: &Client, yes: bool, out: &mut impl Write) -> Result<i32> {
     let snap = client.snapshot().await?;
+    let Some(pair) = snap.promote.clone() else {
+        bail!("promote is disabled on this server");
+    };
     let Some(commit) = snap.promote_candidate.clone() else {
-        writeln!(out, "nothing to promote: stable is up to date")?;
+        writeln!(out, "nothing to promote: {} is up to date", pair.to)?;
         return Ok(0);
     };
     let subject = snap
         .channels
         .iter()
-        .find(|c| c.name == "unstable")
+        .find(|c| c.name == pair.from)
         .and_then(|c| {
             (c.head.as_deref() == Some(&commit))
                 .then(|| c.head_subject.clone())
@@ -424,17 +488,19 @@ async fn promote(client: &Client, yes: bool, out: &mut impl Write) -> Result<i32
         });
     writeln!(
         out,
-        "promote candidate: {} {}",
+        "promote candidate ({} -> {}): {} {}",
+        pair.from,
+        pair.to,
         short(&commit),
         subject.unwrap_or_default()
     )?;
     if !yes {
-        writeln!(out, "re-run with --yes to move stable to this commit")?;
+        writeln!(out, "re-run with --yes to move {} to this commit", pair.to)?;
         return Ok(1);
     }
     client
         .post("/api/promote", json!({ "commit": commit }))
         .await?;
-    writeln!(out, "stable promoted to {}", short(&commit))?;
+    writeln!(out, "{} promoted to {}", pair.to, short(&commit))?;
     Ok(0)
 }

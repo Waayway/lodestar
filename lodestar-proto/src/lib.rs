@@ -1,4 +1,4 @@
-//! Shared wire types for the fleet agent, server and web frontend.
+//! Shared wire types for the Lodestar agent, server and web frontend.
 //! Times are unix seconds (`i64`).
 
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,9 @@ pub struct CheckoutStatus {
     pub ahead: Option<u32>,
     #[ts(type = "number | null")]
     pub last_fetch_at: Option<i64>,
+    /// Path of the checkout on the host (absent from older agents).
+    #[serde(default)]
+    pub flake_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
@@ -164,10 +167,31 @@ pub struct Snapshot {
     pub hosts: Vec<HostView>,
     pub channels: Vec<ChannelView>,
     pub promote_candidate: Option<String>,
+    /// The promote pair (`from` -> `to`), or null when promote is disabled.
+    #[serde(default)]
+    pub promote: Option<PromoteChannels>,
     pub viewer: String,
-    /// True only when the server runs in demo mode (simulated fleet).
+    /// True only when the server runs in demo mode (simulated hosts).
     #[serde(default)]
     pub demo: bool,
+}
+
+/// Promote fast-forwards channel `to` to a commit on channel `from`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub struct PromoteChannels {
+    pub from: String,
+    pub to: String,
+}
+
+impl Default for PromoteChannels {
+    fn default() -> Self {
+        PromoteChannels {
+            from: "unstable".into(),
+            to: "stable".into(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]

@@ -93,6 +93,7 @@ describe("watchLog", () => {
       hosts: [(hostMsg("hermes", last_apply).data as HostView)],
       channels: [],
       promote_candidate: null,
+      promote: null,
       viewer: "v",
       demo: false,
     },

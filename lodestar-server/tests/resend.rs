@@ -17,6 +17,7 @@ fn status(running: &str, apply: Option<(&str, ApplyState)>) -> AgentStatus {
             untracked: 0,
             ahead: None,
             last_fetch_at: None,
+            flake_path: None,
         },
         apply: apply.map(|(id, state)| ApplyRecord {
             apply_id: id.into(),

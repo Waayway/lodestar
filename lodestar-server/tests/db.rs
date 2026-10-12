@@ -106,6 +106,7 @@ async fn status_roundtrip_json() {
             untracked: 0,
             ahead: Some(0),
             last_fetch_at: Some(5),
+            flake_path: None,
         },
         apply: Some(record("a1", ApplyState::Ok)),
     };

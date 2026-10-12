@@ -20,6 +20,10 @@ pub struct AgentConfig {
     pub user: String,
     pub channel: String,
     pub flake_path: PathBuf,
+    /// Flake output to build, e.g. `nixosConfigurations.<host>.config.system.build.toplevel`;
+    /// defaults to that (or `darwinConfigurations.<host>.system` on darwin).
+    #[serde(default)]
+    pub flake_attr: Option<String>,
     pub repo_url: String,
     #[serde(default = "default_port")]
     pub port: u16,
@@ -50,8 +54,52 @@ fn default_state_dir() -> PathBuf {
     PathBuf::from("/var/lib/lodestar-agent")
 }
 
+impl AgentConfig {
+    /// The flake output `nix build` builds for this host.
+    pub fn flake_attr(&self) -> String {
+        match &self.flake_attr {
+            Some(attr) => attr.clone(),
+            None if self.os == "darwin" => format!("darwinConfigurations.{}.system", self.host),
+            None => format!(
+                "nixosConfigurations.{}.config.system.build.toplevel",
+                self.host
+            ),
+        }
+    }
+}
+
 pub fn load(path: &Path) -> anyhow::Result<AgentConfig> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("reading config {}", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("parsing config {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(os: &str, attr: Option<&str>) -> AgentConfig {
+        serde_json::from_value(serde_json::json!({
+            "host": "box", "user": "alice", "channel": "main", "flake_path": "/home/alice/infra",
+            "repo_url": "https://example.com/infra.git", "manager_host": "manager",
+            "launcher": "inline", "os": os, "flake_attr": attr,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn flake_attr_defaults_per_os_and_can_be_overridden() {
+        assert_eq!(
+            cfg("linux", None).flake_attr(),
+            "nixosConfigurations.box.config.system.build.toplevel"
+        );
+        assert_eq!(
+            cfg("darwin", None).flake_attr(),
+            "darwinConfigurations.box.system"
+        );
+        assert_eq!(
+            cfg("linux", Some("packages.x86_64-linux.box")).flake_attr(),
+            "packages.x86_64-linux.box"
+        );
+    }
 }

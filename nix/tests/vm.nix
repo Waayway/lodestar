@@ -1,26 +1,9 @@
-# End-to-end NixOS VM test of the fleet manager: a git remote, the server (with an agent
-# for itself) and two laptops. Imports the fleet modules directly (not via mkSystem).
-{ pkgs, inputs }:
+# End-to-end NixOS VM test of Lodestar: a git remote, the server (with an agent for
+# itself) and two laptops, configured only through the modules' options.
+{ pkgs, modules }:
 let
-  user = {
-    name = "alice";
-  };
-  repoUrl = "git://remote/fleet.git";
-
-  fleetHosts =
-    map
-      (name: {
-        inherit name;
-        system = "x86_64-linux";
-        user = user.name;
-        channel = "unstable";
-        os = "linux";
-      })
-      [
-        "manager"
-        "laptop1"
-        "laptop2"
-      ];
+  user = "alice";
+  repoUrl = "git://remote/infra.git";
 
   # The fake rebuild records the commit it was asked to apply; the fake revision
   # command reports it back, so "running" follows the last apply.
@@ -32,45 +15,27 @@ let
     ${pkgs.coreutils}/bin/cat ${revFile} 2>/dev/null || true
   '';
 
-  agentNode = name: {
-    imports = [
-      ../modules/fleet/agent.nix
-      ../modules/fleet/audit-hook.nix
-    ];
-    _module.args.currentSystemName = name;
+  agentNode = {
+    imports = modules;
     services.lodestar-agent = {
-      inherit repoUrl;
+      enable = true;
+      inherit user repoUrl;
+      channel = "unstable";
       managerHost = "manager";
       listen = "0.0.0.0:7461";
       rebuildCommand = [ "${fakeRebuild}" ];
       revisionCommand = [ "${fakeRevision}" ];
     };
-    users.users.${user.name} = {
-      isNormalUser = true;
-    };
+    users.users.${user}.isNormalUser = true;
     environment.systemPackages = [ pkgs.git ];
     # TEST ONLY: the module opens the agent port on tailscale0, which these VMs
-    # lack; open it on the test network instead. (checks.x86_64-linux.fleet-firewall
-    # asserts the real hosts open it on tailscale0.)
+    # lack; open it on the test network instead. (checks.x86_64-linux.firewall
+    # asserts the module opens it on tailscale0.)
     networking.firewall.interfaces.eth1.allowedTCPPorts = [ 7461 ];
   };
 in
 pkgs.testers.runNixOSTest {
-  name = "fleet-vm";
-
-  node.specialArgs = {
-    inherit inputs;
-    fleet = {
-      member = true;
-      channel = "unstable";
-      hosts = fleetHosts;
-    };
-    hostPlatform = {
-      isLinux = true;
-      isDarwin = false;
-    };
-    inherit user;
-  };
+  name = "lodestar-vm";
 
   nodes = {
     remote =
@@ -93,10 +58,7 @@ pkgs.testers.runNixOSTest {
     manager =
       { nodes, ... }:
       {
-        imports = [
-          (agentNode "manager")
-          ../modules/fleet/server.nix
-        ];
+        imports = [ agentNode ];
         environment.systemPackages = [ pkgs.jq ];
         # TEST ONLY: as for the agent port, the dashboard port is opened on tailscale0
         # by the module; there is no tailscale0 here.
@@ -104,6 +66,12 @@ pkgs.testers.runNixOSTest {
         services.lodestar-server = {
           enable = true;
           inherit repoUrl;
+          hosts = pkgs.lib.genAttrs [ "manager" "laptop1" "laptop2" ] (_: {
+            inherit user;
+            system = "x86_64-linux";
+            channel = "unstable";
+            os = "linux";
+          });
           pushUrl = repoUrl;
           listenAddress = "0.0.0.0";
           testing = {
@@ -120,8 +88,8 @@ pkgs.testers.runNixOSTest {
         };
       };
 
-    laptop1 = agentNode "laptop1";
-    laptop2 = agentNode "laptop2";
+    laptop1 = agentNode;
+    laptop2 = agentNode;
   };
 
   testScript = ''
@@ -153,8 +121,8 @@ pkgs.testers.runNixOSTest {
       echo one > flake.nix; git add flake.nix; git commit -q -m c0
       git branch stable
       echo two > flake.nix; git commit -q -am c1
-      git clone -q --bare /tmp/work /srv/git/fleet.git
-      git remote add origin /srv/git/fleet.git
+      git clone -q --bare /tmp/work /srv/git/infra.git
+      git remote add origin /srv/git/infra.git
     """)
     head1 = remote.succeed("git -C /tmp/work rev-parse unstable").strip()
 
@@ -164,7 +132,7 @@ pkgs.testers.runNixOSTest {
     for m in agents:
         m.wait_for_unit("lodestar-agent.service")
         m.wait_for_open_port(7461)
-        m.succeed("su - alice -c 'git clone -q -b unstable git://remote/fleet.git ~/.flake && git -C ~/.flake reset -q --hard HEAD~1'")
+        m.succeed("su - alice -c 'git clone -q -b unstable git://remote/infra.git ~/.flake && git -C ~/.flake reset -q --hard HEAD~1'")
 
     # The manager's own agent is reachable through the server.
     manager.wait_until_succeeds(

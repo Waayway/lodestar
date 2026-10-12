@@ -1,23 +1,16 @@
-# Activation hook: appends one JSON line per system activation (including
-# manual `nixos-rebuild`/`darwin-rebuild` runs and boots) to the audit file
-# that lodestar-agent serves at GET /activations.
-{
-  config,
-  lib,
-  pkgs,
-  hostPlatform,
-  ...
-}:
+# Activation hook: a shell snippet that appends one JSON line per system activation
+# (including manual `nixos-rebuild`/`darwin-rebuild` runs and boots) to the audit file
+# that lodestar-agent serves at GET /activations. Used by the agent modules.
+{ pkgs }:
 let
-  cfg = config.services.lodestar-agent;
   stateDir = "/var/lib/lodestar-agent";
   bin.jq = "${pkgs.jq}/bin/jq";
 
   hook = ''
     (
       export PATH=${pkgs.coreutils}/bin:$PATH
-      fleet_dir=${stateDir}
-      mkdir -p "$fleet_dir"
+      state_dir=${stateDir}
+      mkdir -p "$state_dir"
 
       store_path="$systemConfig"
 
@@ -40,8 +33,8 @@ let
       esac
 
       sudo_user=""
-      if [ -f "$fleet_dir/apply-in-progress.json" ]; then
-        apply_id="$(${bin.jq} -r '.apply_id // empty' "$fleet_dir/apply-in-progress.json" 2>/dev/null || true)"
+      if [ -f "$state_dir/apply-in-progress.json" ]; then
+        apply_id="$(${bin.jq} -r '.apply_id // empty' "$state_dir/apply-in-progress.json" 2>/dev/null || true)"
         trigger="apply:$apply_id"
       elif [ ! -e /run/current-system ]; then
         trigger=boot
@@ -64,22 +57,8 @@ let
           generation: (if $generation == "" then null else ($generation | tonumber) end),
           trigger: $trigger,
           sudo_user: (if $sudo_user == "" then null else $sudo_user end)
-        }' >> "$fleet_dir/activations.jsonl"
+        }' >> "$state_dir/activations.jsonl"
     ) || true
   '';
 in
-{
-  config = lib.mkIf cfg.enable (
-    lib.mkMerge [
-      (lib.optionalAttrs hostPlatform.isLinux {
-        system.activationScripts.lodestarAudit = {
-          deps = [ ];
-          text = hook;
-        };
-      })
-      (lib.optionalAttrs hostPlatform.isDarwin {
-        system.activationScripts.postActivation.text = lib.mkAfter hook;
-      })
-    ]
-  );
-}
+hook

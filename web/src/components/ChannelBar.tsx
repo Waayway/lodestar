@@ -21,19 +21,20 @@ export function ChannelBar({
           <ChannelCard key={c.name} channel={c} snapshot={snapshot} onError={onError} />
         ))}
       </div>
-      {snapshot.promote_candidate !== null && (
+      {snapshot.promote_candidate !== null && snapshot.promote !== null && (
         <div className="bg-card flex flex-col justify-between gap-3 rounded-lg border p-4 lg:w-72">
           <div>
             <div className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
               Ready to promote
             </div>
             <div className="mt-1 text-sm">
-              <span className="font-mono">unstable</span> is ahead of{" "}
-              <span className="font-mono">stable</span>
+              <span className="font-mono">{snapshot.promote.from}</span> is ahead of{" "}
+              <span className="font-mono">{snapshot.promote.to}</span>
             </div>
           </div>
           <PromoteDialog
             commit={snapshot.promote_candidate}
+            pair={snapshot.promote}
             channels={snapshot.channels}
             onError={onError}
           />

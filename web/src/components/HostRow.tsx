@@ -45,8 +45,14 @@ const badgeTone: Record<Tone, string> = {
   idle: "text-muted-foreground",
 };
 
-export function ApplyBadge({ apply }: { apply: ApplyRecord | null }) {
-  const b = applyBadge(apply);
+export function ApplyBadge({
+  apply,
+  flakePath = null,
+}: {
+  apply: ApplyRecord | null;
+  flakePath?: string | null;
+}) {
+  const b = applyBadge(apply, flakePath);
   const tone = applyTone(apply);
   return (
     <Badge variant={b.variant} className={cn("max-w-full rounded-md", badgeTone[tone])}>
@@ -149,13 +155,13 @@ export function HostRow({
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="min-w-0">
-                  <ApplyBadge apply={h.last_apply} />
+                  <ApplyBadge apply={h.last_apply} flakePath={h.checkout?.flake_path ?? null} />
                 </span>
               </TooltipTrigger>
               <TooltipContent className="max-w-sm font-mono">{h.last_apply.message}</TooltipContent>
             </Tooltip>
           ) : (
-            <ApplyBadge apply={h.last_apply} />
+            <ApplyBadge apply={h.last_apply} flakePath={h.checkout?.flake_path ?? null} />
           )}
           {h.last_apply && (
             <Button

@@ -1,170 +1,252 @@
-# Runs lodestar-server (the dashboard + control plane) and writes its JSON config to
-# /etc/lodestar-server/config.json and the host list to /etc/lodestar-server/hosts.json.
-# Linux only.
+# Runs lodestar-server (the dashboard and control plane) as its own user and writes its
+# JSON config to /etc/lodestar-server/config.json and the host list to
+# /etc/lodestar-server/hosts.json. NixOS only; exported as `nixosModules.server`.
+{ packagesFor }:
 {
   config,
   lib,
   pkgs,
-  inputs,
-  fleet,
-  hostPlatform,
   ...
 }:
 let
   cfg = config.services.lodestar-server;
+  inherit (lib) mkOption types;
   configPath = "/etc/lodestar-server/config.json";
+  stateDir = "/var/lib/lodestar-server";
+
+  hostType = types.submodule {
+    options = {
+      channel = mkOption {
+        type = types.str;
+        description = "Branch the host follows.";
+      };
+      os = mkOption {
+        type = types.enum [
+          "linux"
+          "darwin"
+        ];
+        description = "Operating system of the host.";
+      };
+      system = mkOption {
+        type = types.str;
+        example = "x86_64-linux";
+        description = "Nix system of the host.";
+      };
+      user = mkOption {
+        type = types.str;
+        description = "Account that owns the host's flake checkout.";
+      };
+    };
+  };
 in
 {
   options.services.lodestar-server = {
-    enable = lib.mkEnableOption "the fleet server (dashboard and control plane)";
-    package = lib.mkOption {
-      type = lib.types.package;
-      default = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.lodestar-server;
+    enable = lib.mkEnableOption "the Lodestar server (dashboard and control plane)";
+
+    package = mkOption {
+      type = types.package;
+      default = (packagesFor pkgs.stdenv.hostPlatform.system).lodestar-server;
+      defaultText = lib.literalExpression "lodestar.packages.\${pkgs.stdenv.hostPlatform.system}.lodestar-server";
       description = "The lodestar-server package (with the dashboard embedded).";
     };
-    listenAddress = lib.mkOption {
-      type = lib.types.str;
-      example = "100.92.102.84";
+
+    hosts = mkOption {
+      type = types.attrsOf hostType;
+      default = { };
+      example = lib.literalExpression ''
+        lodestar.lib.hostsFrom { inherit (self) nixosConfigurations darwinConfigurations; }
+      '';
       description = ''
-        The host's Tailscale IPv4 address. Required: with Tailscale access control the
-        server refuses to listen on anything else.
+        The managed hosts, by host name (the agent's `hostName`). Usually computed with
+        `lodestar.lib.hostsFrom` from every configuration that enables the agent.
       '';
     };
-    listenPort = lib.mkOption {
-      type = lib.types.port;
-      default = 8080;
-      description = "TCP port of the dashboard.";
+
+    repoUrl = mkOption {
+      type = types.str;
+      example = "https://github.com/alice/infra";
+      description = "Git URL the server mirrors (read-only) for channel heads and commit subjects.";
     };
-    repoUrl = lib.mkOption {
-      type = lib.types.str;
-      default = "https://github.com/Waayway/nixos-config";
-      description = "Git URL the server mirrors (read).";
-    };
-    pushUrl = lib.mkOption {
-      type = lib.types.str;
-      default = "git@github.com:Waayway/nixos-config";
+
+    pushUrl = mkOption {
+      type = types.str;
+      example = "git@github.com:alice/infra.git";
       description = "Git remote the server pushes promotions to.";
     };
-    deployKeyFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+
+    deployKeyFile = mkOption {
+      type = types.nullOr types.str;
       default = null;
       description = ''
-        SSH deploy key (write access to pushUrl); a path outside the Nix store.
-        The server runs as the `lodestar-server` user, so the key must be readable by it,
-        e.g. `sops.secrets.<name> = { owner = "lodestar-server"; mode = "0400"; };` and
+        SSH key with write access to `pushUrl` (needed for promote); a path outside the
+        Nix store, readable by the `lodestar-server` user, e.g. with sops-nix
+        `sops.secrets.<name> = { owner = "lodestar-server"; mode = "0400"; };` and
         `deployKeyFile = config.sops.secrets.<name>.path;`.
       '';
     };
-    allowedUsers = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ "Waayway@github" ];
-      description = "Tailscale logins allowed to use the dashboard.";
+
+    listenAddress = mkOption {
+      type = types.str;
+      example = "100.64.0.1";
+      description = ''
+        This host's Tailscale IP address. With Tailscale access control the server refuses
+        to listen on anything else.
+      '';
     };
-    allowedTags = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [
-        "tag:nixos"
-        "tag:personal"
-        "tag:lodestar"
-      ];
-      description = "Tailscale node tags allowed to use the dashboard.";
+
+    listenPort = mkOption {
+      type = types.port;
+      default = 8080;
+      description = "TCP port of the dashboard and API.";
     };
+
+    allowedUsers = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "alice@github" ];
+      description = "Tailscale logins allowed to use the dashboard and API.";
+    };
+
+    allowedTags = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "tag:admin" ];
+      description = "Tailscale node tags allowed to use the dashboard and API.";
+    };
+
+    agentPort = mkOption {
+      type = types.port;
+      default = config.services.lodestar-agent.port or 7461;
+      defaultText = lib.literalExpression "config.services.lodestar-agent.port or 7461";
+      description = "TCP port of the agents.";
+    };
+
+    promote = mkOption {
+      type = types.nullOr (
+        types.submodule {
+          options = {
+            from = mkOption {
+              type = types.str;
+              description = "Channel whose head is promoted.";
+            };
+            to = mkOption {
+              type = types.str;
+              description = "Channel that is fast-forwarded.";
+            };
+          };
+        }
+      );
+      default = {
+        from = "unstable";
+        to = "stable";
+      };
+      description = "Promote fast-forwards `to` to a commit of `from`; null disables promote.";
+    };
+
     testing = {
-      staticAddresses = lib.mkOption {
-        type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
+      staticAddresses = mkOption {
+        type = types.nullOr (types.attrsOf types.str);
         default = null;
         description = "TEST ONLY (VM test): fixed host -> ip[:port] map instead of Tailscale reachability.";
       };
-      disableAccess = lib.mkOption {
-        type = lib.types.bool;
+      disableAccess = mkOption {
+        type = types.bool;
         default = false;
         description = "TEST ONLY (VM test): disable dashboard access control.";
       };
-      pollSecs = lib.mkOption {
-        type = lib.types.nullOr lib.types.ints.positive;
+      pollSecs = mkOption {
+        type = types.nullOr types.ints.positive;
         default = null;
         description = "TEST ONLY (VM test): agent poll interval in seconds; null keeps the server default (60).";
       };
     };
   };
 
-  config = lib.mkIf cfg.enable (
-    lib.optionalAttrs hostPlatform.isLinux {
-      users.users.lodestar-server = {
-        isSystemUser = true;
-        group = "lodestar-server";
-        # ssh (StrictHostKeyChecking=accept-new) keeps its known_hosts under $HOME.
-        home = "/var/lib/lodestar-server";
+  config = lib.mkIf cfg.enable {
+    users.users.lodestar-server = {
+      isSystemUser = true;
+      group = "lodestar-server";
+      # ssh (StrictHostKeyChecking=accept-new) keeps its known_hosts under $HOME.
+      home = stateDir;
+    };
+    users.groups.lodestar-server = { };
+
+    # Lets the unprivileged server use `tailscale status` / `tailscale whois`.
+    services.tailscale.extraSetFlags = [ "--operator=lodestar-server" ];
+
+    # The dashboard is reached over the tailnet only.
+    networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ cfg.listenPort ];
+
+    environment.etc."lodestar-server/hosts.json".text = builtins.toJSON (
+      lib.mapAttrsToList (name: h: {
+        inherit name;
+        inherit (h)
+          system
+          user
+          channel
+          os
+          ;
+      }) cfg.hosts
+    );
+    environment.etc."lodestar-server/config.json".text = builtins.toJSON (
+      {
+        listen = "${cfg.listenAddress}:${toString cfg.listenPort}";
+        agent_port = cfg.agentPort;
+        hosts_file = "/etc/lodestar-server/hosts.json";
+        repo_url = cfg.repoUrl;
+        push_url = cfg.pushUrl;
+        deploy_key_file = cfg.deployKeyFile;
+        state_dir = stateDir;
+        promote = if cfg.promote == null then null else { inherit (cfg.promote) from to; };
+        access =
+          if cfg.testing.disableAccess then
+            { kind = "disabled"; }
+          else
+            {
+              kind = "tailscale";
+              allowed_users = cfg.allowedUsers;
+              allowed_tags = cfg.allowedTags;
+            };
+        online =
+          if cfg.testing.staticAddresses != null then
+            {
+              kind = "static";
+              addresses = cfg.testing.staticAddresses;
+            }
+          else
+            { kind = "tailscale"; };
+        tailscale_bin = lib.getExe' config.services.tailscale.package "tailscale";
+      }
+      // lib.optionalAttrs (cfg.testing.pollSecs != null) { poll_secs = cfg.testing.pollSecs; }
+    );
+
+    systemd.services.lodestar-server = {
+      description = "Lodestar server";
+      wantedBy = [ "multi-user.target" ];
+      after = [
+        "tailscaled.service"
+        "network-online.target"
+      ];
+      wants = [ "network-online.target" ];
+      environment.HOME = stateDir;
+      path = [
+        pkgs.git
+        pkgs.openssh
+        config.services.tailscale.package
+      ];
+      restartTriggers = [
+        config.environment.etc."lodestar-server/config.json".source
+        config.environment.etc."lodestar-server/hosts.json".source
+      ];
+      serviceConfig = {
+        ExecStart = "${lib.getExe cfg.package} serve --config ${configPath}";
+        User = "lodestar-server";
+        Group = "lodestar-server";
+        StateDirectory = "lodestar-server";
+        # The tailnet address may not exist yet at boot: retry until it does.
+        Restart = "on-failure";
+        RestartSec = 5;
       };
-      users.groups.lodestar-server = { };
-
-      # Lets the unprivileged server use `tailscale status` / `tailscale whois`.
-      services.tailscale.extraSetFlags = [ "--operator=lodestar-server" ];
-
-      # The firewall (modules/networking/firewall.nix) only opens 22; the dashboard is
-      # reached over the tailnet.
-      networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ cfg.listenPort ];
-
-      environment.etc."lodestar-server/hosts.json".text = builtins.toJSON fleet.hosts;
-      environment.etc."lodestar-server/config.json".text = builtins.toJSON (
-        {
-          listen = "${cfg.listenAddress}:${toString cfg.listenPort}";
-          agent_port = config.services.lodestar-agent.port;
-          hosts_file = "/etc/lodestar-server/hosts.json";
-          repo_url = cfg.repoUrl;
-          push_url = cfg.pushUrl;
-          deploy_key_file = cfg.deployKeyFile;
-          state_dir = "/var/lib/lodestar-server";
-          access =
-            if cfg.testing.disableAccess then
-              { kind = "disabled"; }
-            else
-              {
-                kind = "tailscale";
-                allowed_users = cfg.allowedUsers;
-                allowed_tags = cfg.allowedTags;
-              };
-          online =
-            if cfg.testing.staticAddresses != null then
-              {
-                kind = "static";
-                addresses = cfg.testing.staticAddresses;
-              }
-            else
-              { kind = "tailscale"; };
-          tailscale_bin = "${config.services.tailscale.package}/bin/tailscale";
-        }
-        // lib.optionalAttrs (cfg.testing.pollSecs != null) { poll_secs = cfg.testing.pollSecs; }
-      );
-
-      systemd.services.lodestar-server = {
-        description = "Fleet server";
-        wantedBy = [ "multi-user.target" ];
-        after = [
-          "tailscaled.service"
-          "network-online.target"
-        ];
-        wants = [ "network-online.target" ];
-        environment.HOME = "/var/lib/lodestar-server";
-        path = with pkgs; [
-          git
-          openssh
-          config.services.tailscale.package
-        ];
-        restartTriggers = [
-          config.environment.etc."lodestar-server/config.json".source
-          config.environment.etc."lodestar-server/hosts.json".source
-        ];
-        serviceConfig = {
-          ExecStart = "${cfg.package}/bin/lodestar-server serve --config ${configPath}";
-          User = "lodestar-server";
-          Group = "lodestar-server";
-          StateDirectory = "lodestar-server";
-          # The tailnet address may not exist yet at boot: retry until it does.
-          Restart = "on-failure";
-          RestartSec = 5;
-        };
-      };
-    }
-  );
+    };
+  };
 }

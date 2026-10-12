@@ -2,6 +2,7 @@ import { useState } from "preact/hooks";
 import { toast } from "sonner";
 import { promote } from "@/api";
 import type { ChannelView } from "@/bindings/ChannelView";
+import type { PromoteChannels } from "@/bindings/PromoteChannels";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,16 +17,18 @@ import {
 import { shortRev } from "@/format";
 
 /**
- * "Promote unstable → stable": fast-forwards stable to `commit` after a confirmation. The commit
- * is fixed when the dialog opens, so a commit landing on unstable meanwhile can't change what
- * the confirmation promotes.
+ * "Promote from → to" (by default unstable → stable): fast-forwards `to` to `commit` after a
+ * confirmation. The commit is fixed when the dialog opens, so a commit landing on `from`
+ * meanwhile can't change what the confirmation promotes.
  */
 export function PromoteDialog({
   commit: candidate,
+  pair,
   channels,
   onError,
 }: {
   commit: string;
+  pair: PromoteChannels;
   channels: ChannelView[];
   onError: (what: string, e: unknown) => void;
 }) {
@@ -35,14 +38,14 @@ export function PromoteDialog({
   const subjectOf = (commit: string) => channels.find((c) => c.head === commit)?.head_subject ?? null;
   const shown = target?.commit ?? candidate;
   const subject = target ? target.subject : subjectOf(candidate);
-  const stable = channels.find((c) => c.name === "stable")?.head ?? null;
+  const targetHead = channels.find((c) => c.name === pair.to)?.head ?? null;
 
   async function confirm() {
     if (target === null) return;
     setSending(true);
     try {
       await promote(target.commit);
-      toast.success(`stable moved to ${shortRev(target.commit)}`);
+      toast.success(`${pair.to} moved to ${shortRev(target.commit)}`);
       setTarget(null);
     } catch (e) {
       onError("Promote failed", e);
@@ -60,15 +63,17 @@ export function PromoteDialog({
     >
       <DialogTrigger asChild>
         <Button size="sm" className="self-start">
-          Promote unstable → stable
+          Promote {pair.from} → {pair.to}
         </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Promote unstable → stable?</DialogTitle>
+          <DialogTitle>
+            Promote {pair.from} → {pair.to}?
+          </DialogTitle>
           <DialogDescription>
-            Fast-forwards <span className="font-mono">stable</span> to this commit and pushes it.
-            Hosts on stable change only when you apply.
+            Fast-forwards <span className="font-mono">{pair.to}</span> to this commit and pushes
+            it. Hosts on {pair.to} change only when you apply.
           </DialogDescription>
         </DialogHeader>
         <div className="bg-muted/50 rounded-md border p-3 text-sm">
@@ -76,9 +81,9 @@ export function PromoteDialog({
             <span className="font-mono font-semibold">{shortRev(shown)}</span>
             <span className="min-w-0 break-words">{subject ?? "(subject unavailable)"}</span>
           </div>
-          {stable && (
+          {targetHead && (
             <div className="text-muted-foreground mt-1 text-xs">
-              stable is now at <span className="font-mono">{shortRev(stable)}</span>
+              {pair.to} is now at <span className="font-mono">{shortRev(targetHead)}</span>
             </div>
           )}
         </div>

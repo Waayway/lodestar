@@ -36,7 +36,8 @@ export function onlineLabel(h: HostView, now: number): string {
 }
 
 /** Why an apply was skipped, as a phrase that follows "Skipped: ". */
-export function skipReasonText(r: SkipReason): string {
+export function skipReasonText(r: SkipReason, flakePath: string | null = null): string {
+  const checkout = flakePath ?? "the checkout";
   switch (r) {
     case "fetch_failed":
       return "git fetch failed on the host";
@@ -45,17 +46,20 @@ export function skipReasonText(r: SkipReason): string {
     case "commit_not_on_channel":
       return "commit is not on this host's channel";
     case "wrong_branch":
-      return "~/.flake is on a different branch";
+      return `${checkout} is on a different branch`;
     case "dirty":
-      return "local changes in ~/.flake";
+      return `local changes in ${checkout}`;
     case "not_fast_forward":
-      return "~/.flake has commits that are not on the channel";
+      return `${checkout} has commits that are not on the channel`;
   }
 }
 
 export type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 
-export function applyBadge(a: ApplyRecord | null): { text: string; variant: BadgeVariant } {
+export function applyBadge(
+  a: ApplyRecord | null,
+  flakePath: string | null = null,
+): { text: string; variant: BadgeVariant } {
   if (a === null) return { text: "Never applied", variant: "outline" };
   switch (a.state) {
     case "idle":
@@ -66,7 +70,7 @@ export function applyBadge(a: ApplyRecord | null): { text: string; variant: Badg
       return { text: "Applied", variant: "default" };
     case "skipped":
       return {
-        text: a.skip_reason ? `Skipped: ${skipReasonText(a.skip_reason)}` : "Skipped",
+        text: a.skip_reason ? `Skipped: ${skipReasonText(a.skip_reason, flakePath)}` : "Skipped",
         variant: "outline",
       };
     case "failed": {

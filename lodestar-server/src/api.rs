@@ -260,7 +260,7 @@ async fn apply_channel(
     if hosts.is_empty() {
         return Err(ApiError(
             StatusCode::NOT_FOUND,
-            format!("no fleet host on channel {channel}"),
+            format!("no host on channel {channel}"),
         ));
     }
     let (commit, ids) = request_applies(&state, &actor, &hosts, &channel).await?;
@@ -301,7 +301,13 @@ async fn promote(
     }
     let action = state.actions.lock().await;
     fetch_mirror(&state).await?;
-    let previous = state.mirror.head("stable").await;
+    let Some(target) = state.mirror.promote_channels().map(|p| p.to.clone()) else {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "promote is disabled on this server".into(),
+        ));
+    };
+    let previous = state.mirror.head(&target).await;
     state
         .mirror
         .promote(&body.commit)
@@ -314,7 +320,7 @@ async fn promote(
             }
         })?;
     // The push happened; a failure to record it must not turn the answer into an error.
-    let details = json!({ "commit": body.commit, "previous": previous });
+    let details = json!({ "commit": body.commit, "previous": previous, "channel": target });
     if let Err(e) = db::insert_audit(&state.db, now(), None, "promote", &actor, details).await {
         eprintln!("lodestar-server: api: auditing promote: {e:#}");
     }

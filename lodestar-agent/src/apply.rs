@@ -292,14 +292,7 @@ fn build_and_switch(
         return log.run("rebuild command", &mut c);
     }
 
-    let attr = if cfg.os == "darwin" {
-        format!("darwinConfigurations.{}.system", cfg.host)
-    } else {
-        format!(
-            "nixosConfigurations.{}.config.system.build.toplevel",
-            cfg.host
-        )
-    };
+    let attr = cfg.flake_attr();
     let fail = |e: String| Outcome::Failed(None, e);
     log.line("nix build");
     let mut build = git.user_command("nix").map_err(|e| fail(e.to_string()))?;

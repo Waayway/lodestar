@@ -35,7 +35,7 @@ pub struct AppState {
     /// Serialises dashboard actions (apply, promote) from mirror fetch to recorded result, so
     /// the last press always records the newest channel head.
     pub(crate) actions: Arc<tokio::sync::Mutex<()>>,
-    /// Demo mode (simulated fleet); reported in the snapshot.
+    /// Demo mode (simulated hosts); reported in the snapshot.
     pub demo: bool,
 }
 
@@ -135,7 +135,7 @@ pub(crate) async fn host_view_with(
     }
 }
 
-/// One view per channel used by a fleet host, sorted by name.
+/// One view per channel used by a managed host, sorted by name.
 pub async fn channels(state: &AppState) -> Vec<ChannelView> {
     let names: BTreeSet<&str> = state.hosts.iter().map(|h| h.channel.as_str()).collect();
     join_all(names.into_iter().map(|name| async move {
@@ -160,6 +160,7 @@ pub async fn snapshot(state: &AppState, viewer: String) -> Snapshot {
         hosts,
         channels: channels(state).await,
         promote_candidate: state.mirror.promote_candidate().await,
+        promote: state.mirror.promote_channels().cloned(),
         viewer,
         demo: state.demo,
     }

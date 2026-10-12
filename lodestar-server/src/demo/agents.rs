@@ -125,6 +125,11 @@ impl SimAgent {
             untracked: if setup.script == Script::Dirty { 2 } else { 0 },
             ahead: Some(0),
             last_fetch_at: Some(now() - 4 * 60),
+            flake_path: Some(if setup.os == "darwin" {
+                format!("/Users/{}/.flake", setup.user)
+            } else {
+                format!("/home/{}/.flake", setup.user)
+            }),
         };
         SimAgent {
             name: setup.name,

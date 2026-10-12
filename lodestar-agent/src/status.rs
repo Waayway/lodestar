@@ -60,6 +60,7 @@ pub fn collect(cfg: &AgentConfig, git: &Git) -> AgentStatus {
             untracked: git.untracked_count(),
             ahead: git.ahead_of(&format!("refs/remotes/origin/{}", cfg.channel)),
             last_fetch_at: last_fetch_at(cfg),
+            flake_path: Some(cfg.flake_path.display().to_string()),
         },
         apply: latest_record(cfg),
     }

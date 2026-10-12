@@ -1,10 +1,11 @@
-//! Server configuration (JSON file) and the fleet host list (`hosts.json`).
+//! Server configuration (JSON file) and the managed host list (`hosts.json`).
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use lodestar_proto::PromoteChannels;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -49,6 +50,9 @@ pub struct ServerConfig {
     pub poll_secs: u64,
     #[serde(default = "default_tailscale_bin")]
     pub tailscale_bin: PathBuf,
+    /// Promote pair; absent means `unstable` -> `stable`, `null` disables promote.
+    #[serde(default = "default_promote")]
+    pub promote: Option<PromoteChannels>,
 }
 
 fn default_mirror_fetch_secs() -> u64 {
@@ -56,6 +60,9 @@ fn default_mirror_fetch_secs() -> u64 {
 }
 fn default_poll_secs() -> u64 {
     60
+}
+fn default_promote() -> Option<PromoteChannels> {
+    Some(PromoteChannels::default())
 }
 fn default_tailscale_bin() -> PathBuf {
     PathBuf::from("tailscale")
@@ -131,9 +138,31 @@ mod tests {
         assert_eq!((c.mirror_fetch_secs, c.poll_secs), (300, 60));
         assert_eq!(c.tailscale_bin, PathBuf::from("tailscale"));
         assert_eq!(c.deploy_key_file, None);
+        assert_eq!(c.promote, Some(PromoteChannels::default()));
         assert!(matches!(c.access, AccessConfig::Tailscale { .. }));
         let d: AccessConfig = serde_json::from_str(r#"{"kind":"disabled"}"#).unwrap();
         assert_eq!(d, AccessConfig::Disabled);
+    }
+
+    #[test]
+    fn promote_null_disables_and_pair_is_configurable() {
+        let base = r#""listen":"127.0.0.1:8080","agent_port":7461,"hosts_file":"/h.json",
+            "repo_url":"u","push_url":"p","state_dir":"/s","access":{"kind":"disabled"},
+            "online":{"kind":"tailscale"}"#;
+        let off: ServerConfig =
+            serde_json::from_str(&format!("{{{base},\"promote\":null}}")).unwrap();
+        assert_eq!(off.promote, None);
+        let custom: ServerConfig = serde_json::from_str(&format!(
+            "{{{base},\"promote\":{{\"from\":\"main\",\"to\":\"release\"}}}}"
+        ))
+        .unwrap();
+        assert_eq!(
+            custom.promote,
+            Some(PromoteChannels {
+                from: "main".into(),
+                to: "release".into()
+            })
+        );
     }
 
     #[test]

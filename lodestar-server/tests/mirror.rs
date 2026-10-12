@@ -80,6 +80,7 @@ fn config(state_dir: &Path, repo: &str) -> ServerConfig {
         mirror_fetch_secs: 300,
         poll_secs: 60,
         tailscale_bin: PathBuf::from("tailscale"),
+        promote: Some(lodestar_proto::PromoteChannels::default()),
     }
 }
 
@@ -195,4 +196,37 @@ async fn fetch_error_is_err() {
     let m = Mirror::open_or_init(&cfg).await.unwrap();
     assert!(m.fetch().await.is_err());
     assert_eq!(m.head("unstable").await, None);
+}
+
+#[tokio::test]
+async fn promote_uses_the_configured_channels() {
+    let o = Origin::new();
+    o.commit("one", "release");
+    git(&o.work, &["push", "origin", "HEAD:refs/heads/main"]);
+    let c2 = o.commit("two", "main");
+    let state = tempfile::tempdir().unwrap();
+    let mut cfg = config(state.path(), o.bare.to_str().unwrap());
+    cfg.promote = Some(lodestar_proto::PromoteChannels {
+        from: "main".into(),
+        to: "release".into(),
+    });
+    let m = Mirror::open_or_init(&cfg).await.unwrap();
+    assert_eq!(m.promote_candidate().await, Some(c2.clone()));
+    m.promote(&c2).await.unwrap();
+    assert_eq!(o.bare_ref("release"), c2);
+}
+
+#[tokio::test]
+async fn promote_disabled() {
+    let o = Origin::new();
+    o.commit("one", "stable");
+    git(&o.work, &["push", "origin", "HEAD:refs/heads/unstable"]);
+    let c2 = o.commit("two", "unstable");
+    let state = tempfile::tempdir().unwrap();
+    let mut cfg = config(state.path(), o.bare.to_str().unwrap());
+    cfg.promote = None;
+    let m = Mirror::open_or_init(&cfg).await.unwrap();
+    assert_eq!(m.promote_candidate().await, None);
+    assert!(m.promote(&c2).await.is_err());
+    assert_ne!(o.bare_ref("stable"), c2);
 }

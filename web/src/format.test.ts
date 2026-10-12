@@ -96,9 +96,12 @@ describe("applyBadge", () => {
   });
   it("skipped on a dirty checkout", () => {
     expect(applyBadge(apply({ state: "skipped", skip_reason: "dirty" }))).toEqual({
-      text: "Skipped: local changes in ~/.flake",
+      text: "Skipped: local changes in the checkout",
       variant: "outline",
     });
+    expect(
+      applyBadge(apply({ state: "skipped", skip_reason: "dirty" }), "/home/alice/infra"),
+    ).toEqual({ text: "Skipped: local changes in /home/alice/infra", variant: "outline" });
   });
   it("failed build with exit code", () => {
     expect(
@@ -128,9 +131,12 @@ describe("skipReasonText", () => {
       "dirty",
       "not_fast_forward",
     ] as const;
-    const texts = reasons.map(skipReasonText);
-    for (const t of texts) expect(t).toMatch(/^[a-z~].{8,}$/);
+    const texts = reasons.map((r) => skipReasonText(r));
+    for (const t of texts) expect(t).toMatch(/^[a-z].{8,}$/);
     expect(new Set(texts).size).toBe(reasons.length);
-    expect(skipReasonText("dirty")).toBe("local changes in ~/.flake");
+    expect(skipReasonText("dirty")).toBe("local changes in the checkout");
+    expect(skipReasonText("wrong_branch", "/Users/alice/.flake")).toBe(
+      "/Users/alice/.flake is on a different branch",
+    );
   });
 });

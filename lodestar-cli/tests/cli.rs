@@ -75,3 +75,36 @@ async fn posts_carry_x_lodestar_and_errors_are_clear() {
         .unwrap_err();
     assert!(format!("{err:#}").contains("cannot reach"), "{err:#}");
 }
+
+#[test]
+fn server_from_config_file() {
+    use lodestar_cli::server_from_config;
+    assert_eq!(
+        server_from_config("# lodestar\nserver = \"http://manager:8080\"\n").as_deref(),
+        Some("http://manager:8080")
+    );
+    assert_eq!(
+        server_from_config("server='manager:8080' # x").as_deref(),
+        Some("manager:8080")
+    );
+    assert_eq!(server_from_config("[other]\nserver = \"x\""), None);
+    assert_eq!(server_from_config("servers = \"x\""), None);
+    assert_eq!(server_from_config(""), None);
+}
+
+#[test]
+fn explicit_server_wins() {
+    assert_eq!(
+        lodestar_cli::resolve_server(Some("http://a:1".into())).unwrap(),
+        "http://a:1"
+    );
+}
+
+#[tokio::test]
+async fn promote_reports_the_configured_pair() {
+    let (_d, c) = start().await;
+    let (code, out) = go(&c, Command::Promote { yes: false }).await;
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("unstable -> stable"), "{out}");
+    assert!(out.contains("move stable"), "{out}");
+}

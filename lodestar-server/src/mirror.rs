@@ -1,5 +1,5 @@
 //! Bare git mirror of the config repo: channel heads, behind counts, commit
-//! subjects and the `unstable` -> `stable` promote push.
+//! subjects and the promote push (by default `unstable` -> `stable`).
 //!
 //! Every git call goes through `tokio::process::Command` with the host's git
 //! configuration disabled and prompts off. Commit hashes are validated with
@@ -13,7 +13,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use lodestar_proto::is_commit_hash;
+use lodestar_proto::{PromoteChannels, is_commit_hash};
 use tokio::process::Command;
 
 use crate::config::ServerConfig;
@@ -26,6 +26,8 @@ pub struct Mirror {
     repo_url: String,
     push_url: String,
     deploy_key: Option<PathBuf>,
+    /// The promote pair; `None` disables promote.
+    promote: Option<PromoteChannels>,
     /// Serialises ref writers (fetch, promote): concurrent `git fetch`es on one bare repo
     /// fail with "cannot lock ref".
     write_lock: tokio::sync::Mutex<()>,
@@ -62,6 +64,7 @@ impl Mirror {
             repo_url: cfg.repo_url.clone(),
             push_url: cfg.push_url.clone(),
             deploy_key: cfg.deploy_key_file.clone(),
+            promote: cfg.promote.clone(),
             write_lock: tokio::sync::Mutex::new(()),
         };
         if !mirror.path.join("HEAD").exists() {
@@ -207,39 +210,54 @@ impl Mirror {
         out.stdout.trim().parse().ok()
     }
 
-    /// The `unstable` head when `stable` is a strict ancestor of it.
+    /// The promote pair this mirror was configured with (`None`: promote is disabled).
+    pub fn promote_channels(&self) -> Option<&PromoteChannels> {
+        self.promote.as_ref()
+    }
+
+    /// The `from` head when the `to` head is a strict ancestor of it.
     pub async fn promote_candidate(&self) -> Option<String> {
-        let unstable = self.head("unstable").await?;
-        let stable = self.head("stable").await?;
-        if stable == unstable {
+        let p = self.promote.as_ref()?;
+        let from = self.head(&p.from).await?;
+        let to = self.head(&p.to).await?;
+        if to == from {
             return None;
         }
-        self.is_ancestor(&stable, &unstable)
+        self.is_ancestor(&to, &from)
             .await
             .ok()
             .filter(|&a| a)
-            .map(|_| unstable)
+            .map(|_| from)
     }
 
-    /// Fast-forwards `stable` to `commit` (non-force push). `commit` must be on `unstable` and
-    /// `stable` must be an ancestor of it; otherwise `PromoteError::Rejected`.
+    /// Fast-forwards `to` to `commit` (non-force push). `commit` must be on `from` and `to`
+    /// must be an ancestor of it; otherwise `PromoteError::Rejected`.
     pub async fn promote(&self, commit: &str) -> Result<(), PromoteError> {
         let _guard = self.write_lock.lock().await;
         let reject = |msg: String| Err(PromoteError::Rejected(msg));
+        let Some(p) = &self.promote else {
+            return reject("promote is disabled on this server".into());
+        };
+        if !valid_channel(&p.from) || !valid_channel(&p.to) {
+            return reject(format!("invalid promote channels {} -> {}", p.from, p.to));
+        }
         if !is_commit_hash(commit) {
             return reject("not a commit hash".into());
         }
         if !self.has_commit(commit).await {
             return reject(format!("commit {commit} is not in the mirror"));
         }
-        if !self.is_ancestor(commit, "refs/heads/unstable").await? {
-            return reject(format!("commit {commit} is not on unstable"));
-        }
-        // A git error here must not read as "no stable yet" (which would skip the check).
-        if let Some(stable) = self.try_head("stable").await?
-            && !self.is_ancestor(&stable, commit).await?
+        if !self
+            .is_ancestor(commit, &format!("refs/heads/{}", p.from))
+            .await?
         {
-            return reject(format!("stable ({stable}) is not an ancestor of {commit}"));
+            return reject(format!("commit {commit} is not on {}", p.from));
+        }
+        // A git error here must not read as "no target yet" (which would skip the check).
+        if let Some(to) = self.try_head(&p.to).await?
+            && !self.is_ancestor(&to, commit).await?
+        {
+            return reject(format!("{} ({to}) is not an ancestor of {commit}", p.to));
         }
         let out = self
             .git([
@@ -247,7 +265,7 @@ impl Mirror {
                 "--quiet",
                 "--",
                 &self.push_url,
-                &format!("{commit}:refs/heads/stable"),
+                &format!("{commit}:refs/heads/{}", p.to),
             ])
             .await?;
         if !out.ok() {

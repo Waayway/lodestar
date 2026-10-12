@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use super::now;
+use crate::clock::now;
 use crate::tailscale::{Identity, OnlineProvider, PeerInfo};
 
 /// How long before the demo started an offline demo host was last seen.
@@ -39,24 +39,26 @@ impl DemoOnline {
 #[async_trait::async_trait]
 impl OnlineProvider for DemoOnline {
     async fn peers(&self) -> HashMap<String, PeerInfo> {
-        let t = now();
+        let current_time = now();
         let elapsed = self.started.elapsed();
         self.peers
             .iter()
-            .map(|p| {
-                let online = p.offline_for.is_none_or(|d| elapsed >= d);
+            .map(|peer| {
+                let online = peer
+                    .offline_for
+                    .is_none_or(|offline_for| elapsed >= offline_for);
                 let last_seen = if online {
-                    t
+                    current_time
                 } else {
                     self.started_unix - OFFLINE_LAST_SEEN_SECS
                 };
-                let key = p.host.to_lowercase();
+                let key = peer.host.to_lowercase();
                 let info = PeerInfo {
                     host: key.clone(),
                     online,
                     last_seen: Some(last_seen),
-                    os: p.os.clone(),
-                    addr: Some(p.addr),
+                    os: peer.os.clone(),
+                    addr: Some(peer.addr),
                 };
                 (key, info)
             })

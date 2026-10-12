@@ -23,7 +23,7 @@ pub fn should_resend(
         return false;
     }
     match &status.apply {
-        Some(a) => a.apply_id != desired && a.state != ApplyState::Running,
+        Some(apply) => apply.apply_id != desired && apply.state != ApplyState::Running,
         None => true,
     }
 }

@@ -32,7 +32,7 @@ impl AgentClient {
         query: &[(&str, &str)],
     ) -> anyhow::Result<T> {
         let url = format!("http://{addr}{path}");
-        let resp = self
+        let response = self
             .http
             .get(&url)
             .query(query)
@@ -40,7 +40,10 @@ impl AgentClient {
             .await
             .with_context(|| format!("GET {url}"))?
             .error_for_status()?;
-        resp.json().await.with_context(|| format!("decoding {url}"))
+        response
+            .json()
+            .await
+            .with_context(|| format!("decoding {url}"))
     }
 
     pub async fn status(&self, addr: &str) -> anyhow::Result<AgentStatus> {
@@ -48,16 +51,16 @@ impl AgentClient {
     }
 
     /// `202` started, `200` already ran, `409` busy, `400` bad request.
-    pub async fn apply(&self, addr: &str, req: &ApplyRequest) -> anyhow::Result<StatusCode> {
+    pub async fn apply(&self, addr: &str, request: &ApplyRequest) -> anyhow::Result<StatusCode> {
         let url = format!("http://{addr}/apply");
-        let resp = self
+        let response = self
             .http
             .post(&url)
-            .json(req)
+            .json(request)
             .send()
             .await
             .with_context(|| format!("POST {url}"))?;
-        Ok(resp.status())
+        Ok(response.status())
     }
 
     pub async fn log(&self, addr: &str, apply_id: &str, offset: u64) -> anyhow::Result<LogChunk> {

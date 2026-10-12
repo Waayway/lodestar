@@ -131,7 +131,7 @@ fn app(provider: Fake, access: AccessConfig) -> Router {
         .layer(middleware::from_fn_with_state(
             AccessState {
                 provider,
-                cfg: Arc::new(access),
+                config: Arc::new(access),
             },
             require_access,
         ))

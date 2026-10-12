@@ -7,7 +7,7 @@ use std::process::Stdio;
 use anyhow::{Context, bail};
 use tokio::process::Command;
 
-use super::now;
+use crate::clock::now;
 
 /// Subjects of the seeded `unstable` history, oldest first.
 const SEED_SUBJECTS: [&str; 12] = [
@@ -41,8 +41,9 @@ const NEW_SUBJECTS: [&str; 8] = [
 ];
 
 async fn git(dir: &Path, args: &[&str], date: Option<i64>) -> anyhow::Result<String> {
-    let mut cmd = Command::new("git");
-    cmd.current_dir(dir)
+    let mut command = Command::new("git");
+    command
+        .current_dir(dir)
         .args([
             "-c",
             "user.name=lodestar-demo",
@@ -55,21 +56,23 @@ async fn git(dir: &Path, args: &[&str], date: Option<i64>) -> anyhow::Result<Str
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .kill_on_drop(true);
-    if let Some(t) = date {
-        let d = format!("@{t} +0000");
-        cmd.env("GIT_AUTHOR_DATE", &d).env("GIT_COMMITTER_DATE", &d);
+    if let Some(time) = date {
+        let git_date = format!("@{time} +0000");
+        command
+            .env("GIT_AUTHOR_DATE", &git_date)
+            .env("GIT_COMMITTER_DATE", &git_date);
     }
-    let out = cmd
+    let output = command
         .output()
         .await
         .with_context(|| format!("running git {args:?}"))?;
-    if !out.status.success() {
+    if !output.status.success() {
         bail!(
             "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 pub struct DemoRepo {
@@ -86,15 +89,15 @@ impl DemoRepo {
         let bare = dir.join("infra.git");
         let work = dir.join("work");
         std::fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
-        let bare_s = bare.to_str().context("temp dir path is not UTF-8")?;
+        let bare_path = bare.to_str().context("temp dir path is not UTF-8")?;
         git(
             dir,
-            &["init", "--quiet", "--bare", "-b", "unstable", bare_s],
+            &["init", "--quiet", "--bare", "-b", "unstable", bare_path],
             None,
         )
         .await?;
         git(&work, &["init", "--quiet", "-b", "unstable"], None).await?;
-        git(&work, &["remote", "add", "origin", bare_s], None).await?;
+        git(&work, &["remote", "add", "origin", bare_path], None).await?;
         let repo = DemoRepo {
             bare,
             work,
@@ -102,8 +105,11 @@ impl DemoRepo {
         };
         let start = now() - 3 * 24 * 3600;
         let mut commits = Vec::with_capacity(SEED_SUBJECTS.len());
-        for (i, subject) in SEED_SUBJECTS.iter().enumerate() {
-            commits.push(repo.commit_at(subject, start + i as i64 * 5 * 3600).await?);
+        for (index, subject) in SEED_SUBJECTS.iter().enumerate() {
+            commits.push(
+                repo.commit_at(subject, start + index as i64 * 5 * 3600)
+                    .await?,
+            );
         }
         git(
             &repo.work,

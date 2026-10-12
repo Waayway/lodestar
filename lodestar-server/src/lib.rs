@@ -1,6 +1,7 @@
 pub mod access;
 pub mod agent_client;
 pub mod api;
+mod clock;
 pub mod config;
 pub mod db;
 pub mod demo;
@@ -11,4 +12,4 @@ pub mod resend;
 pub mod server;
 pub mod state;
 pub mod tailscale;
-pub mod ws;
+pub mod websocket;

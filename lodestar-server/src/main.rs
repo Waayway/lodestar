@@ -43,7 +43,7 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let command = match (cli.command, cli.config) {
-        (Some(c), _) => c,
+        (Some(command), _) => command,
         (None, Some(config)) => Command::Serve { config },
         (None, None) => {
             eprintln!("lodestar-server: give --config <path>, or a subcommand (see --help)");
@@ -52,11 +52,11 @@ fn main() -> ExitCode {
     };
     let result = tokio::runtime::Runtime::new()
         .context("starting the tokio runtime")
-        .and_then(|rt| rt.block_on(run(command)));
+        .and_then(|runtime| runtime.block_on(run(command)));
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("lodestar-server: {e:#}");
+        Err(error) => {
+            eprintln!("lodestar-server: {error:#}");
             ExitCode::FAILURE
         }
     }
@@ -64,19 +64,24 @@ fn main() -> ExitCode {
 
 async fn run(command: Command) -> anyhow::Result<()> {
     match command {
-        Command::Serve { config } => {
-            let cfg = ServerConfig::load(&config)?;
-            let hosts = load_hosts(&cfg.hosts_file)?;
-            let online = tailscale::provider_from_config(&cfg.online, &cfg.tailscale_bin)?;
-            server::start(cfg, hosts, online, false).await?.wait().await
+        Command::Serve {
+            config: config_path,
+        } => {
+            let config = ServerConfig::load(&config_path)?;
+            let hosts = load_hosts(&config.hosts_file)?;
+            let online = tailscale::provider_from_config(&config.online, &config.tailscale_bin)?;
+            server::start(config, hosts, online, false)
+                .await?
+                .wait()
+                .await
         }
         Command::Demo { listen, speed } => {
             let handle = demo::start(listen, speed).await?;
             eprintln!("lodestar-server: demo dashboard at http://{}/", handle.addr);
             // On Ctrl-C the handle is dropped, which stops the demo and removes its temp dir.
             tokio::select! {
-                r = handle.wait() => r,
-                r = tokio::signal::ctrl_c() => r.context("waiting for Ctrl-C"),
+                result = handle.wait() => result,
+                result = tokio::signal::ctrl_c() => result.context("waiting for Ctrl-C"),
             }
         }
     }

@@ -40,11 +40,11 @@ impl ServerHandle {
     /// closed (idle ones at once, others after their current request; waits up to 5 s),
     /// background tasks stopped. The address can be bound again afterwards.
     pub async fn stop(mut self) {
-        if let Some(tx) = self.shutdown.take() {
-            let _ = tx.send(());
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
         }
-        for t in &self.background {
-            t.abort();
+        for task in &self.background {
+            task.abort();
         }
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut self.serve).await;
     }
@@ -52,28 +52,28 @@ impl ServerHandle {
 
 impl Drop for ServerHandle {
     fn drop(&mut self) {
-        if let Some(tx) = self.shutdown.take() {
-            let _ = tx.send(());
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
         }
         self.serve.abort();
-        for t in &self.background {
-            t.abort();
+        for task in &self.background {
+            task.abort();
         }
     }
 }
 
-/// Starts the server and returns once it is listening on `cfg.listen`.
+/// Starts the server and returns once it is listening on `config.listen`.
 pub async fn start(
-    cfg: ServerConfig,
+    config: ServerConfig,
     hosts: Vec<ManagedHost>,
     online: Arc<dyn OnlineProvider>,
     demo: bool,
 ) -> anyhow::Result<ServerHandle> {
-    cfg.check_listen()?;
-    let conn = db::connect(&cfg.state_dir).await?;
-    let mirror = Arc::new(Mirror::open_or_init(&cfg).await?);
-    let listen = cfg.listen;
-    let mut state = AppState::new(Arc::new(cfg), conn, mirror, online, hosts)?;
+    config.check_listen()?;
+    let connection = db::connect(&config.state_dir).await?;
+    let mirror = Arc::new(Mirror::open_or_init(&config).await?);
+    let listen = config.listen;
+    let mut state = AppState::new(Arc::new(config), connection, mirror, online, hosts)?;
     state.demo = demo;
     let listener = tokio::net::TcpListener::bind(listen)
         .await

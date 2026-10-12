@@ -150,14 +150,14 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        for t in [
+        for table in [
             AuditEvents::Table.into_table_ref(),
             DesiredApplies::Table.into_table_ref(),
             Applies::Table.into_table_ref(),
             HostState::Table.into_table_ref(),
         ] {
             manager
-                .drop_table(Table::drop().table(t).if_exists().to_owned())
+                .drop_table(Table::drop().table(table).if_exists().to_owned())
                 .await?;
         }
         Ok(())

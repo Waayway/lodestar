@@ -1,31 +1,17 @@
-//! Bare git mirror of the config repo: channel heads, behind counts, commit
-//! subjects and the promote push (by default `unstable` -> `stable`).
-//!
-//! Every git call goes through `tokio::process::Command` with the host's git
-//! configuration disabled and prompts off. Commit hashes are validated with
-//! `is_commit_hash` and channel names are checked before they reach git, and
-//! refs are always passed fully qualified, so a caller string can never be
-//! parsed as an option.
-
-use std::ffi::OsStr;
 use std::path::PathBuf;
-use std::process::Stdio;
-use std::time::Duration;
 
 use anyhow::{Context, bail};
 use lodestar_proto::{PromoteChannels, is_commit_hash};
-use tokio::process::Command;
 
+use super::PromoteError;
+use super::git_command::valid_channel;
 use crate::config::ServerConfig;
 
-/// Upper bound for network git operations (fetch, push).
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
-
 pub struct Mirror {
-    path: PathBuf,
+    pub(super) path: PathBuf,
     repo_url: String,
     push_url: String,
-    deploy_key: Option<PathBuf>,
+    pub(super) deploy_key: Option<PathBuf>,
     /// The promote pair; `None` disables promote.
     promote: Option<PromoteChannels>,
     /// Serialises ref writers (fetch, promote): concurrent `git fetch`es on one bare repo
@@ -33,91 +19,36 @@ pub struct Mirror {
     write_lock: tokio::sync::Mutex<()>,
 }
 
-struct Output {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
-}
-
-impl Output {
-    fn ok(&self) -> bool {
-        self.code == Some(0)
-    }
-}
-
-fn valid_channel(channel: &str) -> bool {
-    !channel.is_empty()
-        && !channel.starts_with(['-', '.', '/'])
-        && !channel.contains("..")
-        && channel
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
-}
-
 impl Mirror {
     /// Creates `<state_dir>/mirror.git` when missing and does a first fetch. A failing first
     /// fetch is not fatal (the server may start offline); later `fetch` calls report errors.
-    pub async fn open_or_init(cfg: &ServerConfig) -> anyhow::Result<Mirror> {
-        let path = cfg.state_dir.join("mirror.git");
+    pub async fn open_or_init(config: &ServerConfig) -> anyhow::Result<Mirror> {
+        let path = config.state_dir.join("mirror.git");
         let mirror = Mirror {
             path,
-            repo_url: cfg.repo_url.clone(),
-            push_url: cfg.push_url.clone(),
-            deploy_key: cfg.deploy_key_file.clone(),
-            promote: cfg.promote.clone(),
+            repo_url: config.repo_url.clone(),
+            push_url: config.push_url.clone(),
+            deploy_key: config.deploy_key_file.clone(),
+            promote: config.promote.clone(),
             write_lock: tokio::sync::Mutex::new(()),
         };
         if !mirror.path.join("HEAD").exists() {
             std::fs::create_dir_all(&mirror.path)
                 .with_context(|| format!("creating {}", mirror.path.display()))?;
-            let out = mirror.git(["init", "--bare", "--quiet"]).await?;
-            if !out.ok() {
-                bail!("git init failed: {}", out.stderr.trim());
+            let output = mirror.git(["init", "--bare", "--quiet"]).await?;
+            if !output.ok() {
+                bail!("git init failed: {}", output.stderr.trim());
             }
         }
-        if let Err(e) = mirror.fetch().await {
-            eprintln!("lodestar-server: initial mirror fetch failed: {e:#}");
+        if let Err(error) = mirror.fetch().await {
+            eprintln!("lodestar-server: initial mirror fetch failed: {error:#}");
         }
         Ok(mirror)
     }
 
-    async fn git<I, S>(&self, args: I) -> anyhow::Result<Output>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let mut cmd = Command::new("git");
-        cmd.arg("--git-dir")
-            .arg(&self.path)
-            .args(args)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .stdin(Stdio::null())
-            .kill_on_drop(true);
-        if let Some(key) = &self.deploy_key {
-            cmd.env(
-                "GIT_SSH_COMMAND",
-                format!(
-                    "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
-                    key.display()
-                ),
-            );
-        }
-        let out = tokio::time::timeout(NETWORK_TIMEOUT, cmd.output())
-            .await
-            .context("git timed out")?
-            .context("running git")?;
-        Ok(Output {
-            code: out.status.code(),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        })
-    }
-
     pub async fn fetch(&self) -> anyhow::Result<()> {
         let _guard = self.write_lock.lock().await;
-        let out = self
+        let output = self
             .git([
                 "fetch",
                 "--quiet",
@@ -127,8 +58,8 @@ impl Mirror {
                 "+refs/heads/*:refs/heads/*",
             ])
             .await?;
-        if !out.ok() {
-            bail!("git fetch failed: {}", out.stderr.trim());
+        if !output.ok() {
+            bail!("git fetch failed: {}", output.stderr.trim());
         }
         Ok(())
     }
@@ -146,18 +77,18 @@ impl Mirror {
             return Ok(None);
         }
         let refname = format!("refs/heads/{channel}^{{commit}}");
-        let out = self
+        let output = self
             .git(["rev-parse", "--verify", "--quiet", &refname])
             .await?;
-        let hash = out.stdout.trim();
-        match out.code {
+        let hash = output.stdout.trim();
+        match output.code {
             Some(0) if is_commit_hash(hash) => Ok(Some(hash.to_string())),
             // --verify --quiet: exit 1 and no output for a missing ref.
             Some(1) if hash.is_empty() => Ok(None),
             _ => bail!(
                 "git rev-parse {refname} failed ({:?}): {}",
-                out.code,
-                out.stderr.trim()
+                output.code,
+                output.stderr.trim()
             ),
         }
     }
@@ -167,11 +98,11 @@ impl Mirror {
         if !is_commit_hash(commit) {
             return None;
         }
-        let out = self
+        let output = self
             .git(["log", "-1", "--format=%s", commit, "--"])
             .await
             .ok()?;
-        out.ok().then(|| out.stdout.trim().to_string())
+        output.ok().then(|| output.stdout.trim().to_string())
     }
 
     async fn has_commit(&self, commit: &str) -> bool {
@@ -179,19 +110,19 @@ impl Mirror {
             && self
                 .git(["cat-file", "-e", &format!("{commit}^{{commit}}")])
                 .await
-                .is_ok_and(|o| o.ok())
+                .is_ok_and(|output| output.ok())
     }
 
     /// `Ok(true)` when `ancestor` is an ancestor of (or equal to) `descendant`.
     /// Both must be full hashes or full ref names.
     async fn is_ancestor(&self, ancestor: &str, descendant: &str) -> anyhow::Result<bool> {
-        let out = self
+        let output = self
             .git(["merge-base", "--is-ancestor", ancestor, descendant])
             .await?;
-        match out.code {
+        match output.code {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
-            _ => bail!("git merge-base failed: {}", out.stderr.trim()),
+            _ => bail!("git merge-base failed: {}", output.stderr.trim()),
         }
     }
 
@@ -203,11 +134,11 @@ impl Mirror {
             return None;
         }
         let range = format!("{running}..refs/heads/{channel}");
-        let out = self.git(["rev-list", "--count", &range, "--"]).await.ok()?;
-        if !out.ok() {
+        let output = self.git(["rev-list", "--count", &range, "--"]).await.ok()?;
+        if !output.ok() {
             return None;
         }
-        out.stdout.trim().parse().ok()
+        output.stdout.trim().parse().ok()
     }
 
     /// The promote pair this mirror was configured with (`None`: promote is disabled).
@@ -217,16 +148,16 @@ impl Mirror {
 
     /// The `from` head when the `to` head is a strict ancestor of it.
     pub async fn promote_candidate(&self) -> Option<String> {
-        let p = self.promote.as_ref()?;
-        let from = self.head(&p.from).await?;
-        let to = self.head(&p.to).await?;
+        let channels = self.promote.as_ref()?;
+        let from = self.head(&channels.from).await?;
+        let to = self.head(&channels.to).await?;
         if to == from {
             return None;
         }
         self.is_ancestor(&to, &from)
             .await
             .ok()
-            .filter(|&a| a)
+            .filter(|&is_ancestor| is_ancestor)
             .map(|_| from)
     }
 
@@ -234,12 +165,15 @@ impl Mirror {
     /// must be an ancestor of it; otherwise `PromoteError::Rejected`.
     pub async fn promote(&self, commit: &str) -> Result<(), PromoteError> {
         let _guard = self.write_lock.lock().await;
-        let reject = |msg: String| Err(PromoteError::Rejected(msg));
-        let Some(p) = &self.promote else {
+        let reject = |message: String| Err(PromoteError::Rejected(message));
+        let Some(channels) = &self.promote else {
             return reject("promote is disabled on this server".into());
         };
-        if !valid_channel(&p.from) || !valid_channel(&p.to) {
-            return reject(format!("invalid promote channels {} -> {}", p.from, p.to));
+        if !valid_channel(&channels.from) || !valid_channel(&channels.to) {
+            return reject(format!(
+                "invalid promote channels {} -> {}",
+                channels.from, channels.to
+            ));
         }
         if !is_commit_hash(commit) {
             return reject("not a commit hash".into());
@@ -248,55 +182,32 @@ impl Mirror {
             return reject(format!("commit {commit} is not in the mirror"));
         }
         if !self
-            .is_ancestor(commit, &format!("refs/heads/{}", p.from))
+            .is_ancestor(commit, &format!("refs/heads/{}", channels.from))
             .await?
         {
-            return reject(format!("commit {commit} is not on {}", p.from));
+            return reject(format!("commit {commit} is not on {}", channels.from));
         }
         // A git error here must not read as "no target yet" (which would skip the check).
-        if let Some(to) = self.try_head(&p.to).await?
+        if let Some(to) = self.try_head(&channels.to).await?
             && !self.is_ancestor(&to, commit).await?
         {
-            return reject(format!("{} ({to}) is not an ancestor of {commit}", p.to));
+            return reject(format!(
+                "{} ({to}) is not an ancestor of {commit}",
+                channels.to
+            ));
         }
-        let out = self
+        let output = self
             .git([
                 "push",
                 "--quiet",
                 "--",
                 &self.push_url,
-                &format!("{commit}:refs/heads/{}", p.to),
+                &format!("{commit}:refs/heads/{}", channels.to),
             ])
             .await?;
-        if !out.ok() {
-            return Err(anyhow::anyhow!("git push failed: {}", out.stderr.trim()).into());
+        if !output.ok() {
+            return Err(anyhow::anyhow!("git push failed: {}", output.stderr.trim()).into());
         }
         Ok(())
     }
 }
-
-/// Why a promote did not happen.
-#[derive(Debug)]
-pub enum PromoteError {
-    /// The commit is not a valid promote target (hash, ancestry); nothing was pushed.
-    Rejected(String),
-    /// git itself failed (rev-parse, merge-base, push).
-    Git(anyhow::Error),
-}
-
-impl From<anyhow::Error> for PromoteError {
-    fn from(e: anyhow::Error) -> Self {
-        PromoteError::Git(e)
-    }
-}
-
-impl std::fmt::Display for PromoteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PromoteError::Rejected(msg) => f.write_str(msg),
-            PromoteError::Git(e) => write!(f, "{e:#}"),
-        }
-    }
-}
-
-impl std::error::Error for PromoteError {}

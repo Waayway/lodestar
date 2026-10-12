@@ -18,7 +18,23 @@ does; `docs/operations.md` for how it is run.
     the embedded frontend (`embed.rs`, `build.rs`: `LODESTAR_WEB_DIST`, else
     `../web/dist`), and demo mode (`demo/`: throwaway repo, simulated agents).
   - `lodestar-cli/`: the `lodestar` CLI (library + thin `main.rs`).
-- `web/`: Preact + shadcn/ui dashboard (Vite, Tailwind, vitest).
+- `web/`: Preact + shadcn/ui dashboard (Vite, Tailwind v4, vitest). Look and
+  components are described in `docs/style-guide.md`. In `web/src/`:
+  - `main.tsx` renders `App.tsx`, which only composes providers (theme,
+    tooltips, toasts, connection) around `pages/DashboardPage.tsx`.
+  - `connection/`: the only code that talks to the server: `client.ts` (HTTP,
+    `X-Lodestar`, `ApiError`, 403), `feed.ts` (WebSocket, backoff, 403 stop),
+    `ConnectionProvider.tsx` (snapshot, open log, audit, actions) and
+    `hooks.ts` (`useFleet`, `useHost`, `useApplyLog`, `useAudit`, `useActions`).
+    No component calls `fetch` or opens a socket.
+  - `lib/`: pure helpers (`format.ts` labels, `applyLog.ts` log merge,
+    `time.ts`, `theme.ts`, `cn.ts`).
+  - `components/ui/` (shadcn primitives in the tokens), `components/brand/`,
+    `components/fleet/`, `components/layout/`; `icons/` (Lucide under
+    Lodestar names, `BrandIcon`); `styles/tokens.css` + `styles/base.css`;
+    `bindings/` (generated).
+  - Tests in `web/tests/`, by behaviour (`formatting`, `log-streaming`,
+    `connection`, `components`).
 - `default.nix`: crane builds of the crates, `buildNpmPackage` of `web/`
   (`npmDepsHash`), and the bindings check.
 - `flake.nix`: packages, apps, modules, `lib.hostsFrom`, checks, dev shell.
@@ -27,7 +43,7 @@ does; `docs/operations.md` for how it is run.
   `darwin.nix`); `audit-hook.nix`: the activation audit snippet.
 - `nix/modules/server.nix`: `services.lodestar-server` (NixOS only).
 - `nix/lib/hostsFrom.nix`, `nix/tests/vm.nix` (NixOS VM test).
-- `docs/`: `operations.md`; `plans/` (dated design and plan documents; the
+- `docs/`: `operations.md`, `style-guide.md` (the dashboard's look and components); `plans/` (dated design and plan documents; the
   `fleet-manager` ones are historical).
 
 ## Working
@@ -70,7 +86,7 @@ nix flake check --no-build --keep-going
   name check) and refs are fully qualified, so nothing can be read as an
   option.
 - Tests next to the code they cover: Rust integration tests in
-  `<crate>/tests/`, vitest files as `web/src/*.test.ts`. Test data is neutral
+  `<crate>/tests/`, vitest files in `web/tests/` (grouped by behaviour, importing via `@/`). Test data is neutral
   (`alice`, `example.com`, `100.64.0.0/10`).
 - Commits: conventional style (`feat(agent): ...`, `fix(cli): ...`), small and
   focused.

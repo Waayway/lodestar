@@ -20,6 +20,8 @@ pub struct ServerHandle {
     pub state: AppState,
     serve: JoinHandle<std::io::Result<()>>,
     background: Vec<JoinHandle<()>>,
+    /// Asks the listener to stop accepting and to close idle connections.
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl ServerHandle {
@@ -33,8 +35,26 @@ impl ServerHandle {
     }
 }
 
+impl ServerHandle {
+    /// Stops the server like a process exit would: no new connections, open connections
+    /// closed (idle ones at once, others after their current request; waits up to 5 s),
+    /// background tasks stopped. The address can be bound again afterwards.
+    pub async fn stop(mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        for t in &self.background {
+            t.abort();
+        }
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut self.serve).await;
+    }
+}
+
 impl Drop for ServerHandle {
     fn drop(&mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
         self.serve.abort();
         for t in &self.background {
             t.abort();
@@ -61,12 +81,20 @@ pub async fn start(
     let addr = listener.local_addr().context("listener address")?;
     let background = poller::spawn(state.clone());
     let app = api::app(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
-    let serve = tokio::spawn(async move { axum::serve(listener, app).await });
+    let (shutdown, stopped) = tokio::sync::oneshot::channel::<()>();
+    let serve = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = stopped.await;
+            })
+            .await
+    });
     eprintln!("lodestar-server: listening on {addr}");
     Ok(ServerHandle {
         addr,
         state,
         serve,
         background,
+        shutdown: Some(shutdown),
     })
 }

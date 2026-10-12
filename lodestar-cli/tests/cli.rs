@@ -108,3 +108,50 @@ async fn promote_reports_the_configured_pair() {
     assert!(out.contains("unstable -> stable"), "{out}");
     assert!(out.contains("move stable"), "{out}");
 }
+
+/// `rebuild --wait` survives a restart of the server mid-wait (the apply switched the host
+/// that runs it): it retries quietly and still reports the final result.
+#[tokio::test]
+async fn rebuild_wait_survives_a_server_restart() {
+    // Slow enough that the apply is still running across the restart.
+    let mut d = demo::start("127.0.0.1:0".parse().unwrap(), 2.0)
+        .await
+        .unwrap();
+    let mut c = Client::new(&format!("http://{}", d.addr));
+    c.poll = Duration::from_millis(100);
+    c.retry = (Duration::from_millis(200), Duration::from_millis(500));
+    tokio::time::sleep(Duration::from_secs(3)).await; // the first poll reached every agent
+    let wait = tokio::spawn(async move {
+        let mut out = Vec::new();
+        let cmd = Command::Rebuild {
+            host: Some("desktop".into()),
+            channel: None,
+            wait: true,
+            timeout: 60,
+        };
+        let code = run(&c, cmd, &mut out).await.unwrap();
+        (code, String::from_utf8(out).unwrap())
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!wait.is_finished(), "the apply finished before the restart");
+    d.restart(Duration::from_millis(1500)).await.unwrap();
+    let (code, out) = wait.await.unwrap();
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("desktop: ok"), "{out}");
+    assert_eq!(out.matches("server restarting").count(), 1, "{out}");
+}
+
+#[tokio::test]
+async fn rebuild_wait_stops_on_a_non_transient_error() {
+    let (_d, c) = start().await;
+    // 404 from the server is final, not retried.
+    let err = run(&c, rebuild("nope", true), &mut Vec::new())
+        .await
+        .unwrap_err();
+    assert!(!lodestar_cli::is_transient(&err), "{err:#}");
+    let dead = Client::new("http://127.0.0.1:1");
+    let err = run(&dead, Command::Status, &mut Vec::new())
+        .await
+        .unwrap_err();
+    assert!(lodestar_cli::is_transient(&err), "{err:#}");
+}

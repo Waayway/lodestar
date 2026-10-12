@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 use crate::config::{AccessConfig, ManagedHost, OnlineSource, ServerConfig};
 use crate::server::{self, ServerHandle};
 use crate::state::AppState;
+use crate::tailscale::OnlineProvider;
 
 use agents::{HostSetup, Script, SimAgent};
 use online::{DemoOnline, DemoPeer};
@@ -106,7 +107,12 @@ impl Drop for Tasks {
 pub struct DemoHandle {
     pub addr: SocketAddr,
     pub state: AppState,
-    server: ServerHandle,
+    /// `None` only while `restart` has it stopped.
+    server: Option<ServerHandle>,
+    /// What `restart` needs to start the server again on the same state.
+    cfg: ServerConfig,
+    hosts: Vec<ManagedHost>,
+    online: Arc<dyn OnlineProvider>,
     tasks: Tasks,
     _tmp: TempDir,
 }
@@ -120,9 +126,28 @@ impl DemoHandle {
             _tmp,
             ..
         } = self;
-        let result = server.wait().await;
+        let result = match server {
+            Some(server) => server.wait().await,
+            None => Err(anyhow::anyhow!("the demo server is stopped")),
+        };
         drop(tasks);
         result
+    }
+
+    /// Simulates a restart of the server process (e.g. by a switch of the host it runs on):
+    /// stops the server, leaves the address dead for `down`, then starts it again on the
+    /// same address, database and mirror. The simulated agents keep running.
+    pub async fn restart(&mut self, down: Duration) -> anyhow::Result<()> {
+        if let Some(old) = self.server.take() {
+            old.stop().await;
+        }
+        tokio::time::sleep(down).await;
+        let mut cfg = self.cfg.clone();
+        cfg.listen = self.addr;
+        let new = server::start(cfg, self.hosts.clone(), self.online.clone(), true).await?;
+        self.state = new.state.clone();
+        self.server = Some(new);
+        Ok(())
     }
 }
 
@@ -230,7 +255,8 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         tailscale_bin: "tailscale".into(),
         promote: Some(lodestar_proto::PromoteChannels::default()),
     };
-    let server = server::start(cfg, hosts, Arc::new(DemoOnline::new(peers)), true).await?;
+    let online: Arc<dyn OnlineProvider> = Arc::new(DemoOnline::new(peers));
+    let server = server::start(cfg.clone(), hosts.clone(), online.clone(), true).await?;
 
     let every = scaled(COMMIT_EVERY_SECS, speed);
     tasks.push(tokio::spawn(async move {
@@ -247,7 +273,10 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
     Ok(DemoHandle {
         addr: server.addr,
         state: server.state.clone(),
-        server,
+        server: Some(server),
+        cfg,
+        hosts,
+        online,
         tasks: Tasks(tasks),
         _tmp: tmp,
     })

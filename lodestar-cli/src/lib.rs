@@ -33,7 +33,8 @@ pub enum Command {
         /// Rebuild every host on this channel instead.
         #[arg(long, conflicts_with = "host")]
         channel: Option<String>,
-        /// Wait for the apply to finish; exit 0 only if it succeeded.
+        /// Wait for the apply to finish; exit 0 only if it succeeded. Keeps retrying while the
+        /// server is unreachable (e.g. restarting because the apply switched its host).
         #[arg(long)]
         wait: bool,
         /// Give up waiting after this many seconds.
@@ -122,11 +123,47 @@ pub fn resolve_server(flag: Option<String>) -> Result<String> {
     )
 }
 
+/// Why a request to the server failed, for telling a restarting server from a real error.
+#[derive(Debug)]
+pub enum RequestError {
+    /// No answer: connection refused or reset, timeout, or the body broke off.
+    Unreachable(String),
+    /// The server answered with an error status.
+    Status(u16, String),
+}
+
+impl std::fmt::Display for RequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestError::Unreachable(msg) => f.write_str(msg),
+            RequestError::Status(403, msg) => write!(
+                f,
+                "not allowed: the server only accepts the owner's tailnet devices ({msg})"
+            ),
+            RequestError::Status(code, msg) => write!(f, "server answered {code}: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for RequestError {}
+
+/// True for failures a server restart causes (no answer, or 502/503/504 from a proxy or a
+/// server still starting); false for anything the server decided (403, 404, bad JSON, ...).
+pub fn is_transient(e: &anyhow::Error) -> bool {
+    match e.downcast_ref::<RequestError>() {
+        Some(RequestError::Unreachable(_)) => true,
+        Some(RequestError::Status(code, _)) => matches!(code, 502..=504),
+        None => false,
+    }
+}
+
 pub struct Client {
     base: String,
     http: reqwest::Client,
     /// How often `--wait` polls the snapshot.
     pub poll: Duration,
+    /// First and longest pause between retries while `--wait` cannot reach the server.
+    pub retry: (Duration, Duration),
 }
 
 impl Client {
@@ -148,15 +185,16 @@ impl Client {
                 .build()
                 .expect("reqwest client"),
             poll: Duration::from_secs(1),
+            retry: (Duration::from_secs(2), Duration::from_secs(10)),
         }
     }
 
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
         let resp = req.send().await.map_err(|e| {
-            anyhow!(
+            anyhow::Error::new(RequestError::Unreachable(format!(
                 "cannot reach the Lodestar server at {} ({e}); is Tailscale up?",
                 self.base
-            )
+            )))
         })?;
         let status = resp.status();
         if status.is_success() {
@@ -167,19 +205,19 @@ impl Client {
             .ok()
             .and_then(|v| v["error"].as_str().map(String::from))
             .unwrap_or(text);
-        if status.as_u16() == 403 {
-            bail!("not allowed: the server only accepts the owner's tailnet devices ({msg})");
-        }
-        bail!("server answered {status}: {msg}");
+        Err(RequestError::Status(status.as_u16(), msg).into())
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let resp = self
             .send(self.http.get(format!("{}{path}", self.base)))
             .await?;
-        resp.json()
-            .await
-            .with_context(|| format!("decoding response of GET {path}"))
+        let body = resp.bytes().await.map_err(|e| {
+            anyhow::Error::new(RequestError::Unreachable(format!(
+                "reading the response of GET {path}: {e}"
+            )))
+        })?;
+        serde_json::from_slice(&body).with_context(|| format!("decoding response of GET {path}"))
     }
 
     async fn post(&self, path: &str, body: Value) -> Result<Value> {
@@ -427,8 +465,41 @@ async fn rebuild(
     }
     let deadline = Instant::now() + timeout;
     let mut done: BTreeMap<String, ApplyRecord> = BTreeMap::new();
+    // While the server is unreachable (e.g. restarting because the apply switched its own
+    // host): the next pause, and whether the outage was reported.
+    let mut backoff = client.retry.0;
+    let mut outage = false;
+    let timed_out = |out: &mut dyn Write, done: &BTreeMap<String, ApplyRecord>| {
+        let pending: Vec<_> = ids
+            .keys()
+            .filter(|h| !done.contains_key(*h))
+            .cloned()
+            .collect();
+        writeln!(out, "timed out waiting for: {}", pending.join(", "))
+    };
     while done.len() < ids.len() {
-        let snap = client.snapshot().await?;
+        let snap = match client.snapshot().await {
+            Ok(snap) => {
+                outage = false;
+                backoff = client.retry.0;
+                snap
+            }
+            Err(e) if is_transient(&e) => {
+                if !outage {
+                    writeln!(out, "server restarting, retrying… ({e:#})")?;
+                    outage = true;
+                }
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    timed_out(out, &done)?;
+                    return Ok(1);
+                }
+                tokio::time::sleep(backoff.min(left)).await;
+                backoff = (backoff * 2).min(client.retry.1);
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         for (h, id) in &ids {
             if let Some(a) = find_host(&snap, h)?.last_apply.as_ref()
                 && &a.apply_id == id
@@ -441,12 +512,7 @@ async fn rebuild(
             break;
         }
         if Instant::now() >= deadline {
-            let pending: Vec<_> = ids
-                .keys()
-                .filter(|h| !done.contains_key(*h))
-                .cloned()
-                .collect();
-            writeln!(out, "timed out waiting for: {}", pending.join(", "))?;
+            timed_out(out, &done)?;
             return Ok(1);
         }
         tokio::time::sleep(client.poll).await;

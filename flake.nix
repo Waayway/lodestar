@@ -46,7 +46,8 @@
       linuxPkgs = nixpkgs.legacyPackages.x86_64-linux;
 
       # Evaluation-time check: a minimal NixOS system with both modules enabled opens
-      # the agent and dashboard ports on tailscale0 (and only there).
+      # the agent and dashboard ports on tailscale0 (and only there), and runs the agent
+      # from binaryPath.
       firewallCheck =
         let
           system = lib.nixosSystem {
@@ -80,6 +81,8 @@
           };
           inherit (system.config.networking.firewall) interfaces allowedTCPPorts;
           ports = interfaces.tailscale0.allowedTCPPorts;
+          execStart = system.config.systemd.services.lodestar-agent.serviceConfig.ExecStart;
+          agentConfig = builtins.fromJSON system.config.environment.etc."lodestar-agent/config.json".text;
         in
         assert lib.assertMsg (
           builtins.elem 7461 ports && builtins.elem 8080 ports
@@ -87,6 +90,11 @@
         assert lib.assertMsg (
           !(builtins.elem 7461 allowedTCPPorts) && !(builtins.elem 8080 allowedTCPPorts)
         ) "the modules must not open 7461/8080 on every interface";
+        assert lib.assertMsg (lib.hasPrefix "/var/lib/lodestar-agent/bin/lodestar-agent " execStart)
+          "the agent unit must run binaryPath (ExecStart = ${execStart})";
+        assert lib.assertMsg (
+          agentConfig.agent_exe == "/var/lib/lodestar-agent/bin/lodestar-agent"
+        ) "agent_exe must be binaryPath";
         linuxPkgs.runCommand "lodestar-firewall" { } "touch $out";
     in
     {
@@ -145,9 +153,14 @@
       checks =
         lib.recursiveUpdate
           (forEachSystem (
-            { built, ... }:
+            { pkgs, built }:
             {
               bindings = built.bindingsCheck;
+              # The darwin module (with stubs for nix-darwin) and the binary install snippets.
+              agent-module = import ./nix/tests/agent-module.nix {
+                inherit pkgs lib;
+                darwinModule = agentDarwin;
+              };
             }
           ))
           {

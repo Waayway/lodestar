@@ -117,6 +117,17 @@ in
       description = "TEST ONLY: replaces the running-revision command (`nixos-version`/`darwin-version`).";
     };
 
+    binaryPath = mkOption {
+      type = types.str;
+      default = "/var/lib/lodestar-agent/bin/lodestar-agent";
+      description = ''
+        Fixed path the agent binary is copied to on activation (only when `package`
+        changed). The daemon and the apply wrapper run from here, so the program path
+        stays the same across updates; on macOS this copy is also what gets signed (see
+        `macos.stableSigning`). Its directory is made root-owned, mode 0755.
+      '';
+    };
+
     package = mkOption {
       type = types.package;
       default = (packagesFor pkgs.stdenv.hostPlatform.system).lodestar-agent;
@@ -160,6 +171,12 @@ in
         message = "services.lodestar-agent.hostName is empty: set networking.hostName or services.lodestar-agent.hostName.";
       }
     ]
+    ++ [
+      {
+        assertion = lib.hasPrefix "/" cfg.binaryPath && !(lib.hasSuffix "/" cfg.binaryPath);
+        message = "services.lodestar-agent.binaryPath must be an absolute file path.";
+      }
+    ]
     ++ lib.optional (!isDarwin) {
       assertion = config.users.users ? ${cfg.user};
       message = "services.lodestar-agent.user = \"${cfg.user}\" is not a user of this system (users.users.${cfg.user}); it must own the flake checkout.";
@@ -194,7 +211,7 @@ in
       revision_command = cfg.revisionCommand;
       launcher = if isDarwin then "detach" else "systemd_run";
       os = if isDarwin then "darwin" else "linux";
-      agent_exe = null;
+      agent_exe = cfg.binaryPath;
     };
   };
 }

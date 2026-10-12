@@ -133,6 +133,12 @@ pkgs.testers.runNixOSTest {
         m.wait_for_unit("lodestar-agent.service")
         m.wait_for_open_port(7461)
         m.succeed("su - alice -c 'git clone -q -b unstable git://remote/infra.git ~/.flake && git -C ~/.flake reset -q --hard HEAD~1'")
+        # The agent runs from the root-owned copy at binaryPath, not from the store.
+        assert m.succeed("stat -c '%U %a' /var/lib/lodestar-agent/bin /var/lib/lodestar-agent/bin/lodestar-agent").split() == ["root", "755", "root", "755"]
+        pid = m.succeed("systemctl show -p MainPID --value lodestar-agent.service").strip()
+        exe = m.succeed(f"readlink /proc/{pid}/exe").strip()
+        assert exe == "/var/lib/lodestar-agent/bin/lodestar-agent", exe
+        m.succeed("cmp /var/lib/lodestar-agent/bin/lodestar-agent \"$(cat /var/lib/lodestar-agent/bin/.lodestar-agent.source)\"")
 
     # The manager's own agent is reachable through the server.
     manager.wait_until_succeeds(

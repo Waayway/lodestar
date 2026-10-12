@@ -1,5 +1,5 @@
-# The Lodestar agent on NixOS: a systemd service, its port opened on tailscale0, and
-# the activation audit hook. Exported as `nixosModules.agent`.
+# The Lodestar agent on NixOS: a systemd service running the copy at binaryPath, its
+# port opened on tailscale0, and the activation audit hook. Exported as `nixosModules.agent`.
 { packagesFor }:
 {
   config,
@@ -32,14 +32,28 @@ in
       ];
       wants = [ "network-online.target" ];
       environment.PATH = lib.mkForce daemonPath;
-      restartTriggers = [ config.environment.etc."lodestar-agent/config.json".source ];
+      # ExecStart is the fixed binaryPath, so a new package must restart the unit itself.
+      restartTriggers = [
+        config.environment.etc."lodestar-agent/config.json".source
+        cfg.package
+      ];
       # The apply runs in its own transient unit (lodestar-apply-*), so a restart of this
       # one (e.g. by the activation it triggers) does not kill it.
       serviceConfig = {
-        ExecStart = "${lib.getExe cfg.package} serve --config /etc/lodestar-agent/config.json";
+        ExecStart = "${cfg.binaryPath} serve --config /etc/lodestar-agent/config.json";
         StateDirectory = "lodestar-agent";
         Restart = "always";
         RestartSec = 5;
+      };
+    };
+
+    # Copies the package to binaryPath; activation runs before units are (re)started.
+    system.activationScripts.lodestarAgentBinary = {
+      deps = [ ];
+      text = import ./install-binary.nix {
+        inherit pkgs lib;
+        source = lib.getExe cfg.package;
+        inherit (cfg) binaryPath;
       };
     };
 

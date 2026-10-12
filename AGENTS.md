@@ -6,18 +6,25 @@ does; `docs/operations.md` for how it is run.
 ## Layout
 
 - `Cargo.toml`: workspace (edition 2024, `publish = false`, `MIT OR Apache-2.0`).
-  - `lodestar-proto/`: wire types shared by agent, server and web. Exported to
-    TypeScript with ts-rs into `web/src/bindings/` (generated, never edit).
-  - `lodestar-agent/`: the agent daemon (`serve`) and the apply wrapper
-    (`apply.rs`: state files under `/var/lib/lodestar-agent`, `launcher.rs`:
-    systemd-run / detach), git as the user (`git.rs`), pre-apply checks
-    (`checks.rs`), manager source check (`net.rs`).
-  - `lodestar-server/`: axum API + WebSocket (`api.rs`, `ws.rs`), access via
-    `tailscale whois` (`access.rs`, `tailscale.rs`), git mirror and promote
-    (`mirror.rs`), poller (`poller.rs`), SeaORM/SQLite (`db/`, `migration/`),
-    the embedded frontend (`embed.rs`, `build.rs`: `LODESTAR_WEB_DIST`, else
-    `../web/dist`), and demo mode (`demo/`: throwaway repo, simulated agents).
-  - `lodestar-cli/`: the `lodestar` CLI (library + thin `main.rs`).
+  - `lodestar-proto/`: wire types shared by agent, server and web, one type per
+    file (`agent/`: what the agent serves, `dashboard/`: what the server sends
+    the web). Exported to TypeScript with ts-rs into `web/src/bindings/`
+    (generated, never edit).
+  - `lodestar-agent/`: the daemon (`daemon/`: bind loop, background fetch) and
+    its HTTP API (`api/`, one file per route), the apply wrapper (`apply/`:
+    record, lock, marker, log reader, prune, wrapper; state files under
+    `/var/lib/lodestar-agent`), `launcher.rs` (systemd-run / detach), git as
+    the user (`git.rs`, `privileges.rs`), pre-apply checks (`checks.rs`),
+    manager source check (`net/`), `config/`.
+  - `lodestar-server/`: axum API by resource (`api/`) + WebSocket
+    (`websocket/`), access via `tailscale whois` (`access/`, `tailscale/`),
+    git mirror and promote (`mirror/`), poller (`poller/`), shared state and
+    views (`state/`), SeaORM/SQLite (`db/`, one file per table concern;
+    `migration/`), `config/`, the embedded frontend (`embed.rs`, `build.rs`:
+    `LODESTAR_WEB_DIST`, else `../web/dist`), and demo mode (`demo/`:
+    throwaway repo, simulated agents in `demo/agents/`).
+  - `lodestar-cli/`: the `lodestar` CLI (library + thin `main.rs`):
+    `commands/` (one file per subcommand), `client.rs`, `wait.rs`, `table.rs`.
 - `web/`: Preact + shadcn/ui dashboard (Vite, Tailwind v4, vitest). Look and
   components are described in `docs/style-guide.md`. In `web/src/`:
   - `main.tsx` renders `App.tsx`, which only composes providers (theme,
@@ -82,6 +89,10 @@ nix flake check --no-build --keep-going
   Format Nix with the flake's formatter (`nix fmt`, RFC-style nixfmt).
 - Rust: `cargo fmt`, clippy clean with `-D warnings`. Errors with `anyhow`
   and context. Log lines start with the binary name (`lodestar-agent: ...`).
+  One struct per file, named after it (with its own enums and helpers); a
+  concern with several files is a folder whose `mod.rs` only declares and
+  re-exports. Full names (`config`, `request`, `transaction`, `error`), no
+  `cfg`/`req`/`e`; single letters only for type parameters.
 - Every git argument from a caller is validated (`is_commit_hash`, channel
   name check) and refs are fully qualified, so nothing can be read as an
   option.

@@ -69,9 +69,10 @@ in
     };
 
     pushUrl = mkOption {
-      type = types.str;
+      type = types.nullOr types.str;
+      default = null;
       example = "git@github.com:alice/infra.git";
-      description = "Git remote the server pushes promotions to.";
+      description = "Git remote the server pushes promotions to; required unless `promote` is null.";
     };
 
     deployKeyFile = mkOption {
@@ -118,7 +119,10 @@ in
       type = types.port;
       default = config.services.lodestar-agent.port or 7461;
       defaultText = lib.literalExpression "config.services.lodestar-agent.port or 7461";
-      description = "TCP port of the agents.";
+      description = ''
+        TCP port of the agents. One port for every host: set the same
+        `services.lodestar-agent.port` everywhere.
+      '';
     };
 
     promote = mkOption {
@@ -163,6 +167,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.promote == null || cfg.pushUrl != null;
+        message = "services.lodestar-server.pushUrl must be set while promote is enabled (or set promote = null).";
+      }
+    ];
+
     users.users.lodestar-server = {
       isSystemUser = true;
       group = "lodestar-server";
@@ -194,7 +205,8 @@ in
         agent_port = cfg.agentPort;
         hosts_file = "/etc/lodestar-server/hosts.json";
         repo_url = cfg.repoUrl;
-        push_url = cfg.pushUrl;
+        # Only used by promote; without it nothing is ever pushed.
+        push_url = if cfg.pushUrl != null then cfg.pushUrl else cfg.repoUrl;
         deploy_key_file = cfg.deployKeyFile;
         state_dir = stateDir;
         promote = if cfg.promote == null then null else { inherit (cfg.promote) from to; };

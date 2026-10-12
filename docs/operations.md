@@ -49,8 +49,9 @@ lodestar audit --limit 20
 ```
 
 `lodestar` needs the server URL: `--server http://manager:8080`,
-`LODESTAR_SERVER`, or `server = "http://manager:8080"` in
-`~/.config/lodestar/config.toml`.
+`LODESTAR_SERVER` (the agent module sets it on every enrolled host from
+`services.lodestar-agent.serverUrl`, default `http://<managerHost>:8080`), or
+`server = "http://manager:8080"` in `~/.config/lodestar/config.toml`.
 
 An offline host answers `unreachable`: the apply is recorded and the server
 re-sends it when the host comes back. `rebuild --wait` keeps retrying while the

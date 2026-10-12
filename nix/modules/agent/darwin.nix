@@ -20,37 +20,34 @@ in
     })
   ];
 
-  config = lib.mkMerge [
-    {
-      services.lodestar-agent.hostName = lib.mkIf (config.networking.hostName != null) (
-        lib.mkDefault config.networking.hostName
-      );
-    }
-    (lib.mkIf cfg.enable {
-      launchd.daemons.lodestar-agent.serviceConfig = {
-        Label = "org.lodestar.agent";
-        ProgramArguments = [
-          (lib.getExe cfg.package)
-          "serve"
-          "--config"
-          "/etc/lodestar-agent/config.json"
-        ];
-        RunAtLoad = true;
-        KeepAlive = true;
-        # The detached apply must survive a restart of the daemon.
-        AbandonProcessGroup = true;
-        EnvironmentVariables = {
-          PATH = daemonPath;
-          HOME = "/var/root";
-        };
-        StandardOutPath = log;
-        StandardErrorPath = log;
+  config = lib.mkIf cfg.enable {
+    launchd.daemons.lodestar-agent.serviceConfig = {
+      Label = "org.lodestar.agent";
+      ProgramArguments = [
+        (lib.getExe cfg.package)
+        "serve"
+        "--config"
+        "/etc/lodestar-agent/config.json"
+      ];
+      RunAtLoad = true;
+      KeepAlive = true;
+      # The detached apply must survive a restart of the daemon.
+      AbandonProcessGroup = true;
+      EnvironmentVariables = {
+        PATH = daemonPath;
+        HOME = "/var/root";
+        # Changes with the config, so nix-darwin reloads the daemon (like restartTriggers).
+        LODESTAR_CONFIG_HASH =
+          builtins.hashString "sha256"
+            config.environment.etc."lodestar-agent/config.json".text;
       };
+      StandardOutPath = log;
+      StandardErrorPath = log;
+    };
 
-      system.activationScripts.postActivation.text = lib.mkAfter ''
-        mkdir -p /var/lib/lodestar-agent
-        ${import ./audit-hook.nix { inherit pkgs; }}
-      '';
-    })
-  ];
+    system.activationScripts.postActivation.text = lib.mkAfter ''
+      mkdir -p /var/lib/lodestar-agent
+      ${import ./audit-hook.nix { inherit pkgs; }}
+    '';
+  };
 }

@@ -31,12 +31,12 @@ in
 
     hostName = mkOption {
       type = types.str;
-      ${if isDarwin then null else "default"} = config.networking.hostName;
-      ${if isDarwin then null else "defaultText"} = lib.literalExpression "config.networking.hostName";
+      # nix-darwin's networking.hostName may be null; the assertion below reports that.
+      default = if config.networking.hostName == null then "" else config.networking.hostName;
+      defaultText = lib.literalExpression "config.networking.hostName";
       description = ''
         Name of this host as the server knows it (a key of
         `services.lodestar-server.hosts`). Also used in the default `flakeAttr`.
-        ${lib.optionalString isDarwin "Defaults to `networking.hostName` when that is set."}
       '';
     };
 
@@ -65,7 +65,10 @@ in
     flakePath = mkOption {
       type = types.str;
       default =
-        if isDarwin then "/Users/${cfg.user}/.flake" else "${config.users.users.${cfg.user}.home}/.flake";
+        if isDarwin || !(config.users.users ? ${cfg.user}) then
+          "/Users/${cfg.user}/.flake"
+        else
+          "${config.users.users.${cfg.user}.home}/.flake";
       defaultText =
         if isDarwin then
           lib.literalExpression ''"/Users/''${user}/.flake"''
@@ -131,12 +134,49 @@ in
     installCli = mkOption {
       type = types.bool;
       default = true;
-      description = "Install the `lodestar` CLI on this host.";
+      description = ''
+        Install the `lodestar` CLI on this host and point it at the server
+        (`LODESTAR_SERVER`, see `serverUrl`).
+      '';
+    };
+
+    serverUrl = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "http://manager:8080";
+      description = ''
+        URL of the Lodestar server for the `lodestar` CLI, exported as `LODESTAR_SERVER`
+        when `installCli` is set. Null means `http://<managerHost>:<port>`, where the port
+        is this host's `services.lodestar-server.listenPort` when it runs the server, else
+        8080; set it when the server listens on another port.
+      '';
     };
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.hostName != "";
+        message = "services.lodestar-agent.hostName is empty: set networking.hostName or services.lodestar-agent.hostName.";
+      }
+    ]
+    ++ lib.optional (!isDarwin) {
+      assertion = config.users.users ? ${cfg.user};
+      message = "services.lodestar-agent.user = \"${cfg.user}\" is not a user of this system (users.users.${cfg.user}); it must own the flake checkout.";
+    };
+
     environment.systemPackages = lib.optional cfg.installCli cfg.cliPackage;
+    environment.variables = lib.mkIf cfg.installCli {
+      LODESTAR_SERVER =
+        if cfg.serverUrl != null then
+          cfg.serverUrl
+        else
+          let
+            server = config.services.lodestar-server or { };
+            port = if server.enable or false then server.listenPort else 8080;
+          in
+          "http://${cfg.managerHost}:${toString port}";
+    };
     environment.etc."lodestar-agent/config.json".text = builtins.toJSON {
       host = cfg.hostName;
       inherit (cfg)

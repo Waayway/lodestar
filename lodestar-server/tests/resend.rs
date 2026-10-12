@@ -39,27 +39,27 @@ fn never_received() {
 
 #[test]
 fn same_id_failed() {
-    let s = status(OLD, Some(("a1", ApplyState::Failed)));
-    assert!(!should_resend(Some("a1"), Some(NEW), &s));
+    let agent_status = status(OLD, Some(("a1", ApplyState::Failed)));
+    assert!(!should_resend(Some("a1"), Some(NEW), &agent_status));
 }
 
 #[test]
 fn same_id_skipped() {
-    let s = status(OLD, Some(("a1", ApplyState::Skipped)));
-    assert!(!should_resend(Some("a1"), Some(NEW), &s));
+    let agent_status = status(OLD, Some(("a1", ApplyState::Skipped)));
+    assert!(!should_resend(Some("a1"), Some(NEW), &agent_status));
 }
 
 #[test]
 fn other_id_running() {
-    let s = status(OLD, Some(("a0", ApplyState::Running)));
-    assert!(!should_resend(Some("a1"), Some(NEW), &s));
+    let agent_status = status(OLD, Some(("a0", ApplyState::Running)));
+    assert!(!should_resend(Some("a1"), Some(NEW), &agent_status));
 }
 
 #[test]
 fn other_id_finished_still_behind() {
     for state in [ApplyState::Ok, ApplyState::Failed, ApplyState::Skipped] {
-        let s = status(OLD, Some(("a0", state)));
-        assert!(should_resend(Some("a1"), Some(NEW), &s));
+        let agent_status = status(OLD, Some(("a0", state)));
+        assert!(should_resend(Some("a1"), Some(NEW), &agent_status));
     }
 }
 
@@ -70,8 +70,8 @@ fn running_desired_commit() {
 
 #[test]
 fn running_desired_commit_dirty() {
-    let s = status(&format!("{NEW}-dirty"), Some(("a0", ApplyState::Ok)));
-    assert!(!should_resend(Some("a1"), Some(NEW), &s));
+    let agent_status = status(&format!("{NEW}-dirty"), Some(("a0", ApplyState::Ok)));
+    assert!(!should_resend(Some("a1"), Some(NEW), &agent_status));
 }
 
 #[test]

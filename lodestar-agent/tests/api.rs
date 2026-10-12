@@ -16,11 +16,16 @@ use tower::ServiceExt;
 
 const MANAGER: &str = "127.0.0.1:50000";
 
-fn app(f: &Fixture, from: &str) -> Router {
-    let config_path = f.cfg.state_dir.parent().unwrap().join("config.json");
-    std::fs::write(&config_path, serde_json::to_vec(&f.cfg).unwrap()).unwrap();
+fn app(fixture: &Fixture, from: &str) -> Router {
+    let config_path = fixture
+        .config
+        .state_dir
+        .parent()
+        .unwrap()
+        .join("config.json");
+    std::fs::write(&config_path, serde_json::to_vec(&fixture.config).unwrap()).unwrap();
     let state = AppState::new(
-        f.cfg.clone(),
+        fixture.config.clone(),
         config_path,
         SourceGuard::new("127.0.0.1".into()),
     )
@@ -29,11 +34,11 @@ fn app(f: &Fixture, from: &str) -> Router {
 }
 
 fn configured() -> Fixture {
-    let mut f = fixture();
-    f.cfg.agent_exe = Some(PathBuf::from(env!("CARGO_BIN_EXE_lodestar-agent")));
-    f.cfg.revision_command = Some(vec!["sh".into(), "-c".into(), "echo rev1".into()]);
-    f.cfg.rebuild_command = Some(vec!["sh".into(), "-c".into(), "exit 0".into()]);
-    f
+    let mut fixture = fixture();
+    fixture.config.agent_exe = Some(PathBuf::from(env!("CARGO_BIN_EXE_lodestar-agent")));
+    fixture.config.revision_command = Some(vec!["sh".into(), "-c".into(), "echo rev1".into()]);
+    fixture.config.rebuild_command = Some(vec!["sh".into(), "-c".into(), "exit 0".into()]);
+    fixture
 }
 
 async fn call(
@@ -42,17 +47,17 @@ async fn call(
     uri: &str,
     body: Option<String>,
 ) -> (StatusCode, Vec<u8>) {
-    let req = Request::builder()
+    let request = Request::builder()
         .method(method)
         .uri(uri)
         .header("content-type", "application/json")
         .body(body.map(Body::from).unwrap_or_else(Body::empty))
         .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let status = resp.status();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
     (
         status,
-        to_bytes(resp.into_body(), usize::MAX)
+        to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap()
             .to_vec(),
@@ -72,13 +77,17 @@ async fn status(app: &Router) -> AgentStatus {
 async fn wait_state(app: &Router, want: ApplyState) -> AgentStatus {
     let end = Instant::now() + Duration::from_secs(30);
     loop {
-        let s = status(app).await;
-        if s.apply.as_ref().is_some_and(|a| a.state == want) {
-            return s;
+        let agent_status = status(app).await;
+        if agent_status
+            .apply
+            .as_ref()
+            .is_some_and(|apply| apply.state == want)
+        {
+            return agent_status;
         }
         assert!(
             Instant::now() < end,
-            "timed out waiting for {want:?}: {s:?}"
+            "timed out waiting for {want:?}: {agent_status:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -86,8 +95,8 @@ async fn wait_state(app: &Router, want: ApplyState) -> AgentStatus {
 
 #[tokio::test]
 async fn rejects_foreign_source() {
-    let f = configured();
-    let app = app(&f, "10.9.9.9:1234");
+    let fixture = configured();
+    let app = app(&fixture, "10.9.9.9:1234");
     let (code, _) = call(&app, Method::GET, "/status", None).await;
     assert_eq!(code, StatusCode::FORBIDDEN);
     let (code, _) = call(
@@ -104,8 +113,8 @@ async fn rejects_foreign_source() {
 
 #[tokio::test]
 async fn bad_commit_400() {
-    let f = configured();
-    let app = app(&f, MANAGER);
+    let fixture = configured();
+    let app = app(&fixture, MANAGER);
     for commit in ["abc", &"A".repeat(40), &"g".repeat(40)] {
         let (code, _) = call(&app, Method::POST, "/apply", apply_body("a1", commit)).await;
         assert_eq!(code, StatusCode::BAD_REQUEST, "{commit}");
@@ -122,21 +131,21 @@ async fn bad_commit_400() {
 
 #[tokio::test]
 async fn apply_202_then_status_ok() {
-    let f = configured();
-    let c = push_remote_commit(&f, "b.txt");
-    lodestar_agent::git::Git::new(&f.cfg)
+    let fixture = configured();
+    let commit = push_remote_commit(&fixture, "b.txt");
+    lodestar_agent::git::Git::new(&fixture.config)
         .unwrap()
-        .fetch(&f.cfg.repo_url)
+        .fetch(&fixture.config.repo_url)
         .unwrap();
-    let app = app(&f, MANAGER);
-    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &c)).await;
+    let app = app(&fixture, MANAGER);
+    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &commit)).await;
     assert_eq!(code, StatusCode::ACCEPTED);
-    let s = wait_state(&app, ApplyState::Ok).await;
-    assert_eq!(s.running, "rev1");
-    assert_eq!(s.host, "h");
-    assert_eq!(s.checkout.head.as_deref(), Some(c.as_str()));
-    assert_eq!(s.checkout.branch.as_deref(), Some("unstable"));
-    assert_eq!(s.checkout.ahead, Some(0));
+    let agent_status = wait_state(&app, ApplyState::Ok).await;
+    assert_eq!(agent_status.running, "rev1");
+    assert_eq!(agent_status.host, "h");
+    assert_eq!(agent_status.checkout.head.as_deref(), Some(commit.as_str()));
+    assert_eq!(agent_status.checkout.branch.as_deref(), Some("unstable"));
+    assert_eq!(agent_status.checkout.ahead, Some(0));
     let (code, body) = call(&app, Method::GET, "/apply/log?apply_id=id-1", None).await;
     assert_eq!(code, StatusCode::OK);
     let log: lodestar_proto::LogChunk = serde_json::from_slice(&body).unwrap();
@@ -147,45 +156,45 @@ async fn apply_202_then_status_ok() {
 
 #[tokio::test]
 async fn duplicate_apply_id_200() {
-    let f = configured();
-    let c = push_remote_commit(&f, "b.txt");
-    lodestar_agent::git::Git::new(&f.cfg)
+    let fixture = configured();
+    let commit = push_remote_commit(&fixture, "b.txt");
+    lodestar_agent::git::Git::new(&fixture.config)
         .unwrap()
-        .fetch(&f.cfg.repo_url)
+        .fetch(&fixture.config.repo_url)
         .unwrap();
-    let app = app(&f, MANAGER);
-    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &c)).await;
+    let app = app(&fixture, MANAGER);
+    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &commit)).await;
     assert_eq!(code, StatusCode::ACCEPTED);
     wait_state(&app, ApplyState::Ok).await;
-    let (code, body) = call(&app, Method::POST, "/apply", apply_body("id-1", &c)).await;
+    let (code, body) = call(&app, Method::POST, "/apply", apply_body("id-1", &commit)).await;
     assert_eq!(code, StatusCode::OK);
-    let rec: lodestar_proto::ApplyRecord = serde_json::from_slice(&body).unwrap();
-    assert_eq!(rec.apply_id, "id-1");
-    assert_eq!(rec.state, ApplyState::Ok);
+    let record: lodestar_proto::ApplyRecord = serde_json::from_slice(&body).unwrap();
+    assert_eq!(record.apply_id, "id-1");
+    assert_eq!(record.state, ApplyState::Ok);
 }
 
 #[tokio::test]
 async fn apply_while_running_409() {
-    let mut f = configured();
-    f.cfg.rebuild_command = Some(vec!["sh".into(), "-c".into(), "sleep 2".into()]);
-    let c = push_remote_commit(&f, "b.txt");
-    lodestar_agent::git::Git::new(&f.cfg)
+    let mut fixture = configured();
+    fixture.config.rebuild_command = Some(vec!["sh".into(), "-c".into(), "sleep 2".into()]);
+    let commit = push_remote_commit(&fixture, "b.txt");
+    lodestar_agent::git::Git::new(&fixture.config)
         .unwrap()
-        .fetch(&f.cfg.repo_url)
+        .fetch(&fixture.config.repo_url)
         .unwrap();
-    let app = app(&f, MANAGER);
-    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &c)).await;
+    let app = app(&fixture, MANAGER);
+    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &commit)).await;
     assert_eq!(code, StatusCode::ACCEPTED);
     wait_state(&app, ApplyState::Running).await;
-    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-2", &c)).await;
+    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-2", &commit)).await;
     assert_eq!(code, StatusCode::CONFLICT);
     wait_state(&app, ApplyState::Ok).await;
 }
 
 #[tokio::test]
 async fn body_over_4k_rejected() {
-    let f = configured();
-    let app = app(&f, MANAGER);
+    let fixture = configured();
+    let app = app(&fixture, MANAGER);
     let big = format!(r#"{{"apply_id":"{}","commit":"x"}}"#, "a".repeat(5000));
     let (code, _) = call(&app, Method::POST, "/apply", Some(big)).await;
     assert_eq!(code, StatusCode::PAYLOAD_TOO_LARGE);
@@ -193,18 +202,18 @@ async fn body_over_4k_rejected() {
 
 #[tokio::test]
 async fn activations_since_skips_partial_line() {
-    let f = configured();
-    std::fs::create_dir_all(&f.cfg.state_dir).unwrap();
-    let path = f.cfg.state_dir.join("activations.jsonl");
-    let l = |t: i64, trig: &str| {
+    let fixture = configured();
+    std::fs::create_dir_all(&fixture.config.state_dir).unwrap();
+    let path = fixture.config.state_dir.join("activations.jsonl");
+    let activation_line = |time: i64, trigger: &str| {
         format!(
-            r#"{{"time":{t},"store_path":"/nix/store/x","revision":"r{t}","generation":{t},"trigger":"{trig}","sudo_user":null}}"#
+            r#"{{"time":{time},"store_path":"/nix/store/x","revision":"r{time}","generation":{time},"trigger":"{trigger}","sudo_user":null}}"#
         )
     };
     let content = format!(
         "{}\nnot json\n{}\n{{\"time\":3,\"sto",
-        l(1, "boot"),
-        l(2, "manual")
+        activation_line(1, "boot"),
+        activation_line(2, "manual")
     );
     std::fs::write(&path, content).unwrap();
 
@@ -220,23 +229,23 @@ async fn activations_since_skips_partial_line() {
     assert_eq!(rest.events.len(), 1);
 
     // Once the partial line is completed it shows up with its own line number.
-    let mut s = std::fs::read_to_string(&path).unwrap();
-    s.truncate(s.rfind("{\"time\":3").unwrap());
-    s.push_str(&format!("{}\n", l(3, "apply:x")));
-    std::fs::write(&path, s).unwrap();
-    let r = read_since(&path, all.next);
-    assert_eq!(r.next, 4);
-    assert_eq!(r.events.len(), 1);
-    assert_eq!(r.events[0].line, 3);
+    let mut contents = std::fs::read_to_string(&path).unwrap();
+    contents.truncate(contents.rfind("{\"time\":3").unwrap());
+    contents.push_str(&format!("{}\n", activation_line(3, "apply:x")));
+    std::fs::write(&path, contents).unwrap();
+    let completed = read_since(&path, all.next);
+    assert_eq!(completed.next, 4);
+    assert_eq!(completed.events.len(), 1);
+    assert_eq!(completed.events[0].line, 3);
 
-    let app = app(&f, MANAGER);
+    let app = app(&fixture, MANAGER);
     let (code, body) = call(&app, Method::GET, "/activations?since=2", None).await;
     assert_eq!(code, StatusCode::OK);
-    let resp: ActivationsResponse = serde_json::from_slice(&body).unwrap();
-    assert_eq!(resp.next, 4);
-    assert_eq!(resp.events.len(), 2);
+    let response: ActivationsResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(response.next, 4);
+    assert_eq!(response.events.len(), 2);
 
-    let missing = read_since(&f.cfg.state_dir.join("nope"), 0);
+    let missing = read_since(&fixture.config.state_dir.join("nope"), 0);
     assert!(missing.events.is_empty() && missing.next == 0);
 }
 
@@ -254,19 +263,19 @@ fn is_tailscale_ranges() {
 
 #[tokio::test]
 async fn back_to_back_applies_second_is_409() {
-    let mut f = configured();
-    f.cfg.rebuild_command = Some(vec!["sh".into(), "-c".into(), "sleep 1".into()]);
-    let c = push_remote_commit(&f, "b.txt");
-    lodestar_agent::git::Git::new(&f.cfg)
+    let mut fixture = configured();
+    fixture.config.rebuild_command = Some(vec!["sh".into(), "-c".into(), "sleep 1".into()]);
+    let commit = push_remote_commit(&fixture, "b.txt");
+    lodestar_agent::git::Git::new(&fixture.config)
         .unwrap()
-        .fetch(&f.cfg.repo_url)
+        .fetch(&fixture.config.repo_url)
         .unwrap();
-    let app = app(&f, MANAGER);
-    let (c1, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &c)).await;
-    let (c2, _) = call(&app, Method::POST, "/apply", apply_body("id-2", &c)).await;
-    let (c3, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &c)).await;
+    let app = app(&fixture, MANAGER);
+    let (first_code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &commit)).await;
+    let (second_code, _) = call(&app, Method::POST, "/apply", apply_body("id-2", &commit)).await;
+    let (third_code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &commit)).await;
     assert_eq!(
-        (c1, c2, c3),
+        (first_code, second_code, third_code),
         (
             StatusCode::ACCEPTED,
             StatusCode::CONFLICT,
@@ -274,24 +283,30 @@ async fn back_to_back_applies_second_is_409() {
         )
     );
     wait_state(&app, ApplyState::Ok).await;
-    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &c)).await;
+    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &commit)).await;
     assert_eq!(code, StatusCode::OK);
 }
 
 #[test]
 fn second_run_apply_exits_while_lock_held() {
-    let f = configured();
-    let lock = lodestar_agent::apply::try_lock_apply(&f.cfg).unwrap();
-    let rec = lodestar_agent::apply::run_apply(&f.cfg, "id-9", &"0".repeat(40));
-    assert_eq!(rec.state, ApplyState::Failed);
-    assert_eq!(rec.message.as_deref(), Some("another apply is running"));
-    assert!(lodestar_agent::apply::read_record(&f.cfg, "id-9").is_none());
-    assert!(!f.cfg.state_dir.join("apply-in-progress.json").exists());
+    let fixture = configured();
+    let lock = lodestar_agent::apply::try_lock_apply(&fixture.config).unwrap();
+    let record = lodestar_agent::apply::run_apply(&fixture.config, "id-9", &"0".repeat(40));
+    assert_eq!(record.state, ApplyState::Failed);
+    assert_eq!(record.message.as_deref(), Some("another apply is running"));
+    assert!(lodestar_agent::apply::read_record(&fixture.config, "id-9").is_none());
+    assert!(
+        !fixture
+            .config
+            .state_dir
+            .join("apply-in-progress.json")
+            .exists()
+    );
     drop(lock);
     // A concurrently forking test thread can briefly inherit the descriptor
     // (O_CLOEXEC only applies at exec), so allow a moment for it to close.
     let end = Instant::now() + Duration::from_secs(5);
-    while lodestar_agent::apply::try_lock_apply(&f.cfg).is_none() {
+    while lodestar_agent::apply::try_lock_apply(&fixture.config).is_none() {
         assert!(Instant::now() < end, "lock never released");
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -299,12 +314,12 @@ fn second_run_apply_exits_while_lock_held() {
 
 #[tokio::test]
 async fn apply_records_last_fetch() {
-    let f = configured();
-    let c = push_remote_commit(&f, "b.txt");
-    let app = app(&f, MANAGER);
+    let fixture = configured();
+    let commit = push_remote_commit(&fixture, "b.txt");
+    let app = app(&fixture, MANAGER);
     assert!(status(&app).await.checkout.last_fetch_at.is_none());
-    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &c)).await;
+    let (code, _) = call(&app, Method::POST, "/apply", apply_body("id-1", &commit)).await;
     assert_eq!(code, StatusCode::ACCEPTED);
-    let s = wait_state(&app, ApplyState::Ok).await;
-    assert!(s.checkout.last_fetch_at.is_some());
+    let agent_status = wait_state(&app, ApplyState::Ok).await;
+    assert!(agent_status.checkout.last_fetch_at.is_some());
 }

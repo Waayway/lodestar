@@ -14,8 +14,8 @@ async fn start() -> DemoHandle {
         .unwrap()
 }
 
-async fn snapshot(d: &DemoHandle) -> Snapshot {
-    reqwest::get(format!("http://{}/api/snapshot", d.addr))
+async fn snapshot(demo_handle: &DemoHandle) -> Snapshot {
+    reqwest::get(format!("http://{}/api/snapshot", demo_handle.addr))
         .await
         .unwrap()
         .json()
@@ -23,32 +23,37 @@ async fn snapshot(d: &DemoHandle) -> Snapshot {
         .unwrap()
 }
 
-fn host<'a>(s: &'a Snapshot, name: &str) -> &'a HostView {
-    s.hosts.iter().find(|h| h.name == name).unwrap()
+fn host<'a>(fleet: &'a Snapshot, name: &str) -> &'a HostView {
+    fleet
+        .hosts
+        .iter()
+        .find(|host_view| host_view.name == name)
+        .unwrap()
 }
 
-fn head(s: &Snapshot, channel: &str) -> Option<String> {
-    s.channels
+fn head(fleet: &Snapshot, channel: &str) -> Option<String> {
+    fleet
+        .channels
         .iter()
-        .find(|c| c.name == channel)
-        .and_then(|c| c.head.clone())
+        .find(|view| view.name == channel)
+        .and_then(|view| view.head.clone())
 }
 
 /// Polls the snapshot until `pred` holds, or panics with the last snapshot after `secs`.
 async fn wait_for(
-    d: &DemoHandle,
+    demo_handle: &DemoHandle,
     secs: u64,
     what: &str,
-    pred: impl Fn(&Snapshot) -> bool,
+    predicate: impl Fn(&Snapshot) -> bool,
 ) -> Snapshot {
     let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
-        let s = snapshot(d).await;
-        if pred(&s) {
-            return s;
+        let fleet = snapshot(demo_handle).await;
+        if predicate(&fleet) {
+            return fleet;
         }
         if Instant::now() > deadline {
-            panic!("timed out waiting for {what}: {s:#?}");
+            panic!("timed out waiting for {what}: {fleet:#?}");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -64,118 +69,128 @@ fn dashboard_client() -> reqwest::Client {
         .unwrap()
 }
 
-async fn post(d: &DemoHandle, path: &str, body: Value) -> (u16, Value) {
-    let resp = dashboard_client()
-        .post(format!("http://{}{path}", d.addr))
+async fn post(demo_handle: &DemoHandle, path: &str, body: Value) -> (u16, Value) {
+    let response = dashboard_client()
+        .post(format!("http://{}{path}", demo_handle.addr))
         .json(&body)
         .send()
         .await
         .unwrap();
-    let code = resp.status().as_u16();
-    (code, resp.json().await.unwrap())
+    let code = response.status().as_u16();
+    (code, response.json().await.unwrap())
 }
 
-async fn apply(d: &DemoHandle, name: &str) -> Value {
-    let (code, body) = post(d, &format!("/api/hosts/{name}/apply"), json!({})).await;
+async fn apply(demo_handle: &DemoHandle, name: &str) -> Value {
+    let (code, body) = post(demo_handle, &format!("/api/hosts/{name}/apply"), json!({})).await;
     assert_eq!(code, 202, "{body}");
     body
 }
 
-fn last_state(s: &Snapshot, name: &str) -> Option<ApplyState> {
-    host(s, name).last_apply.as_ref().map(|a| a.state.clone())
+fn last_state(fleet: &Snapshot, name: &str) -> Option<ApplyState> {
+    host(fleet, name)
+        .last_apply
+        .as_ref()
+        .map(|last_apply| last_apply.state.clone())
 }
 
 /// Waits until the host's agent has been polled at least once.
-async fn wait_polled(d: &DemoHandle, name: &str) {
-    wait_for(d, 10, &format!("{name} polled"), |s| {
-        host(s, name).online == OnlineState::On
+async fn wait_polled(demo_handle: &DemoHandle, name: &str) {
+    wait_for(demo_handle, 10, &format!("{name} polled"), |fleet| {
+        host(fleet, name).online == OnlineState::On
     })
     .await;
 }
 
 #[tokio::test]
 async fn demo_starts_and_serves_snapshot() {
-    let d = start().await;
-    let s = wait_for(&d, 10, "laptop-1 checkout", |s| {
-        host(s, "laptop-1").checkout.is_some()
+    let demo_handle = start().await;
+    let fleet = wait_for(&demo_handle, 10, "laptop-1 checkout", |fleet| {
+        host(fleet, "laptop-1").checkout.is_some()
     })
     .await;
-    assert!(s.demo);
-    assert_eq!(s.hosts.len(), 7);
-    let mut names: Vec<_> = s.channels.iter().map(|c| c.name.as_str()).collect();
+    assert!(fleet.demo);
+    assert_eq!(fleet.hosts.len(), 7);
+    let mut names: Vec<_> = fleet
+        .channels
+        .iter()
+        .map(|channel| channel.name.as_str())
+        .collect();
     names.sort();
     assert_eq!(names, ["stable", "unstable"]);
-    assert!(head(&s, "unstable").is_some());
-    assert!(head(&s, "stable").is_some());
-    assert!(host(&s, "laptop-1").checkout.as_ref().unwrap().dirty);
+    assert!(head(&fleet, "unstable").is_some());
+    assert!(head(&fleet, "stable").is_some());
+    assert!(host(&fleet, "laptop-1").checkout.as_ref().unwrap().dirty);
 }
 
 #[tokio::test]
 async fn demo_apply_desktop_reaches_ok() {
-    let d = start().await;
-    wait_polled(&d, "desktop").await;
-    apply(&d, "desktop").await;
-    let s = wait_for(&d, 10, "desktop ok", |s| {
-        last_state(s, "desktop") == Some(ApplyState::Ok)
+    let demo_handle = start().await;
+    wait_polled(&demo_handle, "desktop").await;
+    apply(&demo_handle, "desktop").await;
+    let fleet = wait_for(&demo_handle, 10, "desktop ok", |fleet| {
+        last_state(fleet, "desktop") == Some(ApplyState::Ok)
     })
     .await;
-    let h = host(&s, "desktop");
-    assert_eq!(h.running, head(&s, "unstable"));
-    assert_eq!(h.behind, Some(0));
+    let host_view = host(&fleet, "desktop");
+    assert_eq!(host_view.running, head(&fleet, "unstable"));
+    assert_eq!(host_view.behind, Some(0));
 }
 
 #[tokio::test]
 async fn demo_apply_laptop_1_skips_dirty() {
-    let d = start().await;
-    wait_polled(&d, "laptop-1").await;
-    apply(&d, "laptop-1").await;
-    let s = wait_for(&d, 10, "laptop-1 skipped", |s| {
-        last_state(s, "laptop-1") == Some(ApplyState::Skipped)
+    let demo_handle = start().await;
+    wait_polled(&demo_handle, "laptop-1").await;
+    apply(&demo_handle, "laptop-1").await;
+    let fleet = wait_for(&demo_handle, 10, "laptop-1 skipped", |fleet| {
+        last_state(fleet, "laptop-1") == Some(ApplyState::Skipped)
     })
     .await;
-    let a = host(&s, "laptop-1").last_apply.clone().unwrap();
-    assert_eq!(a.skip_reason, Some(SkipReason::Dirty));
+    let last_apply = host(&fleet, "laptop-1").last_apply.clone().unwrap();
+    assert_eq!(last_apply.skip_reason, Some(SkipReason::Dirty));
 }
 
 #[tokio::test]
 async fn demo_media_first_apply_fails() {
-    let d = start().await;
-    wait_polled(&d, "media").await;
-    apply(&d, "media").await;
-    let s = wait_for(&d, 10, "media failed", |s| {
-        last_state(s, "media") == Some(ApplyState::Failed)
+    let demo_handle = start().await;
+    wait_polled(&demo_handle, "media").await;
+    apply(&demo_handle, "media").await;
+    let fleet = wait_for(&demo_handle, 10, "media failed", |fleet| {
+        last_state(fleet, "media") == Some(ApplyState::Failed)
     })
     .await;
-    let a = host(&s, "media").last_apply.clone().unwrap();
-    assert!(a.exit_code.is_some_and(|c| c != 0), "{a:?}");
+    let last_apply = host(&fleet, "media").last_apply.clone().unwrap();
+    assert!(
+        last_apply.exit_code.is_some_and(|code| code != 0),
+        "{last_apply:?}"
+    );
 }
 
 #[tokio::test]
 async fn demo_laptop_2_resend_after_online() {
-    let d = start().await;
-    let s = snapshot(&d).await;
-    assert_eq!(host(&s, "laptop-2").online, OnlineState::Off);
-    let body = apply(&d, "laptop-2").await;
+    let demo_handle = start().await;
+    let fleet = snapshot(&demo_handle).await;
+    assert_eq!(host(&fleet, "laptop-2").online, OnlineState::Off);
+    let body = apply(&demo_handle, "laptop-2").await;
     assert_eq!(body["agent_status"], "unreachable", "{body}");
-    let s = wait_for(&d, 20, "laptop-2 ok", |s| {
-        last_state(s, "laptop-2") == Some(ApplyState::Ok)
+    let fleet = wait_for(&demo_handle, 20, "laptop-2 ok", |fleet| {
+        last_state(fleet, "laptop-2") == Some(ApplyState::Ok)
     })
     .await;
-    let a = host(&s, "laptop-2").last_apply.clone().unwrap();
+    let last_apply = host(&fleet, "laptop-2").last_apply.clone().unwrap();
     assert_eq!(
-        Some(a.apply_id),
+        Some(last_apply.apply_id),
         body["apply_id"].as_str().map(String::from)
     );
-    assert_eq!(host(&s, "laptop-2").running, Some(a.commit));
+    assert_eq!(host(&fleet, "laptop-2").running, Some(last_apply.commit));
 }
 
 #[tokio::test]
 async fn demo_promote_moves_stable() {
-    let d = start().await;
-    let s = snapshot(&d).await;
-    let candidate = s.promote_candidate.clone().expect("promote candidate");
-    let (code, body) = post(&d, "/api/promote", json!({ "commit": candidate })).await;
+    let demo_handle = start().await;
+    let fleet = snapshot(&demo_handle).await;
+    let candidate = fleet.promote_candidate.clone().expect("promote candidate");
+    let (code, body) = post(&demo_handle, "/api/promote", json!({ "commit": candidate })).await;
     assert_eq!(code, 200, "{body}");
-    let s = snapshot(&d).await;
-    assert_eq!(head(&s, "stable"), Some(candidate));
+    let fleet = snapshot(&demo_handle).await;
+    assert_eq!(head(&fleet, "stable"), Some(candidate));
 }

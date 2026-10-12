@@ -51,65 +51,66 @@ struct Since {
 }
 
 #[derive(Deserialize)]
-struct LogQ {
+struct LogQuery {
     apply_id: String,
     offset: u64,
 }
 
 async fn fake_agent(fake: Shared) -> SocketAddr {
     /// `503` while `status` is unset.
-    async fn status(State(f): State<Shared>) -> Result<Json<AgentStatus>, StatusCode> {
-        let mut f = f.lock().unwrap();
-        f.status_hits += 1;
-        f.status
+    async fn status(State(agent): State<Shared>) -> Result<Json<AgentStatus>, StatusCode> {
+        let mut agent = agent.lock().unwrap();
+        agent.status_hits += 1;
+        agent
+            .status
             .clone()
             .map(Json)
             .ok_or(StatusCode::SERVICE_UNAVAILABLE)
     }
     async fn activations(
-        State(f): State<Shared>,
-        Query(q): Query<Since>,
+        State(agent): State<Shared>,
+        Query(query): Query<Since>,
     ) -> Json<ActivationsResponse> {
-        let f = f.lock().unwrap();
+        let agent = agent.lock().unwrap();
         Json(ActivationsResponse {
-            events: f
+            events: agent
                 .activations
                 .iter()
-                .skip(q.since as usize)
+                .skip(query.since as usize)
                 .cloned()
                 .collect(),
-            next: f.activations.len() as u64,
+            next: agent.activations.len() as u64,
         })
     }
-    async fn apply(State(f): State<Shared>, Json(req): Json<ApplyRequest>) -> StatusCode {
-        f.lock().unwrap().applied.push(req);
+    async fn apply(State(agent): State<Shared>, Json(request): Json<ApplyRequest>) -> StatusCode {
+        agent.lock().unwrap().applied.push(request);
         StatusCode::ACCEPTED
     }
     async fn log(
-        State(f): State<Shared>,
-        Query(q): Query<LogQ>,
+        State(agent): State<Shared>,
+        Query(query): Query<LogQuery>,
     ) -> Result<Json<LogChunk>, StatusCode> {
-        let mut f = f.lock().unwrap();
-        f.log_hits += 1;
-        f.log_offsets.push(q.offset);
-        if f.log_failures > 0 {
-            f.log_failures -= 1;
+        let mut agent = agent.lock().unwrap();
+        agent.log_hits += 1;
+        agent.log_offsets.push(query.offset);
+        if agent.log_failures > 0 {
+            agent.log_failures -= 1;
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
-        let (full, eof) = if f.log_script.is_empty() {
-            (f.log.clone().into_bytes(), true)
-        } else if f.log_script.len() == 1 {
-            f.log_script[0].clone()
+        let (full, eof) = if agent.log_script.is_empty() {
+            (agent.log.clone().into_bytes(), true)
+        } else if agent.log_script.len() == 1 {
+            agent.log_script[0].clone()
         } else {
-            f.log_script.remove(0)
+            agent.log_script.remove(0)
         };
         // Like the real agent: raw bytes from `offset`, invalid UTF-8 replaced.
-        let raw = full.get(q.offset as usize..).unwrap_or_default();
+        let raw = full.get(query.offset as usize..).unwrap_or_default();
         Ok(Json(LogChunk {
-            apply_id: q.apply_id,
-            offset: q.offset,
+            apply_id: query.apply_id,
+            offset: query.offset,
             data: String::from_utf8_lossy(raw).into_owned(),
-            next: q.offset + raw.len() as u64,
+            next: query.offset + raw.len() as u64,
             eof,
         }))
     }
@@ -181,13 +182,13 @@ fn host() -> ManagedHost {
 
 fn empty_origin(dir: &Path) -> PathBuf {
     let bare = dir.join("origin.git");
-    let out = Command::new("git")
+    let output = Command::new("git")
         .args(["init", "--bare", "--quiet", bare.to_str().unwrap()])
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .unwrap();
-    assert!(out.status.success());
+    assert!(output.status.success());
     bare
 }
 
@@ -200,7 +201,7 @@ async fn env(agent: SocketAddr, online: Option<Arc<dyn OnlineProvider>>) -> Env 
     let dir = tempfile::tempdir().unwrap();
     let origin = empty_origin(dir.path());
     let addresses = HashMap::from([("h1".to_string(), agent.to_string())]);
-    let cfg = ServerConfig {
+    let config = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         agent_port: 7461,
         hosts_file: dir.path().join("hosts.json"),
@@ -217,46 +218,57 @@ async fn env(agent: SocketAddr, online: Option<Arc<dyn OnlineProvider>>) -> Env 
         tailscale_bin: PathBuf::from("tailscale"),
         promote: Some(lodestar_proto::PromoteChannels::default()),
     };
-    let conn = db::connect(&cfg.state_dir).await.unwrap();
-    let mirror = Arc::new(Mirror::open_or_init(&cfg).await.unwrap());
+    let connection = db::connect(&config.state_dir).await.unwrap();
+    let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());
     let online = online.unwrap_or_else(|| Arc::new(StaticOnline::new(&addresses).unwrap()));
-    let state = AppState::new(Arc::new(cfg), conn, mirror, online, vec![host()]).unwrap();
+    let state = AppState::new(Arc::new(config), connection, mirror, online, vec![host()]).unwrap();
     Env { state, _dir: dir }
 }
 
 fn count_kind(events: &[lodestar_proto::AuditEvent], kind: &str) -> usize {
-    events.iter().filter(|e| e.kind == kind).count()
+    events
+        .iter()
+        .filter(|environment| environment.kind == kind)
+        .count()
 }
 
 #[tokio::test]
 async fn poll_saves_status_and_ingests_activations_once() {
     let fake = Shared::default();
     {
-        let mut f = fake.lock().unwrap();
-        f.status = Some(agent_status(OLD, None));
-        f.activations = vec![activation(0), activation(1)];
+        let mut agent = fake.lock().unwrap();
+        agent.status = Some(agent_status(OLD, None));
+        agent.activations = vec![activation(0), activation(1)];
     }
     let addr = fake_agent(fake.clone()).await;
-    let e = env(addr, None).await;
-    let mut rx = e.state.tx.subscribe();
+    let environment = env(addr, None).await;
+    let mut receiver = environment.state.tx.subscribe();
 
-    poll_once(&e.state).await;
-    poll_once(&e.state).await;
+    poll_once(&environment.state).await;
+    poll_once(&environment.state).await;
 
-    let (saved, ok_at) = db::load_status(&e.state.db, "H1").await.unwrap().unwrap();
+    let (saved, ok_at) = db::load_status(&environment.state.db, "H1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(saved.running, OLD);
     assert!(ok_at.is_some());
-    let audit = db::recent_audit(&e.state.db, 100).await.unwrap();
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
     assert_eq!(count_kind(&audit, "activation"), 2, "{audit:?}");
-    assert_eq!(db::activations_next(&e.state.db, "H1").await.unwrap(), 2);
+    assert_eq!(
+        db::activations_next(&environment.state.db, "H1")
+            .await
+            .unwrap(),
+        2
+    );
     assert_eq!(fake.lock().unwrap().status_hits, 2);
 
-    match rx.recv().await.unwrap() {
-        WsMessage::HostUpdated(hv) => {
-            assert_eq!(hv.name, "H1");
-            assert_eq!(hv.online, OnlineState::On);
-            assert_eq!(hv.running.as_deref(), Some(OLD));
-            assert_eq!(hv.last_activation.map(|a| a.line), Some(1));
+    match receiver.recv().await.unwrap() {
+        WsMessage::HostUpdated(host_view) => {
+            assert_eq!(host_view.name, "H1");
+            assert_eq!(host_view.online, OnlineState::On);
+            assert_eq!(host_view.running.as_deref(), Some(OLD));
+            assert_eq!(host_view.last_activation.map(|event| event.line), Some(1));
         }
         other => panic!("unexpected {other:?}"),
     }
@@ -267,9 +279,9 @@ async fn poll_resends_missed_apply() {
     let fake = Shared::default();
     fake.lock().unwrap().status = Some(agent_status(OLD, Some(record("a0", OLD, ApplyState::Ok))));
     let addr = fake_agent(fake.clone()).await;
-    let e = env(addr, None).await;
+    let environment = env(addr, None).await;
     db::insert_apply(
-        &e.state.db,
+        &environment.state.db,
         "H1",
         "alice",
         1,
@@ -277,9 +289,11 @@ async fn poll_resends_missed_apply() {
     )
     .await
     .unwrap();
-    db::set_desired(&e.state.db, "H1", "a1").await.unwrap();
+    db::set_desired(&environment.state.db, "H1", "a1")
+        .await
+        .unwrap();
 
-    poll_once(&e.state).await;
+    poll_once(&environment.state).await;
 
     assert_eq!(
         fake.lock().unwrap().applied,
@@ -294,17 +308,17 @@ async fn poll_resends_missed_apply() {
 async fn poll_does_not_resend_failed() {
     let fake = Shared::default();
     {
-        let mut f = fake.lock().unwrap();
-        let mut rec = record("a1", NEW, ApplyState::Failed);
-        rec.exit_code = Some(1);
-        rec.finished_at = Some(50);
-        f.status = Some(agent_status(OLD, Some(rec)));
-        f.log = "building...\nerror: boom\n".into();
+        let mut agent = fake.lock().unwrap();
+        let mut failed_record = record("a1", NEW, ApplyState::Failed);
+        failed_record.exit_code = Some(1);
+        failed_record.finished_at = Some(50);
+        agent.status = Some(agent_status(OLD, Some(failed_record)));
+        agent.log = "building...\nerror: boom\n".into();
     }
     let addr = fake_agent(fake.clone()).await;
-    let e = env(addr, None).await;
+    let environment = env(addr, None).await;
     db::insert_apply(
-        &e.state.db,
+        &environment.state.db,
         "H1",
         "alice",
         1,
@@ -312,19 +326,27 @@ async fn poll_does_not_resend_failed() {
     )
     .await
     .unwrap();
-    db::set_desired(&e.state.db, "H1", "a1").await.unwrap();
+    db::set_desired(&environment.state.db, "H1", "a1")
+        .await
+        .unwrap();
 
-    poll_once(&e.state).await;
-    poll_once(&e.state).await;
+    poll_once(&environment.state).await;
+    poll_once(&environment.state).await;
 
     assert!(fake.lock().unwrap().applied.is_empty());
-    let row = db::get_apply(&e.state.db, "a1").await.unwrap().unwrap();
+    let row = db::get_apply(&environment.state.db, "a1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(row.state, "failed");
     assert_eq!(row.exit_code, Some(1));
     assert_eq!(row.log.as_deref(), Some("building...\nerror: boom\n"));
-    let audit = db::recent_audit(&e.state.db, 100).await.unwrap();
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
     assert_eq!(count_kind(&audit, "apply_finished"), 1, "{audit:?}");
-    let finished = audit.iter().find(|a| a.kind == "apply_finished").unwrap();
+    let finished = audit
+        .iter()
+        .find(|event| event.kind == "apply_finished")
+        .unwrap();
     assert_eq!(finished.actor, "agent");
     assert_eq!(finished.host.as_deref(), Some("H1"));
     assert_eq!(finished.details["apply_id"], "a1");
@@ -357,9 +379,9 @@ async fn offline_host_not_contacted() {
     let fake = Shared::default();
     fake.lock().unwrap().status = Some(agent_status(OLD, None));
     let addr = fake_agent(fake.clone()).await;
-    let e = env(addr, Some(Arc::new(Offline))).await;
+    let environment = env(addr, Some(Arc::new(Offline))).await;
     db::insert_apply(
-        &e.state.db,
+        &environment.state.db,
         "H1",
         "alice",
         1,
@@ -367,20 +389,22 @@ async fn offline_host_not_contacted() {
     )
     .await
     .unwrap();
-    db::set_desired(&e.state.db, "H1", "a1").await.unwrap();
-    let mut rx = e.state.tx.subscribe();
+    db::set_desired(&environment.state.db, "H1", "a1")
+        .await
+        .unwrap();
+    let mut receiver = environment.state.tx.subscribe();
 
-    poll_once(&e.state).await;
+    poll_once(&environment.state).await;
 
     {
-        let f = fake.lock().unwrap();
-        assert_eq!(f.status_hits, 0);
-        assert!(f.applied.is_empty());
+        let agent = fake.lock().unwrap();
+        assert_eq!(agent.status_hits, 0);
+        assert!(agent.applied.is_empty());
     }
-    match rx.recv().await.unwrap() {
-        WsMessage::HostUpdated(hv) => {
-            assert_eq!(hv.online, OnlineState::Off);
-            assert_eq!(hv.last_seen, Some(42));
+    match receiver.recv().await.unwrap() {
+        WsMessage::HostUpdated(host_view) => {
+            assert_eq!(host_view.online, OnlineState::Off);
+            assert_eq!(host_view.last_seen, Some(42));
         }
         other => panic!("unexpected {other:?}"),
     }
@@ -390,18 +414,18 @@ async fn offline_host_not_contacted() {
 async fn apply_finished_retried_when_log_fetch_fails() {
     let fake = Shared::default();
     {
-        let mut f = fake.lock().unwrap();
-        f.status = Some(agent_status(
+        let mut agent = fake.lock().unwrap();
+        agent.status = Some(agent_status(
             OLD,
             Some(record("a1", NEW, ApplyState::Failed)),
         ));
-        f.log = "error: boom\n".into();
-        f.log_failures = 1;
+        agent.log = "error: boom\n".into();
+        agent.log_failures = 1;
     }
     let addr = fake_agent(fake.clone()).await;
-    let e = env(addr, None).await;
+    let environment = env(addr, None).await;
     db::insert_apply(
-        &e.state.db,
+        &environment.state.db,
         "H1",
         "alice",
         1,
@@ -410,19 +434,25 @@ async fn apply_finished_retried_when_log_fetch_fails() {
     .await
     .unwrap();
 
-    poll_once(&e.state).await;
-    let row = db::get_apply(&e.state.db, "a1").await.unwrap().unwrap();
+    poll_once(&environment.state).await;
+    let row = db::get_apply(&environment.state.db, "a1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(row.state, "running");
     assert_eq!(row.log, None);
-    let audit = db::recent_audit(&e.state.db, 100).await.unwrap();
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
     assert_eq!(count_kind(&audit, "apply_finished"), 0, "{audit:?}");
 
-    poll_once(&e.state).await;
-    poll_once(&e.state).await;
-    let row = db::get_apply(&e.state.db, "a1").await.unwrap().unwrap();
+    poll_once(&environment.state).await;
+    poll_once(&environment.state).await;
+    let row = db::get_apply(&environment.state.db, "a1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(row.state, "failed");
     assert_eq!(row.log.as_deref(), Some("error: boom\n"));
-    let audit = db::recent_audit(&e.state.db, 100).await.unwrap();
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
     assert_eq!(count_kind(&audit, "apply_finished"), 1, "{audit:?}");
 }
 
@@ -430,21 +460,21 @@ async fn apply_finished_retried_when_log_fetch_fails() {
 async fn follow_log_streams_running_apply_once() {
     let fake = Shared::default();
     {
-        let mut f = fake.lock().unwrap();
-        f.status = Some(agent_status(
+        let mut agent = fake.lock().unwrap();
+        agent.status = Some(agent_status(
             OLD,
             Some(record("a1", NEW, ApplyState::Running)),
         ));
-        f.log_script = vec![
+        agent.log_script = vec![
             ("one\n".into(), false),
             ("one\ntwo\n".into(), false),
             ("one\ntwo\nthree\n".into(), true),
         ];
     }
     let addr = fake_agent(fake.clone()).await;
-    let e = env(addr, None).await;
+    let environment = env(addr, None).await;
     db::insert_apply(
-        &e.state.db,
+        &environment.state.db,
         "H1",
         "alice",
         1,
@@ -452,17 +482,17 @@ async fn follow_log_streams_running_apply_once() {
     )
     .await
     .unwrap();
-    let mut rx = e.state.tx.subscribe();
+    let mut receiver = environment.state.tx.subscribe();
 
-    poll_once(&e.state).await;
-    poll_once(&e.state).await;
+    poll_once(&environment.state).await;
+    poll_once(&environment.state).await;
 
     let mut chunks = Vec::new();
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            if let WsMessage::ApplyLog(c) = rx.recv().await.unwrap() {
-                let eof = c.eof;
-                chunks.push(c);
+            if let WsMessage::ApplyLog(chunk) = receiver.recv().await.unwrap() {
+                let eof = chunk.eof;
+                chunks.push(chunk);
                 if eof {
                     break;
                 }
@@ -473,7 +503,7 @@ async fn follow_log_streams_running_apply_once() {
     .expect("log reached eof");
     let got: Vec<(u64, &str, bool)> = chunks
         .iter()
-        .map(|c| (c.offset, c.data.as_str(), c.eof))
+        .map(|chunk| (chunk.offset, chunk.data.as_str(), chunk.eof))
         .collect();
     assert_eq!(
         got,
@@ -483,11 +513,14 @@ async fn follow_log_streams_running_apply_once() {
             (8, "three\n", true)
         ]
     );
-    assert!(chunks.iter().all(|c| c.apply_id == "a1"));
+    assert!(chunks.iter().all(|chunk| chunk.apply_id == "a1"));
 
     let stored = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let row = db::get_apply(&e.state.db, "a1").await.unwrap().unwrap();
+            let row = db::get_apply(&environment.state.db, "a1")
+                .await
+                .unwrap()
+                .unwrap();
             if let Some(log) = row.log {
                 return log;
             }
@@ -507,10 +540,10 @@ async fn unreachable_agent_logged_once_per_change() {
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let closed_addr = closed.local_addr().unwrap();
     drop(closed);
-    let e = env(closed_addr, None).await;
+    let environment = env(closed_addr, None).await;
     let mut lines = Vec::new();
     for _ in 0..3 {
-        lines.extend(poll_once(&e.state).await);
+        lines.extend(poll_once(&environment.state).await);
     }
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].starts_with("H1: agent unreachable: "), "{lines:?}");
@@ -520,14 +553,14 @@ async fn unreachable_agent_logged_once_per_change() {
 async fn agent_recovery_logged_once() {
     let fake = Shared::default();
     let addr = fake_agent(fake.clone()).await;
-    let e = env(addr, None).await;
+    let environment = env(addr, None).await;
     let mut lines = Vec::new();
     for _ in 0..2 {
-        lines.extend(poll_once(&e.state).await);
+        lines.extend(poll_once(&environment.state).await);
     }
     fake.lock().unwrap().status = Some(agent_status(OLD, None));
     for _ in 0..2 {
-        lines.extend(poll_once(&e.state).await);
+        lines.extend(poll_once(&environment.state).await);
     }
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(lines[0].starts_with("H1: agent unreachable: "), "{lines:?}");
@@ -538,21 +571,21 @@ async fn agent_recovery_logged_once() {
 async fn follow_log_continues_at_next_after_invalid_utf8() {
     let fake = Shared::default();
     {
-        let mut f = fake.lock().unwrap();
-        f.status = Some(agent_status(
+        let mut agent = fake.lock().unwrap();
+        agent.status = Some(agent_status(
             OLD,
             Some(record("a1", NEW, ApplyState::Running)),
         ));
         // An invalid byte mid-chunk: the text gets U+FFFD (3 bytes) for 1 raw byte.
-        f.log_script = vec![
+        agent.log_script = vec![
             (b"a\xffb\n".to_vec(), false),
             (b"a\xffb\nmore\n".to_vec(), true),
         ];
     }
     let addr = fake_agent(fake.clone()).await;
-    let e = env(addr, None).await;
+    let environment = env(addr, None).await;
     db::insert_apply(
-        &e.state.db,
+        &environment.state.db,
         "H1",
         "alice",
         1,
@@ -560,16 +593,16 @@ async fn follow_log_continues_at_next_after_invalid_utf8() {
     )
     .await
     .unwrap();
-    let mut rx = e.state.tx.subscribe();
+    let mut receiver = environment.state.tx.subscribe();
 
-    poll_once(&e.state).await;
+    poll_once(&environment.state).await;
 
     let mut chunks = Vec::new();
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            if let WsMessage::ApplyLog(c) = rx.recv().await.unwrap() {
-                let eof = c.eof;
-                chunks.push(c);
+            if let WsMessage::ApplyLog(chunk) = receiver.recv().await.unwrap() {
+                let eof = chunk.eof;
+                chunks.push(chunk);
                 if eof {
                     break;
                 }
@@ -580,7 +613,7 @@ async fn follow_log_continues_at_next_after_invalid_utf8() {
     .expect("log reached eof");
     let got: Vec<(u64, &str, u64, bool)> = chunks
         .iter()
-        .map(|c| (c.offset, c.data.as_str(), c.next, c.eof))
+        .map(|chunk| (chunk.offset, chunk.data.as_str(), chunk.next, chunk.eof))
         .collect();
     assert_eq!(
         got,
@@ -588,7 +621,10 @@ async fn follow_log_continues_at_next_after_invalid_utf8() {
     );
     let stored = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let row = db::get_apply(&e.state.db, "a1").await.unwrap().unwrap();
+            let row = db::get_apply(&environment.state.db, "a1")
+                .await
+                .unwrap()
+                .unwrap();
             if let Some(log) = row.log {
                 return log;
             }

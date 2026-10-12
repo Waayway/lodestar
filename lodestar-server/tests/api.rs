@@ -34,7 +34,7 @@ fn dashboard_client() -> reqwest::Client {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let output = Command::new("git")
         .current_dir(dir)
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -46,11 +46,11 @@ fn git(dir: &Path, args: &[&str]) -> String {
         .output()
         .unwrap();
     assert!(
-        out.status.success(),
+        output.status.success(),
         "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
+        String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(out.stdout).unwrap().trim().to_string()
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
 /// A bare "origin" plus a working clone used to create commits on it.
@@ -76,9 +76,9 @@ impl Origin {
     /// Commit on the current branch and push it; returns the new hash.
     fn commit(&self, subject: &str, push_branch: &str) -> String {
         git(&self.work, &["commit", "--allow-empty", "-m", subject]);
-        let h = git(&self.work, &["rev-parse", "HEAD"]);
+        let commit = git(&self.work, &["rev-parse", "HEAD"]);
         self.push(push_branch);
-        h
+        commit
     }
 
     fn push(&self, branch: &str) {
@@ -101,22 +101,22 @@ struct Fake {
 type Shared = Arc<Mutex<Fake>>;
 
 #[derive(Deserialize)]
-struct LogQ {
+struct LogQuery {
     apply_id: String,
     offset: u64,
 }
 
 async fn fake_agent(fake: Shared) -> SocketAddr {
-    async fn apply(State(f): State<Shared>, Json(req): Json<ApplyRequest>) -> StatusCode {
-        f.lock().unwrap().applied.push(req);
+    async fn apply(State(fake): State<Shared>, Json(request): Json<ApplyRequest>) -> StatusCode {
+        fake.lock().unwrap().applied.push(request);
         StatusCode::ACCEPTED
     }
-    async fn log(Query(q): Query<LogQ>) -> Json<LogChunk> {
+    async fn log(Query(query): Query<LogQuery>) -> Json<LogChunk> {
         Json(LogChunk {
-            apply_id: q.apply_id,
-            offset: q.offset,
+            apply_id: query.apply_id,
+            offset: query.offset,
             data: "live log\n".into(),
-            next: q.offset + 9,
+            next: query.offset + 9,
             eof: false,
         })
     }
@@ -149,30 +149,30 @@ struct Env {
 /// Starts the dashboard server without access control. Every host is online at `agent`.
 async fn env(
     dir: tempfile::TempDir,
-    repo: &str,
+    repository_url: &str,
     agent: SocketAddr,
     hosts: Vec<ManagedHost>,
 ) -> Env {
-    env_with_access(dir, repo, agent, hosts, AccessConfig::Disabled).await
+    env_with_access(dir, repository_url, agent, hosts, AccessConfig::Disabled).await
 }
 
 async fn env_with_access(
     dir: tempfile::TempDir,
-    repo: &str,
+    repository_url: &str,
     agent: SocketAddr,
     hosts: Vec<ManagedHost>,
     access: AccessConfig,
 ) -> Env {
     let addresses: HashMap<String, String> = hosts
         .iter()
-        .map(|h| (h.name.to_lowercase(), agent.to_string()))
+        .map(|managed_host| (managed_host.name.to_lowercase(), agent.to_string()))
         .collect();
-    let cfg = ServerConfig {
+    let config = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         agent_port: 7461,
         hosts_file: dir.path().join("hosts.json"),
-        repo_url: repo.into(),
-        push_url: repo.into(),
+        repo_url: repository_url.into(),
+        push_url: repository_url.into(),
         deploy_key_file: None,
         state_dir: dir.path().join("state"),
         access,
@@ -184,10 +184,10 @@ async fn env_with_access(
         tailscale_bin: PathBuf::from("tailscale"),
         promote: Some(lodestar_proto::PromoteChannels::default()),
     };
-    let conn = db::connect(&cfg.state_dir).await.unwrap();
-    let mirror = Arc::new(Mirror::open_or_init(&cfg).await.unwrap());
+    let connection = db::connect(&config.state_dir).await.unwrap();
+    let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());
     let online = Arc::new(StaticOnline::new(&addresses).unwrap());
-    let state = AppState::new(Arc::new(cfg), conn, mirror, online, hosts).unwrap();
+    let state = AppState::new(Arc::new(config), connection, mirror, online, hosts).unwrap();
     let app = lodestar_server::api::app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -207,38 +207,45 @@ async fn env_with_access(
 }
 
 fn audit_kinds(events: &[AuditEvent], kind: &str) -> Vec<AuditEvent> {
-    events.iter().filter(|e| e.kind == kind).cloned().collect()
+    events
+        .iter()
+        .filter(|event| event.kind == kind)
+        .cloned()
+        .collect()
 }
 
 #[tokio::test]
 async fn apply_endpoint_creates_desired_and_hits_agent() {
     let dir = tempfile::tempdir().unwrap();
-    let o = Origin::new(dir.path());
-    let head = o.commit("one", "main");
+    let origin = Origin::new(dir.path());
+    let head = origin.commit("one", "main");
     let fake = Shared::default();
     let agent = fake_agent(fake.clone()).await;
-    let e = env(
+    let environment = env(
         dir,
-        o.bare.to_str().unwrap(),
+        origin.bare.to_str().unwrap(),
         agent,
         vec![host("H1", "main")],
     )
     .await;
-    let mut rx = e.state.tx.subscribe();
+    let mut receiver = environment.state.tx.subscribe();
     let http = dashboard_client();
 
-    let resp = http
-        .post(format!("{}/api/hosts/H1/apply", e.base))
+    let response = http
+        .post(format!("{}/api/hosts/H1/apply", environment.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-    let body: Value = resp.json().await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body: Value = response.json().await.unwrap();
     assert_eq!(body["agent_status"], "202", "{body}");
     let id = body["apply_id"].as_str().unwrap().to_string();
     assert_eq!(id.len(), 36, "{id}");
 
-    let desired = db::desired(&e.state.db, "H1").await.unwrap().unwrap();
+    let desired = db::desired(&environment.state.db, "H1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(desired.apply_id, id);
     assert_eq!(desired.commit, head);
     assert_eq!(desired.requested_by, "dev");
@@ -250,44 +257,52 @@ async fn apply_endpoint_creates_desired_and_hits_agent() {
             commit: head.clone()
         }]
     );
-    let audit = db::recent_audit(&e.state.db, 100).await.unwrap();
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
     let requested = audit_kinds(&audit, "apply_requested");
     assert_eq!(requested.len(), 1, "{audit:?}");
     assert_eq!(requested[0].actor, "dev");
     assert_eq!(requested[0].host.as_deref(), Some("H1"));
-    match rx.recv().await.unwrap() {
-        WsMessage::HostUpdated(hv) => assert_eq!(hv.desired_apply_id.as_deref(), Some(&*id)),
+    match receiver.recv().await.unwrap() {
+        WsMessage::HostUpdated(host_view) => {
+            assert_eq!(host_view.desired_apply_id.as_deref(), Some(&*id))
+        }
         other => panic!("unexpected {other:?}"),
     }
 
     // Unknown host: 404.
-    let resp = http
-        .post(format!("{}/api/hosts/nope/apply", e.base))
+    let response = http
+        .post(format!("{}/api/hosts/nope/apply", environment.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     // No stored log yet: the live log comes from the agent.
     let log = http
-        .get(format!("{}/api/hosts/H1/applies/{id}/log", e.base))
+        .get(format!(
+            "{}/api/hosts/H1/applies/{id}/log",
+            environment.base
+        ))
         .send()
         .await
         .unwrap();
     assert_eq!(log.status(), StatusCode::OK);
     assert_eq!(log.text().await.unwrap(), "live log\n");
-    db::set_apply_log(&e.state.db, &id, "stored log\n")
+    db::set_apply_log(&environment.state.db, &id, "stored log\n")
         .await
         .unwrap();
     let log = http
-        .get(format!("{}/api/hosts/H1/applies/{id}/log", e.base))
+        .get(format!(
+            "{}/api/hosts/H1/applies/{id}/log",
+            environment.base
+        ))
         .send()
         .await
         .unwrap();
     assert_eq!(log.text().await.unwrap(), "stored log\n");
 
     let audit: Vec<AuditEvent> = http
-        .get(format!("{}/api/audit?limit=100", e.base))
+        .get(format!("{}/api/audit?limit=100", environment.base))
         .send()
         .await
         .unwrap()
@@ -300,83 +315,83 @@ async fn apply_endpoint_creates_desired_and_hits_agent() {
 #[tokio::test]
 async fn state_changing_requests_need_the_dashboard_header() {
     let dir = tempfile::tempdir().unwrap();
-    let o = Origin::new(dir.path());
-    o.commit("one", "main");
+    let origin = Origin::new(dir.path());
+    origin.commit("one", "main");
     let fake = Shared::default();
     let agent = fake_agent(fake.clone()).await;
-    let e = env(
+    let environment = env(
         dir,
-        o.bare.to_str().unwrap(),
+        origin.bare.to_str().unwrap(),
         agent,
         vec![host("H1", "main")],
     )
     .await;
     let bare = reqwest::Client::new();
-    let url = format!("{}/api/hosts/H1/apply", e.base);
+    let url = format!("{}/api/hosts/H1/apply", environment.base);
 
     // No header (a cross-site form or no-cors fetch): refused, nothing applied.
-    let resp = bare.post(&url).send().await.unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    let body: Value = resp.json().await.unwrap();
+    let response = bare.post(&url).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body: Value = response.json().await.unwrap();
     assert!(body["error"].is_string(), "{body}");
-    let resp = bare
-        .post(format!("{}/api/channels/main/apply", e.base))
+    let response = bare
+        .post(format!("{}/api/channels/main/apply", environment.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    let resp = bare
-        .post(format!("{}/api/promote", e.base))
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = bare
+        .post(format!("{}/api/promote", environment.base))
         .json(&json!({"commit": "0".repeat(40)}))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     // The header, but the browser says the request is cross-site: refused.
     for site in ["cross-site", "same-site"] {
-        let resp = bare
+        let response = bare
             .post(&url)
             .header("x-lodestar", "1")
             .header("sec-fetch-site", site)
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{site}");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{site}");
     }
     assert!(fake.lock().unwrap().applied.is_empty());
     assert!(
         applies::Entity::find()
-            .all(&e.state.db)
+            .all(&environment.state.db)
             .await
             .unwrap()
             .is_empty()
     );
 
     // GETs need no header.
-    let resp = bare
-        .get(format!("{}/api/snapshot", e.base))
+    let response = bare
+        .get(format!("{}/api/snapshot", environment.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::OK);
 
     // The header from the dashboard's own origin (or without Sec-Fetch-Site): accepted.
-    let resp = bare
+    let response = bare
         .post(&url)
         .header("x-lodestar", "1")
         .header("sec-fetch-site", "same-origin")
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-    let resp = bare
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let response = bare
         .post(&url)
         .header("x-lodestar", "1")
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(fake.lock().unwrap().applied.len(), 2);
 }
 
@@ -386,7 +401,7 @@ async fn apply_endpoint_502_when_mirror_fetch_fails() {
     let bogus = dir.path().join("does-not-exist.git");
     let fake = Shared::default();
     let agent = fake_agent(fake.clone()).await;
-    let e = env(
+    let environment = env(
         dir,
         bogus.to_str().unwrap(),
         agent,
@@ -394,90 +409,106 @@ async fn apply_endpoint_502_when_mirror_fetch_fails() {
     )
     .await;
 
-    let resp = dashboard_client()
-        .post(format!("{}/api/hosts/H1/apply", e.base))
+    let response = dashboard_client()
+        .post(format!("{}/api/hosts/H1/apply", environment.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
-    let body: Value = resp.json().await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body: Value = response.json().await.unwrap();
     assert!(body["error"].is_string(), "{body}");
     assert!(
         applies::Entity::find()
-            .all(&e.state.db)
+            .all(&environment.state.db)
             .await
             .unwrap()
             .is_empty()
     );
-    assert!(db::desired(&e.state.db, "H1").await.unwrap().is_none());
+    assert!(
+        db::desired(&environment.state.db, "H1")
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(fake.lock().unwrap().applied.is_empty());
 }
 
 #[tokio::test]
 async fn channel_apply_targets_only_that_channel() {
     let dir = tempfile::tempdir().unwrap();
-    let o = Origin::new(dir.path());
-    o.commit("stable one", "stable");
-    let head = o.commit("main two", "main");
+    let origin = Origin::new(dir.path());
+    origin.commit("stable one", "stable");
+    let head = origin.commit("main two", "main");
     let fake = Shared::default();
     let agent = fake_agent(fake.clone()).await;
     let hosts = vec![host("H1", "main"), host("H2", "stable"), host("H3", "main")];
-    let e = env(dir, o.bare.to_str().unwrap(), agent, hosts).await;
+    let environment = env(dir, origin.bare.to_str().unwrap(), agent, hosts).await;
     let http = dashboard_client();
 
-    let resp = http
-        .post(format!("{}/api/channels/main/apply", e.base))
+    let response = http
+        .post(format!("{}/api/channels/main/apply", environment.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-    let body: Value = resp.json().await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body: Value = response.json().await.unwrap();
     let ids = body["apply_ids"].as_object().unwrap();
     let mut names: Vec<&str> = ids.keys().map(String::as_str).collect();
     names.sort();
     assert_eq!(names, ["H1", "H3"]);
     for name in ["H1", "H3"] {
-        let d = db::desired(&e.state.db, name).await.unwrap().unwrap();
-        assert_eq!(d.apply_id, ids[name].as_str().unwrap());
-        assert_eq!(d.commit, head);
+        let desired = db::desired(&environment.state.db, name)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(desired.apply_id, ids[name].as_str().unwrap());
+        assert_eq!(desired.commit, head);
     }
-    assert!(db::desired(&e.state.db, "H2").await.unwrap().is_none());
+    assert!(
+        db::desired(&environment.state.db, "H2")
+            .await
+            .unwrap()
+            .is_none()
+    );
     let applied = fake.lock().unwrap().applied.clone();
     assert_eq!(applied.len(), 2);
-    assert!(applied.iter().all(|r| r.commit == head));
-    let audit = db::recent_audit(&e.state.db, 100).await.unwrap();
+    assert!(applied.iter().all(|request| request.commit == head));
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
     assert_eq!(audit_kinds(&audit, "apply_requested").len(), 2);
 
-    let resp = http
-        .post(format!("{}/api/channels/nope/apply", e.base))
+    let response = http
+        .post(format!("{}/api/channels/nope/apply", environment.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn promote_moves_stable_and_audits() {
     let dir = tempfile::tempdir().unwrap();
-    let o = Origin::new(dir.path());
-    let c1 = o.commit("one", "stable");
-    o.push("unstable");
-    let c2 = o.commit("two", "unstable");
-    git(&o.work, &["checkout", "-q", "-b", "side", &c1]);
-    let side = o.commit("side", "side");
+    let origin = Origin::new(dir.path());
+    let first_commit = origin.commit("one", "stable");
+    origin.push("unstable");
+    let second_commit = origin.commit("two", "unstable");
+    git(
+        &origin.work,
+        &["checkout", "-q", "-b", "side", &first_commit],
+    );
+    let side = origin.commit("side", "side");
     let fake = Shared::default();
     let agent = fake_agent(fake).await;
-    let e = env(
+    let environment = env(
         dir,
-        o.bare.to_str().unwrap(),
+        origin.bare.to_str().unwrap(),
         agent,
         vec![host("H1", "stable")],
     )
     .await;
-    let mut rx = e.state.tx.subscribe();
+    let mut receiver = environment.state.tx.subscribe();
     let http = dashboard_client();
     let promote = |body: Value| {
-        let (http, url) = (http.clone(), format!("{}/api/promote", e.base));
+        let (http, url) = (http.clone(), format!("{}/api/promote", environment.base));
         async move { http.post(url).json(&body).send().await.unwrap() }
     };
 
@@ -489,20 +520,23 @@ async fn promote_moves_stable_and_audits() {
         promote(json!({"commit": side})).await.status(),
         StatusCode::CONFLICT
     );
-    assert_eq!(o.bare_ref("stable"), c1);
+    assert_eq!(origin.bare_ref("stable"), first_commit);
 
-    let resp = promote(json!({"commit": c2})).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(o.bare_ref("stable"), c2);
-    let audit = db::recent_audit(&e.state.db, 100).await.unwrap();
+    let response = promote(json!({"commit": second_commit})).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(origin.bare_ref("stable"), second_commit);
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
     let promotes = audit_kinds(&audit, "promote");
     assert_eq!(promotes.len(), 1, "{audit:?}");
     assert_eq!(promotes[0].actor, "dev");
-    assert_eq!(promotes[0].details["commit"], c2);
-    match rx.recv().await.unwrap() {
-        WsMessage::ChannelsUpdated(chs) => {
-            let stable = chs.iter().find(|c| c.name == "stable").unwrap();
-            assert_eq!(stable.head.as_deref(), Some(&*c2));
+    assert_eq!(promotes[0].details["commit"], second_commit);
+    match receiver.recv().await.unwrap() {
+        WsMessage::ChannelsUpdated(channels) => {
+            let stable = channels
+                .iter()
+                .find(|channel| channel.name == "stable")
+                .unwrap();
+            assert_eq!(stable.head.as_deref(), Some(&*second_commit));
         }
         other => panic!("unexpected {other:?}"),
     }
@@ -511,48 +545,50 @@ async fn promote_moves_stable_and_audits() {
 #[tokio::test]
 async fn ws_sends_snapshot_first() {
     let dir = tempfile::tempdir().unwrap();
-    let o = Origin::new(dir.path());
-    o.commit("one", "main");
+    let origin = Origin::new(dir.path());
+    origin.commit("one", "main");
     let agent = fake_agent(Shared::default()).await;
-    let e = env(
+    let environment = env(
         dir,
-        o.bare.to_str().unwrap(),
+        origin.bare.to_str().unwrap(),
         agent,
         vec![host("H1", "main")],
     )
     .await;
 
-    let url = format!("{}/api/ws", e.base.replacen("http", "ws", 1));
-    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-    let first = ws.next().await.unwrap().unwrap();
-    let msg: WsMessage = serde_json::from_str(first.to_text().unwrap()).unwrap();
-    match msg {
-        WsMessage::Snapshot(s) => {
-            assert_eq!(s.viewer, "dev");
-            assert_eq!(s.hosts.len(), 1);
-            assert_eq!(s.hosts[0].name, "H1");
+    let url = format!("{}/api/ws", environment.base.replacen("http", "ws", 1));
+    let (mut socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    let first = socket.next().await.unwrap().unwrap();
+    let message: WsMessage = serde_json::from_str(first.to_text().unwrap()).unwrap();
+    match message {
+        WsMessage::Snapshot(snapshot) => {
+            assert_eq!(snapshot.viewer, "dev");
+            assert_eq!(snapshot.hosts.len(), 1);
+            assert_eq!(snapshot.hosts[0].name, "H1");
         }
         other => panic!("unexpected {other:?}"),
     }
 
     // Broadcasts are forwarded after the snapshot.
-    let chs = lodestar_server::state::channels(&e.state).await;
-    e.state.broadcast(WsMessage::ChannelsUpdated(chs.clone()));
-    let next = ws.next().await.unwrap().unwrap();
-    let msg: WsMessage = serde_json::from_str(next.to_text().unwrap()).unwrap();
-    assert_eq!(msg, WsMessage::ChannelsUpdated(chs));
-    ws.close(None).await.unwrap();
+    let channels = lodestar_server::state::channels(&environment.state).await;
+    environment
+        .state
+        .broadcast(WsMessage::ChannelsUpdated(channels.clone()));
+    let next = socket.next().await.unwrap().unwrap();
+    let message: WsMessage = serde_json::from_str(next.to_text().unwrap()).unwrap();
+    assert_eq!(message, WsMessage::ChannelsUpdated(channels));
+    socket.close(None).await.unwrap();
 }
 
 #[tokio::test]
 async fn spa_fallback_serves_index() {
     let dir = tempfile::tempdir().unwrap();
-    let o = Origin::new(dir.path());
-    o.commit("one", "main");
+    let origin = Origin::new(dir.path());
+    origin.commit("one", "main");
     let agent = fake_agent(Shared::default()).await;
-    let e = env(
+    let environment = env(
         dir,
-        o.bare.to_str().unwrap(),
+        origin.bare.to_str().unwrap(),
         agent,
         vec![host("H1", "main")],
     )
@@ -560,36 +596,49 @@ async fn spa_fallback_serves_index() {
     let http = dashboard_client();
 
     for path in ["/", "/index.html", "/hosts/H1"] {
-        let resp = http.get(format!("{}{path}", e.base)).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "{path}");
-        let ct = resp.headers()["content-type"].to_str().unwrap().to_string();
-        assert!(ct.starts_with("text/html"), "{path}: {ct}");
-        assert!(resp.text().await.unwrap().contains(r#"id="app""#), "{path}");
+        let response = http
+            .get(format!("{}{path}", environment.base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let content_type = response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            content_type.starts_with("text/html"),
+            "{path}: {content_type}"
+        );
+        assert!(
+            response.text().await.unwrap().contains(r#"id="app""#),
+            "{path}"
+        );
     }
     // Unknown API routes are not swallowed by the SPA fallback.
-    let resp = http
-        .get(format!("{}/api/nope", e.base))
+    let response = http
+        .get(format!("{}/api/nope", environment.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-    let snap: lodestar_proto::Snapshot = http
-        .get(format!("{}/api/snapshot", e.base))
+    let snapshot: lodestar_proto::Snapshot = http
+        .get(format!("{}/api/snapshot", environment.base))
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert_eq!(snap.viewer, "dev");
+    assert_eq!(snapshot.viewer, "dev");
 }
 
 #[tokio::test]
 async fn access_denied_on_api_ws_and_static() {
     let dir = tempfile::tempdir().unwrap();
-    let o = Origin::new(dir.path());
-    o.commit("one", "main");
+    let origin = Origin::new(dir.path());
+    origin.commit("one", "main");
     let fake = Shared::default();
     let agent = fake_agent(fake.clone()).await;
     // StaticOnline has no whois identities, so Tailscale access control denies everyone.
@@ -597,9 +646,9 @@ async fn access_denied_on_api_ws_and_static() {
         allowed_users: vec!["alice@example.com".into()],
         allowed_tags: vec!["tag:lodestar".into()],
     };
-    let e = env_with_access(
+    let environment = env_with_access(
         dir,
-        o.bare.to_str().unwrap(),
+        origin.bare.to_str().unwrap(),
         agent,
         vec![host("H1", "main")],
         access,
@@ -614,21 +663,25 @@ async fn access_denied_on_api_ws_and_static() {
         "/api/snapshot",
         "/api/audit",
     ] {
-        let resp = http.get(format!("{}{path}", e.base)).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{path}");
+        let response = http
+            .get(format!("{}{path}", environment.base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
     }
-    let resp = http
-        .post(format!("{}/api/hosts/H1/apply", e.base))
+    let response = http
+        .post(format!("{}/api/hosts/H1/apply", environment.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert!(fake.lock().unwrap().applied.is_empty());
 
-    let url = format!("{}/api/ws", e.base.replacen("http", "ws", 1));
+    let url = format!("{}/api/ws", environment.base.replacen("http", "ws", 1));
     match tokio_tungstenite::connect_async(url).await {
-        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
-            assert_eq!(resp.status(), StatusCode::FORBIDDEN)
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status(), StatusCode::FORBIDDEN)
         }
         other => panic!("expected 403 on upgrade, got {other:?}"),
     }
@@ -637,35 +690,43 @@ async fn access_denied_on_api_ws_and_static() {
 #[tokio::test]
 async fn concurrent_applies_all_accepted() {
     let dir = tempfile::tempdir().unwrap();
-    let o = Origin::new(dir.path());
-    o.commit("one", "main");
+    let origin = Origin::new(dir.path());
+    origin.commit("one", "main");
     let fake = Shared::default();
     let agent = fake_agent(fake.clone()).await;
-    let names: Vec<String> = (1..=8).map(|i| format!("H{i}")).collect();
-    let hosts = names.iter().map(|n| host(n, "main")).collect();
-    let e = env(dir, o.bare.to_str().unwrap(), agent, hosts).await;
+    let names: Vec<String> = (1..=8).map(|index| format!("H{index}")).collect();
+    let hosts = names.iter().map(|name| host(name, "main")).collect();
+    let environment = env(dir, origin.bare.to_str().unwrap(), agent, hosts).await;
     // A push right before the presses, so every fetch has refs to write.
-    let head = o.commit("two", "main");
+    let head = origin.commit("two", "main");
     let http = dashboard_client();
 
-    let presses = names.iter().map(|n| {
-        let (http, url) = (http.clone(), format!("{}/api/hosts/{n}/apply", e.base));
+    let presses = names.iter().map(|name| {
+        let (http, url) = (
+            http.clone(),
+            format!("{}/api/hosts/{name}/apply", environment.base),
+        );
         async move { http.post(url).send().await.unwrap().status() }
     });
     // The background fetch runs at the same time.
     let background = async {
         for _ in 0..4 {
-            e.state.mirror.fetch().await.unwrap();
+            environment.state.mirror.fetch().await.unwrap();
         }
     };
     let (statuses, ()) = tokio::join!(futures::future::join_all(presses), background);
     assert!(
-        statuses.iter().all(|s| *s == StatusCode::ACCEPTED),
+        statuses
+            .iter()
+            .all(|status| *status == StatusCode::ACCEPTED),
         "{statuses:?}"
     );
-    for n in &names {
-        let d = db::desired(&e.state.db, n).await.unwrap().unwrap();
-        assert_eq!(d.commit, head, "{n}");
+    for name in &names {
+        let desired = db::desired(&environment.state.db, name)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(desired.commit, head, "{name}");
     }
     assert_eq!(fake.lock().unwrap().applied.len(), names.len());
 }

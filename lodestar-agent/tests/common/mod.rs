@@ -9,12 +9,12 @@ pub struct Fixture {
     pub _tmp: TempDir,
     pub remote: PathBuf,
     pub clone: PathBuf,
-    pub cfg: AgentConfig,
+    pub config: AgentConfig,
 }
 
 /// Runs git with a fixed identity and no global/system config.
 pub fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let output = Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -27,11 +27,11 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
         .output()
         .unwrap();
     assert!(
-        out.status.success(),
+        output.status.success(),
         "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+        String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 pub fn commit_file(dir: &Path, name: &str, content: &str) -> String {
@@ -43,10 +43,10 @@ pub fn commit_file(dir: &Path, name: &str, content: &str) -> String {
 
 /// Bare remote with `unstable` and `stable`, plus a clone on `unstable`.
 pub fn fixture() -> Fixture {
-    let tmp = TempDir::new().unwrap();
-    let remote = tmp.path().join("remote.git");
-    let seed = tmp.path().join("seed");
-    let clone = tmp.path().join("clone");
+    let temporary_dir = TempDir::new().unwrap();
+    let remote = temporary_dir.path().join("remote.git");
+    let seed = temporary_dir.path().join("seed");
+    let clone = temporary_dir.path().join("clone");
     std::fs::create_dir_all(&remote).unwrap();
     std::fs::create_dir_all(&seed).unwrap();
     git(&remote, &["init", "-q", "--bare", "-b", "unstable"]);
@@ -58,7 +58,7 @@ pub fn fixture() -> Fixture {
         &["push", "-q", remote.to_str().unwrap(), "unstable", "stable"],
     );
     git(
-        tmp.path(),
+        temporary_dir.path(),
         &[
             "clone",
             "-q",
@@ -68,7 +68,7 @@ pub fn fixture() -> Fixture {
             clone.to_str().unwrap(),
         ],
     );
-    let cfg = AgentConfig {
+    let config = AgentConfig {
         host: "h".into(),
         user: std::env::var("USER").unwrap_or_else(|_| "root".into()),
         channel: "unstable".into(),
@@ -78,7 +78,7 @@ pub fn fixture() -> Fixture {
         port: 7461,
         manager_host: "m".into(),
         listen: None,
-        state_dir: tmp.path().join("state"),
+        state_dir: temporary_dir.path().join("state"),
         rebuild_command: None,
         revision_command: None,
         launcher: Launcher::Inline,
@@ -86,28 +86,28 @@ pub fn fixture() -> Fixture {
         os: "linux".into(),
     };
     Fixture {
-        _tmp: tmp,
+        _tmp: temporary_dir,
         remote,
         clone,
-        cfg,
+        config,
     }
 }
 
 /// Adds a commit to the remote's `unstable` via a scratch clone; returns its hash.
-pub fn push_remote_commit(f: &Fixture, name: &str) -> String {
-    let w = f._tmp.path().join(format!("w-{name}"));
+pub fn push_remote_commit(fixture: &Fixture, name: &str) -> String {
+    let work_dir = fixture._tmp.path().join(format!("w-{name}"));
     git(
-        f._tmp.path(),
+        fixture._tmp.path(),
         &[
             "clone",
             "-q",
             "-b",
             "unstable",
-            f.remote.to_str().unwrap(),
-            w.to_str().unwrap(),
+            fixture.remote.to_str().unwrap(),
+            work_dir.to_str().unwrap(),
         ],
     );
-    let c = commit_file(&w, name, name);
-    git(&w, &["push", "-q", "origin", "unstable"]);
-    c
+    let commit = commit_file(&work_dir, name, name);
+    git(&work_dir, &["push", "-q", "origin", "unstable"]);
+    commit
 }

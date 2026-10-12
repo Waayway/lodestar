@@ -95,13 +95,18 @@ Bundled with `@fontsource` (no font CDN): IBM Plex Sans 400/500/600, IBM Plex Se
 
 ## State system
 
-Every state has a colour, an icon and words. The words come from `lib/format.ts`.
+Every state has a colour, an icon and words. The words come from `lib/format.ts`; the
+colour and icon come from one table, `lib/tones.ts` (`applyStyle`, `onlineStyle`,
+`hostStyle`, `feedStyle`, `behindTone`, `auditIcon`, and the class maps `toneText`,
+`toneSoft`, `toneFill`, `toneStripe`, `toneChip`). Components never keep their own
+state-to-colour maps. The tones are `ok`, `info`, `warn`, `bad`, `accent` and `neutral`
+(muted text on a chip).
 
 | State | Colour | Icon (Lodestar name) | Copy |
 | --- | --- | --- | --- |
 | Applied | `ok` on `ok-soft` | `Applied` (check) | "Applied" |
 | Building | `info` on `info-soft` | `Building` (rotate-cw, spins) | "Applying" |
-| Skipped | `warn` on `warn-soft` | `Skipped` (pen-line) | "Skipped: local changes in /path", "Skipped: git fetch failed on the host", ... |
+| Skipped | `warn` on `warn-soft` | `Skipped` (pen-line) | "Skipped: local changes in /path", "Skipped: git fetch failed on the machine", ... |
 | Failed | `bad` on `bad-soft` | `Failed` (circle-x) | "Build failed (exit 1)", "Failed" |
 | Never applied / idle | `muted` on `chip` | `Idle` (circle-dashed) | "Never applied", "Idle" |
 | Online | `ok` dot with an `ok-soft` ring | none | "Online" |
@@ -111,9 +116,21 @@ Every state has a colour, an icon and words. The words come from `lib/format.ts`
 | Dirty | `warn` on `warn-soft`, small pill | none | "dirty"; checkout line: "local changes", "1 ahead", "checkout is not the running system" |
 | Queued | `info` | `Queued` (clock) | "Queued: sent when atlas comes online" |
 
-Fleet summary: *updating* counts running applies; *need attention* counts failed or skipped
-last applies and agents not answering; *up to date* the rest that are 0 behind
-(`fleetCounts`).
+A machine as a whole has one state, `hostTone`: a running, failed or skipped last apply
+wins (also on a machine that is off now), then an agent not answering (`warn`), then off,
+then ok when 0 behind, else idle. It drives both the summary tiles and the row stripe, so a
+machine is never "fine" in one and "needs attention" in the other:
+
+- *updating*: `hostTone` is running;
+- *need attention* (`needsAttention`): failed, skipped or agent not answering;
+- *up to date*: the rest that are 0 behind, on or off (`fleetCounts`).
+
+The **row stripe** is a 3 px line on the left edge of each machine row in the `hostStyle`
+tone: `ok` green, building `info`, skipped and agent not answering `warn`, failed `bad`, off
+`neutral` (muted); an idle machine (behind, nothing wrong) has none. One glance down the
+left edge shows which machines need a look.
+
+Channel pills are not states: their `stable` / `unstable` colours live in `ChannelPill`.
 
 ## Icons
 
@@ -144,8 +161,8 @@ Components take typed props (types from `bindings/`); data and actions come only
   "icon-sm"`, `asChild`. Default is the solid ink button for the action; outline sits beside
   it (also used when the action is not needed, e.g. a machine that is up to date); ghost for
   quiet controls. Icon-only buttons need `aria-label`.
-- **Badge** `tone: "ok" | "running" | "skipped" | "failed" | "neutral" | "accent"`. A state
-  on its soft wash. Prefer `StatusBadge` for applies.
+- **Badge** `tone: Tone` (`"ok" | "info" | "warn" | "bad" | "accent" | "neutral"`, from
+  `lib/tones`). A state on its soft wash. Prefer `StatusBadge` for applies.
 - **Card**, **CardHeader**: a panel; the header row puts a title left and a note right.
 - **Dialog** (+ `Content`, `Header`, `Title`, `Description`, `Footer`, `Close`, `Trigger`),
   **Sheet** (`side`), **Tooltip** (`TooltipProvider` in `App`), **Table** (`boxClassName`
@@ -160,7 +177,7 @@ Components take typed props (types from `bindings/`); data and actions come only
 
 ### `fleet/`
 
-- **StatTile** `{ icon, value, label, tone: "accent" | "ok" | "running" | "bad", spin? }`:
+- **StatTile** `{ icon, value, label, tone: Tone, spin? }` (the page uses accent, ok, info, bad):
   one number of the fleet summary.
 - **ChannelCard** `{ channel: ChannelView, hosts: HostView[], role: ChannelRole }`: head
   commit and subject, machine count with how many are behind, "Apply newest to all on …"
@@ -172,7 +189,7 @@ Components take typed props (types from `bindings/`); data and actions come only
   there are none. **HostRow** `{ host: HostView, now, channelRole }`: machine (OS tile,
   name, OS), channel, status, running commit with checkout line, behind, last activation,
   last apply (badge, commit, age, duration, queued note, message tooltip), log button and
-  "Apply newest".
+  "Apply newest"; the state stripe on its left edge (`data-tone` is the `hostTone`).
 - **OsIcon** `{ os }`: 34 px chip with the NixOS or Apple mark (monitor otherwise).
 - **StatusBadge** `{ apply: ApplyRecord | null, flakePath? }`: the state system above.
 - **OnlineState** `{ host, now }`: dot or icon and the online label.
@@ -185,6 +202,8 @@ Components take typed props (types from `bindings/`); data and actions come only
 - **AuditList** `{ events: AuditEvent[] | null, now }`: newest audit events, one line and a
   quieter line each, dotted separators.
 - **LivePill** `{ feed: FeedStatus }`: Live / Connecting / Disconnected · retry in Ns / No access.
+  The visible countdown is `aria-hidden`; a `role="status"` line says only the state
+  ("Disconnected, retrying"), so screen readers hear changes, not every second.
 
 ### `layout/`
 
@@ -193,7 +212,7 @@ Components take typed props (types from `bindings/`); data and actions come only
 - **Section** `{ title, icon?, label?, children }`: heading with a rule to the right edge.
   **SectionHeading** for a heading inside a card.
 - **EmptyState** `{ title, children? }`: dashed box, muted text.
-- **ErrorState** `{ title, icon?, children? }`: can't show the fleet (no access, server
+- **ErrorState** `{ title, icon?, tone? = "bad", children? }`: can't show the fleet (no access, server
   unreachable); `role="alert"`.
 
 ## Layout
@@ -208,14 +227,18 @@ Components take typed props (types from `bindings/`); data and actions come only
 
 ## Motion and accessibility
 
-- The only motion is the building spinner (1.2 s per turn), off under
-  `prefers-reduced-motion`. Dialog and sheet use the shadcn fade/slide.
+- Motion is the building spinner (1.2 s per turn) and the short fade/slide of dialogs, the
+  log sheet and tooltips. Under `prefers-reduced-motion` all of it is off (a rule in
+  `styles/base.css` on the spinner and the `data-slot` dialog/sheet/tooltip parts); they
+  then appear and disappear at once.
 - Real `<button>`s; icon-only buttons carry `aria-label` ("Show log for atlas"); the theme
   toggle uses `aria-pressed`; decorative icons are `aria-hidden`; brand marks are labelled.
 - Focus: 2 px `--accent` outline, 2 px offset.
 - Text contrast at least 4.5:1 in both themes (table above). State is never colour alone.
 - Theme: `prefers-color-scheme` unless the toggle set `data-theme`; the choice is kept in
   `localStorage` (`lodestar.theme`) when the browser allows it and lasts the visit otherwise.
+  A small inline script in `web/index.html` applies a stored choice before the CSS paints
+  (no flash of the other theme); `ThemeProvider` keeps it in step afterwards.
 
 ## Do and don't
 
@@ -227,4 +250,6 @@ Components take typed props (types from `bindings/`); data and actions come only
 - Don't import from `lucide-react` in components; add the icon to `icons/index.ts` under a
   Lodestar name.
 - Don't call `fetch` or open a WebSocket outside `connection/`.
-- Don't add motion beyond the spinner, glows, gradients or emoji.
+- Don't add motion beyond the spinner and the dialog/sheet/tooltip fade (all off under
+  reduced motion), and no glows, gradients or emoji.
+- Do say "machine" in copy the reader sees ("3 machines", "No machines yet."), not "host".

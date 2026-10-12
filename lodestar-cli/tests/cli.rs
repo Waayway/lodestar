@@ -109,49 +109,128 @@ async fn promote_reports_the_configured_pair() {
     assert!(out.contains("move stable"), "{out}");
 }
 
-/// `rebuild --wait` survives a restart of the server mid-wait (the apply switched the host
-/// that runs it): it retries quietly and still reports the final result.
-#[tokio::test]
-async fn rebuild_wait_survives_a_server_restart() {
-    // Slow enough that the apply is still running across the restart.
-    let mut d = demo::start("127.0.0.1:0".parse().unwrap(), 2.0)
+/// Starts a slow demo (applies take seconds) and `rebuild desktop --wait` in the background,
+/// and returns once the apply is running on the agent.
+async fn waiting_rebuild(
+    timeout: u64,
+) -> (
+    DemoHandle,
+    tokio::task::JoinHandle<(anyhow::Result<i32>, String)>,
+) {
+    let d = demo::start("127.0.0.1:0".parse().unwrap(), 2.0)
         .await
         .unwrap();
     let mut c = Client::new(&format!("http://{}", d.addr));
     c.poll = Duration::from_millis(100);
     c.retry = (Duration::from_millis(200), Duration::from_millis(500));
-    tokio::time::sleep(Duration::from_secs(3)).await; // the first poll reached every agent
+    let probe = Client::new(&format!("http://{}", d.addr));
+    // The first poll must have reached the agent, or the apply only starts on a re-send.
+    wait_until(&probe, |h| h.checkout.is_some()).await;
     let wait = tokio::spawn(async move {
         let mut out = Vec::new();
         let cmd = Command::Rebuild {
             host: Some("desktop".into()),
             channel: None,
             wait: true,
-            timeout: 60,
+            timeout,
         };
-        let code = run(&c, cmd, &mut out).await.unwrap();
-        (code, String::from_utf8(out).unwrap())
+        let r = run(&c, cmd, &mut out).await;
+        (r, String::from_utf8(out).unwrap())
     });
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(!wait.is_finished(), "the apply finished before the restart");
+    wait_until(&probe, |h| {
+        h.last_apply
+            .as_ref()
+            .is_some_and(|a| a.state == lodestar_proto::ApplyState::Running)
+    })
+    .await;
+    assert!(!wait.is_finished(), "the CLI returned before the apply ran");
+    (d, wait)
+}
+
+/// Polls the snapshot until `desktop` satisfies `ok` (at most 20 s).
+async fn wait_until(c: &Client, ok: impl Fn(&lodestar_proto::HostView) -> bool) {
+    for _ in 0..200 {
+        let snap = c.snapshot().await.unwrap();
+        if snap.hosts.iter().any(|h| h.name == "desktop" && ok(h)) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("desktop never reached the expected state");
+}
+
+/// `rebuild --wait` survives a restart of the server mid-wait (the apply switched the host
+/// that runs it): it retries quietly and still reports the final result.
+#[tokio::test]
+async fn rebuild_wait_survives_a_server_restart() {
+    let (mut d, wait) = waiting_rebuild(60).await;
     d.restart(Duration::from_millis(1500)).await.unwrap();
-    let (code, out) = wait.await.unwrap();
-    assert_eq!(code, 0, "{out}");
+    let (r, out) = wait.await.unwrap();
+    assert_eq!(r.unwrap(), 0, "{out}");
     assert!(out.contains("desktop: ok"), "{out}");
     assert_eq!(out.matches("server restarting").count(), 1, "{out}");
 }
 
+/// Replaces the stopped demo server with one that answers every request with `status`
+/// and `body`.
+async fn impostor(addr: std::net::SocketAddr, status: u16, body: &'static str) {
+    let app = axum::Router::new()
+        .fallback(move || async move { (axum::http::StatusCode::from_u16(status).unwrap(), body) });
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+}
+
+/// During the wait, an answer the server decided on (403, or a body that is not the
+/// expected JSON) ends the wait at once instead of being retried until the timeout.
 #[tokio::test]
 async fn rebuild_wait_stops_on_a_non_transient_error() {
-    let (_d, c) = start().await;
-    // 404 from the server is final, not retried.
-    let err = run(&c, rebuild("nope", true), &mut Vec::new())
+    for (status, body, expect) in [
+        (403, r#"{"error":"forbidden"}"#, "not allowed"),
+        (200, "not json", "decoding response"),
+    ] {
+        let (mut d, wait) = waiting_rebuild(60).await;
+        d.stop_server().await;
+        impostor(d.addr, status, body).await;
+        let started = std::time::Instant::now();
+        let (r, out) = tokio::time::timeout(Duration::from_secs(10), wait)
+            .await
+            .expect("the wait did not stop")
+            .unwrap();
+        let err = r.expect_err(&out);
+        assert!(format!("{err:#}").contains(expect), "{err:#}");
+        assert!(!lodestar_cli::is_transient(&err), "{err:#}");
+        assert!(!out.contains("server restarting"), "{out}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+}
+
+/// The wait never outlasts --timeout, even when the server accepts a request and never
+/// answers it (the client's own request timeout is a minute).
+#[tokio::test]
+async fn rebuild_wait_respects_the_timeout_with_a_hanging_server() {
+    let (mut d, wait) = waiting_rebuild(5).await;
+    d.stop_server().await;
+    let listener = tokio::net::TcpListener::bind(d.addr).await.unwrap();
+    let app = axum::Router::new().fallback(|| async {
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        ""
+    });
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (r, out) = tokio::time::timeout(Duration::from_secs(10), wait)
         .await
-        .unwrap_err();
-    assert!(!lodestar_cli::is_transient(&err), "{err:#}");
-    let dead = Client::new("http://127.0.0.1:1");
-    let err = run(&dead, Command::Status, &mut Vec::new())
-        .await
-        .unwrap_err();
-    assert!(lodestar_cli::is_transient(&err), "{err:#}");
+        .expect("the wait overshot --timeout")
+        .unwrap();
+    assert_eq!(r.unwrap(), 1, "{out}");
+    assert!(out.contains("timed out waiting for: desktop"), "{out}");
+}
+
+#[test]
+fn transient_errors() {
+    use lodestar_cli::{RequestError, is_transient};
+    let t = |e: RequestError| is_transient(&anyhow::Error::new(e));
+    assert!(t(RequestError::Unreachable("refused".into())));
+    assert!(t(RequestError::Status(503, String::new())));
+    assert!(!t(RequestError::Status(403, String::new())));
+    assert!(!t(RequestError::Status(404, String::new())));
+    assert!(!is_transient(&anyhow::anyhow!("decoding response")));
 }

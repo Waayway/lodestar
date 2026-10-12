@@ -46,7 +46,8 @@ pub enum Command {
         host: String,
         apply_id: Option<String>,
     },
-    /// Fast-forward the promote target channel (default `stable`) to the candidate.
+    /// Fast-forward the server's promote target channel to the candidate from its source
+    /// channel (the pair is configured on the server; `status` shows the channels).
     Promote {
         /// Actually promote (otherwise only show the candidate).
         #[arg(long)]
@@ -478,7 +479,14 @@ async fn rebuild(
         writeln!(out, "timed out waiting for: {}", pending.join(", "))
     };
     while done.len() < ids.len() {
-        let snap = match client.snapshot().await {
+        // Every request is capped by what is left of --timeout (the client's own request
+        // timeout is longer).
+        let left = deadline.saturating_duration_since(Instant::now());
+        let Ok(result) = tokio::time::timeout(left, client.snapshot()).await else {
+            timed_out(out, &done)?;
+            return Ok(1);
+        };
+        let snap = match result {
             Ok(snap) => {
                 outage = false;
                 backoff = client.retry.0;

@@ -24,3 +24,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 [dev-dependencies]
 lodestar-server = { path = "../lodestar-server" }
+axum = "0.8"

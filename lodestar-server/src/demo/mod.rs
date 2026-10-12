@@ -138,10 +138,21 @@ impl DemoHandle {
     /// stops the server, leaves the address dead for `down`, then starts it again on the
     /// same address, database and mirror. The simulated agents keep running.
     pub async fn restart(&mut self, down: Duration) -> anyhow::Result<()> {
+        self.stop_server().await;
+        tokio::time::sleep(down).await;
+        self.start_server().await
+    }
+
+    /// Stops the server (see `restart`); the address is free until `start_server`.
+    pub async fn stop_server(&mut self) {
         if let Some(old) = self.server.take() {
             old.stop().await;
         }
-        tokio::time::sleep(down).await;
+    }
+
+    /// Starts the server again after `stop_server`, on the same address and state.
+    pub async fn start_server(&mut self) -> anyhow::Result<()> {
+        anyhow::ensure!(self.server.is_none(), "the demo server is already running");
         let mut cfg = self.cfg.clone();
         cfg.listen = self.addr;
         let new = server::start(cfg, self.hosts.clone(), self.online.clone(), true).await?;

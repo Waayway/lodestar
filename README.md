@@ -141,9 +141,18 @@ no `specialArgs`.
 | `port` | `7461` | opened on `tailscale0` (NixOS) |
 | `listen` | `null` (the Tailscale addresses) | explicit `ip:port` |
 | `package`, `cliPackage` | this flake's | |
+| `binaryPath` | `/var/lib/lodestar-agent/bin/lodestar-agent` | fixed path the agent is copied to on activation (when `package` changed); the daemon and the apply wrapper run from here |
 | `installCli` | `true` | put `lodestar` on the PATH, with `LODESTAR_SERVER` set to `serverUrl` |
 | `serverUrl` | `null` = `http://<managerHost>:8080` (the local `listenPort` on the server's host) | where the CLI finds the server; set it if the server uses another port |
 | `rebuildCommand`, `revisionCommand` | `null` | tests only |
+
+nix-darwin only:
+
+| Option | Default | |
+|---|---|---|
+| `macos.stableSigning.enable` | `true` | sign `binaryPath` with a local certificate so macOS permissions survive updates (see below) |
+| `macos.stableSigning.directory` | `/var/lib/lodestar-agent/signing` | root-only key and certificate |
+| `macos.firewall.enable` | `true` | when the macOS firewall is on, allow incoming connections for `binaryPath` |
 
 `services.lodestar-server` (NixOS):
 
@@ -166,6 +175,32 @@ no `specialArgs`.
 The server needs `services.tailscale` on its host; the module makes the
 `lodestar-server` user a Tailscale operator (`--operator`) so it can run
 `tailscale status` and `tailscale whois`.
+
+## macOS permissions
+
+During an apply, home-manager steps run under the agent (e.g. `osascript`
+talking to System Events, or reading `~/Library/Group Containers`), so macOS
+asks whether *lodestar-agent* may do that. A store build is ad-hoc signed and
+macOS knows it only by its hash, so every new build would ask again.
+
+On nix-darwin the module therefore copies the agent to `binaryPath` and signs
+the copy with a self-signed certificate that is created once on each Mac (in
+`/var/lib/lodestar-agent/signing`, root only, never in the System or login
+keychain, never in git). Its designated requirement is
+`identifier "org.lodestar.agent" and certificate leaf = H"<sha1>"`, the same
+for every build, so:
+
+- Click **Allow** once for each prompt on the first apply after enabling it
+  (typically *Automation → System Events* and *access data from other apps*);
+  the grants stay through later updates.
+- With the macOS firewall on, the agent is added and unblocked
+  (`socketfilterfw`) on every activation, so there is no incoming-connections
+  prompt.
+- If signing fails the switch still succeeds: the agent runs ad-hoc signed and
+  the activation prints a warning.
+- New certificate: `sudo rm -rf /var/lib/lodestar-agent/signing`, switch, then
+  `sudo launchctl kickstart -k system/org.lodestar.agent`; macOS asks once more.
+- Granting without any click needs an MDM (PPPC profile); that is out of scope.
 
 ## Tailscale policy
 
@@ -241,7 +276,6 @@ somewhere. It is a non-force push from the server to `pushUrl`, refused unless
 
 ## Limitations
 
-- The darwin agent (launchd) has not run on a real Mac yet.
 - No option yet to advertise a Tailscale tag on agent hosts.
 - One server; the dashboard has no history of past host states beyond the
   audit log.

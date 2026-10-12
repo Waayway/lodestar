@@ -68,6 +68,12 @@ Agent (every enrolled host):
 - config: `/etc/lodestar-agent/config.json`
 - state: `/var/lib/lodestar-agent/` (`applies/<id>.{json,log}`, `activations.jsonl`,
   `apply-in-progress.json` while an apply runs)
+- binary: `/var/lib/lodestar-agent/bin/lodestar-agent` (`binaryPath`), copied from
+  the store on activation when the package changed (`bin/.lodestar-agent.source`
+  holds the store path it came from); the daemon and the apply wrapper run it
+- darwin signing: `/var/lib/lodestar-agent/signing/` (`key.pem`, `cert.pem`,
+  `cert.sha1`; root, 0700); check with
+  `codesign -dr - /var/lib/lodestar-agent/bin/lodestar-agent`
 - NixOS: `systemctl status lodestar-agent`, applies run as transient units
   `lodestar-apply-<id>` (`journalctl -u 'lodestar-apply-*'`)
 - darwin: launchd label `org.lodestar.agent`, log `/var/log/lodestar-agent.log`
@@ -94,6 +100,14 @@ dashboard's audit log, with `SUDO_USER` for manual switches.
 - **Dashboard says you don't have access**: your Tailscale login is not in
   `allowedUsers` and your device has none of `allowedTags`. A tagged device
   loses its user identity in Tailscale, so tag servers, not your laptop.
+- **macOS keeps asking for permissions after each update**: check
+  `codesign -dr - /var/lib/lodestar-agent/bin/lodestar-agent` shows
+  `identifier "org.lodestar.agent" and certificate leaf = H"..."` (not ad-hoc)
+  and look for `lodestar-agent: warning:` lines in the switch output. To start
+  over with a new certificate: `sudo rm -rf /var/lib/lodestar-agent/signing`,
+  switch, `sudo launchctl kickstart -k system/org.lodestar.agent`, and allow the
+  prompts once more (old entries in System Settings → Privacy & Security can be
+  removed). Automatic granting needs an MDM PPPC profile (not supported).
 - **Promote fails with a push error**: the server needs `deployKeyFile` with
   write access to `pushUrl`, readable by the `lodestar-server` user.
 
@@ -107,6 +121,7 @@ nix develop -c cargo test --workspace
 cd web && nix develop .. -c npx vitest run
 cd web && LODESTAR_API=http://127.0.0.1:18080 nix develop .. -c npm run dev
 nix build .#checks.aarch64-darwin.bindings       # TS bindings up to date
+nix build .#checks.aarch64-darwin.agent-module   # darwin module eval + shellcheck of the activation snippets
 ```
 
 Linux-only checks need an x86_64-linux builder (KVM for the VM test):

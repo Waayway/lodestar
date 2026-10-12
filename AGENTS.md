@@ -47,9 +47,13 @@ does; `docs/operations.md` for how it is run.
 - `flake.nix`: packages, apps, modules, `lib.hostsFrom`, checks, dev shell.
 - `nix/modules/agent/{common,nixos,darwin}.nix`: `services.lodestar-agent`
   (shared options in `common.nix`; systemd in `nixos.nix`, launchd in
-  `darwin.nix`); `audit-hook.nix`: the activation audit snippet.
+  `darwin.nix`); `audit-hook.nix`: the activation audit snippet;
+  `install-binary.nix`: copies the agent to `binaryPath` (and on macOS signs it
+  and allows it in the firewall).
 - `nix/modules/server.nix`: `services.lodestar-server` (NixOS only).
-- `nix/lib/hostsFrom.nix`, `nix/tests/vm.nix` (NixOS VM test).
+- `nix/lib/hostsFrom.nix`, `nix/tests/vm.nix` (NixOS VM test),
+  `nix/tests/agent-module.nix` (darwin module eval against nix-darwin stubs,
+  shellcheck of the activation snippets: `checks.<system>.agent-module`).
 - `docs/`: `operations.md`, `style-guide.md` (the dashboard's look and components); `plans/` (dated design and plan documents; the
   `fleet-manager` ones are historical).
 

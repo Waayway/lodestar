@@ -93,9 +93,9 @@ nix run github:Waayway/lodestar#lodestar-demo   # dashboard against simulated ho
           };
           services.lodestar-server = {
             enable = true;
-            hosts = lodestar.lib.hostsFrom {
-              inherit (self) nixosConfigurations darwinConfigurations;
-            };
+            # NixOS only; with nix-darwin hosts too:
+            #   hostsFrom { inherit (self) nixosConfigurations darwinConfigurations; }
+            hosts = lodestar.lib.hostsFrom { inherit (self) nixosConfigurations; };
             repoUrl = "https://github.com/alice/infra";
             pushUrl = "git@github.com:alice/infra.git";
             listenAddress = "100.64.0.1";          # this host's Tailscale IP
@@ -141,7 +141,8 @@ no `specialArgs`.
 | `port` | `7461` | opened on `tailscale0` (NixOS) |
 | `listen` | `null` (the Tailscale addresses) | explicit `ip:port` |
 | `package`, `cliPackage` | this flake's | |
-| `installCli` | `true` | put `lodestar` on the PATH |
+| `installCli` | `true` | put `lodestar` on the PATH, with `LODESTAR_SERVER` set to `serverUrl` |
+| `serverUrl` | `null` = `http://<managerHost>:8080` (the local `listenPort` on the server's host) | where the CLI finds the server; set it if the server uses another port |
 | `rebuildCommand`, `revisionCommand` | `null` | tests only |
 
 `services.lodestar-server` (NixOS):
@@ -151,13 +152,13 @@ no `specialArgs`.
 | `enable` | `false` | |
 | `hosts` | `{}` | `attrsOf { channel; os; system; user; }`, usually `lodestar.lib.hostsFrom { ... }` |
 | `repoUrl` | (required) | mirrored read-only |
-| `pushUrl` | (required) | where promote pushes |
+| `pushUrl` | `null` | where promote pushes; required unless `promote = null` |
 | `deployKeyFile` | `null` | SSH key with write access to `pushUrl`, readable by `lodestar-server` (outside the store, e.g. sops-nix) |
 | `listenAddress` | (required) | this host's Tailscale IP; anything else is refused |
 | `listenPort` | `8080` | opened on `tailscale0` |
 | `allowedUsers` | `[]` | Tailscale logins allowed in |
 | `allowedTags` | `[]` | Tailscale device tags allowed in |
-| `agentPort` | the agent's `port`, else `7461` | |
+| `agentPort` | the agent's `port`, else `7461` | one port for all agents: keep `services.lodestar-agent.port` the same everywhere |
 | `promote` | `{ from = "unstable"; to = "stable"; }` | `null` disables promote |
 | `package` | this flake's | |
 | `testing.*` | | tests only |
@@ -168,21 +169,26 @@ The server needs `services.tailscale` on its host; the module makes the
 
 ## Tailscale policy
 
-With an explicit grants policy (no allow-all), add:
+With an explicit grants policy (no allow-all), the server's host must reach
+every agent on tcp:7461, and you must reach the dashboard on tcp:8080:
 
 ```jsonc
+"tagOwners": { "tag:managed": ["alice@example.com"] },
 "grants": [
-  // the server's host -> every agent
-  { "src": ["manager"], "dst": ["tag:lodestar"], "ip": ["tcp:7461"] },
+  // the server's host -> every enrolled host
+  { "src": ["tag:managed"], "dst": ["tag:managed", "alice@example.com"], "ip": ["tcp:7461"] },
   // you -> the dashboard
-  { "src": ["alice@example.com"], "dst": ["manager"], "ip": ["tcp:8080"] }
+  { "src": ["alice@example.com"], "dst": ["tag:managed"], "ip": ["tcp:8080"] }
 ]
 ```
 
-(Use host names, tags or users as fits your tailnet; untagged agents can be
-listed by user instead of `tag:lodestar`.) A tagged device loses its user
-identity in Tailscale, so keep the laptops you use the dashboard from untagged
-and list your login in `allowedUsers`.
+`tag:managed` is an example: Lodestar does not set Tailscale tags (there is no
+`advertiseTags` option yet), so use a tag you already give your servers
+(`tailscale up --advertise-tags=tag:managed`, or `services.tailscale.extraUpFlags`)
+and list untagged devices by their owner's login, as above. Narrow `src` to the
+server's host if you prefer. A tagged device loses its user identity in
+Tailscale, so keep the laptops you use the dashboard from untagged and list your
+login in `allowedUsers`.
 
 ## Security model
 
@@ -215,8 +221,8 @@ lodestar promote [--yes]
 lodestar audit [--limit 20]
 ```
 
-The server URL comes from `--server`, `LODESTAR_SERVER`, or
-`~/.config/lodestar/config.toml`:
+The server URL comes from `--server`, `LODESTAR_SERVER` (set system-wide by
+the agent module, see `serverUrl`), or `~/.config/lodestar/config.toml`:
 
 ```toml
 server = "http://manager:8080"

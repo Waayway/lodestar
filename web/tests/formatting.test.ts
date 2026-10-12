@@ -5,6 +5,7 @@ import type { HostView } from "@/bindings/HostView";
 import type { AuditEvent } from "@/bindings/AuditEvent";
 import type { CheckoutStatus } from "@/bindings/CheckoutStatus";
 import {
+  activationText,
   agentStatusText,
   applyBadge,
   auditLine,
@@ -224,6 +225,16 @@ describe("checkoutFlags", () => {
       { text: "1 ahead", warn: true },
       { text: "checkout is not the running system", warn: true },
     ]);
+  });
+});
+
+describe("activationText", () => {
+  it("joins age, revision, trigger and generation", () => {
+    const e = { line: 1, time: 0, store_path: "/nix/store/x", revision: REV, generation: 11, trigger: "apply:a1", sudo_user: null };
+    expect(activationText(e, 7200)).toBe("2h ago · 0123456 · Lodestar apply · gen 11");
+    expect(activationText({ ...e, generation: null, trigger: "manual", sudo_user: "alice" }, 30)).toBe(
+      "just now · 0123456 · manual (alice)",
+    );
   });
 });
 

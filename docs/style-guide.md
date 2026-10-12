@@ -86,7 +86,7 @@ Bundled with `@fontsource` (no font CDN): IBM Plex Sans 400/500/600, IBM Plex Se
 - Page: max width 1240 px, padding 28 px top, `clamp(16px, 4vw, 48px)` sides, 48 px bottom.
   Sections 22 px apart; tiles and cards 12 px apart.
 - Cards and tiles: 16 px padding (tiles 14×16), children 10 px apart.
-- Table cells 12×14 px, header cells 10×14 px.
+- Table cells 12×12 px, header cells 10×12 px.
 - Radii: `--r` 4 px (`rounded-md`: cards, tiles, table box, dialogs), `--r-sm` 3 px
   (`rounded-sm`: buttons, badges, hash chips, OS tiles), full round for pills, the toggle
   and the logo disc.
@@ -185,11 +185,24 @@ Components take typed props (types from `bindings/`); data and actions come only
 - **PromoteCard** `{ candidate, pair: PromoteChannels, channels }`: between the pair's
   cards, solid accent border; opens **PromoteDialog**, which pins the commit it showed when
   it opened.
-- **HostTable** `{ hosts, now, promote }`: sorted by channel then name; empty state when
-  there are none. **HostRow** `{ host: HostView, now, channelRole }`: machine (OS tile,
-  name, OS), channel, status, running commit with checkout line, behind, last activation,
-  last apply (badge, commit, age, duration, queued note, message tooltip), log button and
-  "Apply newest"; the state stripe on its left edge (`data-tone` is the `hostTone`).
+- **HostTable** `{ hosts, now, promote }`: every machine, sorted by channel then name; an
+  empty state when there are none. Renders the table (from 900 px) and the card list
+  (below 900 px); CSS shows the one that fits, so neither ever scrolls sideways.
+- **HostRow** `{ host: HostView, now, channelRole }`: one table row, six columns:
+  **Machine** (OS tile; the name, never broken; under it the OS and the ChannelPill),
+  **Status** (OnlineState), **Running** (CommitHash, "dirty", the checkout line, which may
+  wrap and keeps its warnings), **Behind**, **Last apply** (StatusBadge, commit · age ·
+  duration, queued note) and the actions (log, "Apply newest"). The state stripe is on its
+  left edge (`data-tone` is the `hostTone`). The table has no minimum width; sub-lines wrap.
+- **HostCard** `{ host: HostView, now, channelRole }`: the same machine as a card below
+  900 px: identity and status on top, then Running, Behind, Last apply and Last activation as
+  label/value pairs, and the actions full width at the bottom; the same state stripe.
+- **HostParts** (`fleet/HostParts.tsx`): the pieces both layouts are built from, so they
+  can't drift apart: `MachineIdentity`, `RunningInfo`, `LastApplyInfo`, `ActivationLine`,
+  `HostActions` (`wide` for cards; holds the "Sending" state) and `hostStripe`.
+- **Last activation** (when the system last switched: age · revision · trigger · generation,
+  `activationText`) is not a table column: it is in the last-apply badge's tooltip (with the
+  full badge text and the agent's message), in the log sheet's header, and a field on cards.
 - **OsIcon** `{ os }`: 34 px chip with the NixOS or Apple mark (monitor otherwise).
 - **StatusBadge** `{ apply: ApplyRecord | null, flakePath? }`: the state system above.
 - **OnlineState** `{ host, now }`: dot or icon and the online label.
@@ -198,7 +211,8 @@ Components take typed props (types from `bindings/`); data and actions come only
 - **CommitHash** `{ rev }`: 7 mono characters on a chip, full hash in `title`.
 - **BehindCount** `{ behind }`.
 - **ApplyLogSheet** `{ now }`: the log opened from a row, in `--log-*` colours, following
-  the end unless scrolled up; reads `useApplyLog()`.
+  the end unless scrolled up; its header shows the apply and the machine's last activation;
+  reads `useApplyLog()`.
 - **AuditList** `{ events: AuditEvent[] | null, now }`: newest audit events, one line and a
   quieter line each, dotted separators.
 - **LivePill** `{ feed: FeedStatus }`: Live / Connecting / Disconnected · retry in Ns / No access.
@@ -222,8 +236,9 @@ Components take typed props (types from `bindings/`); data and actions come only
 - Summary tiles: four columns, two below 900 px.
 - Channels: `from` card, promote card, `to` card in one row (`1fr auto 1fr`); other
   channels flow in a grid. Cards stack below 900 px.
-- The machines table keeps its columns and scrolls sideways inside its bordered box on
-  narrow screens; the page itself never scrolls sideways.
+- Machines: a six-column table from 900 px with no minimum width (long sub-lines wrap,
+  names don't), a list of stacked cards below 900 px. Neither the page nor the table
+  scrolls sideways at any width (checked at 1440, 1024, 900, 768 and 390 px, both themes).
 
 ## Motion and accessibility
 

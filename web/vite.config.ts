@@ -37,7 +37,7 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.{ts,tsx}"],
     // Bundle these through Vite in tests too, so their `react` imports hit preact/compat.
-    server: { deps: { inline: [/radix-ui/, /lucide-react/, /sonner/, /@testing-library/, /react-remove-scroll/, /react-style-singleton/, /use-callback-ref/, /use-sidecar/, /aria-hidden/] } },
+    server: { deps: { inline: [/radix-ui/, /@floating-ui/, /lucide-react/, /sonner/, /@testing-library/, /react-remove-scroll/, /react-style-singleton/, /use-callback-ref/, /use-sidecar/, /aria-hidden/] } },
     // These packages have no `exports` map, so Node would load their CommonJS builds, which
     // require real React. Point tests at their ES builds, as the browser bundle uses.
     // Only under Vitest (the config is read by builds too, where the files may be absent).

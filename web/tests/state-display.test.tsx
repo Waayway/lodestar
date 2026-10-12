@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 // State display: every state shows the right colour, icon and words.
-import { act, cleanup, render, screen } from "@testing-library/preact";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { HostView } from "@/bindings/HostView";
 import { BehindCount } from "@/components/fleet/BehindCount";
 import { HostRow } from "@/components/fleet/HostRow";
+import { HostTable } from "@/components/fleet/HostTable";
 import { LivePill } from "@/components/fleet/LivePill";
 import { OnlineState } from "@/components/fleet/OnlineState";
 import { StatusBadge } from "@/components/fleet/StatusBadge";
@@ -29,6 +30,7 @@ function renderRow(h: HostView, actions = fakeActions()) {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("StatusBadge", () => {
@@ -172,5 +174,78 @@ describe("BrandIcon", () => {
     expect(apple.getAttribute("aria-label")).toBe("macOS");
     expect(apple.getAttribute("fill")).toBe("currentColor");
     expect(nix.querySelector("path")!.getAttribute("d")!.length).toBeGreaterThan(50);
+  });
+});
+
+describe("Machines layout", () => {
+  const hosts: HostView[] = [
+    host({ name: "nixos-manager", channel: "stable", last_activation: { line: 1, time: NOW - 7200, store_path: "/nix/store/x", revision: REV, generation: 11, trigger: "apply:a1", sudo_user: null } }),
+    host({ name: "laptop", os: "darwin", last_apply: apply({ state: "failed", exit_code: 1, message: "nix build failed" }) }),
+  ];
+  const renderTable = () =>
+    render(withActions(fakeActions(), <HostTable hosts={hosts} now={NOW} promote={{ from: "unstable", to: "stable" }} />));
+
+  it("is a six-column table from 900 px and a card list below, with no minimum width", () => {
+    const { container } = renderTable();
+    const box = container.querySelector("[data-slot=table-container]")!;
+    expect(box.className).toContain("hidden");
+    expect(box.className).toContain("min-[900px]:block");
+    const table = box.querySelector("table")!;
+    expect(table.className).not.toMatch(/min-w-/);
+    expect([...table.querySelectorAll("th")].map((th) => th.textContent)).toEqual([
+      "Machine",
+      "Status",
+      "Running",
+      "Behind",
+      "Last apply",
+      "Actions",
+    ]);
+    expect(table.querySelectorAll("tbody tr")[0].querySelectorAll("td")).toHaveLength(6);
+    const cards = container.querySelector("[data-layout=cards]")!;
+    expect(cards.className).toContain("min-[900px]:hidden");
+    // By channel, then name, like the table.
+    expect([...cards.querySelectorAll("li")].map((li) => li.getAttribute("data-host"))).toEqual([
+      "nixos-manager",
+      "laptop",
+    ]);
+  });
+
+  it("keeps names whole and shows the channel under the name in both layouts", () => {
+    const { container } = renderTable();
+    for (const scope of [container.querySelector("table")!, container.querySelector("[data-layout=cards]")!]) {
+      const row = scope.querySelector("[data-host=nixos-manager]")!;
+      const name = [...row.querySelectorAll("div")].find((d) => d.textContent === "nixos-manager")!;
+      expect(name.className).toContain("whitespace-nowrap");
+      expect(row.querySelector("[data-role=stable]")!.textContent).toBe("stable");
+    }
+  });
+
+  it("cards show the last activation and a full-width apply button", () => {
+    const { container } = renderTable();
+    const card = container.querySelector("[data-layout=cards] [data-host=nixos-manager]")!;
+    expect(card.textContent).toContain("Last activation");
+    expect(card.textContent).toContain("2h ago · 0123456 · Lodestar apply · gen 11");
+    const applyBtn = [...card.querySelectorAll("button")].find((b) => b.textContent === "Apply newest")!;
+    expect(applyBtn.className).toContain("flex-1");
+  });
+
+  it("the table row's badge tooltip carries the message and the last activation", async () => {
+    // jsdom has no ResizeObserver; Radix's popper measures the tooltip with one.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const { container } = renderTable();
+    const row = container.querySelector("table [data-host=laptop]")!;
+    const trigger = row.querySelector("[data-slot=badge]")!.parentElement!;
+    fireEvent.pointerMove(trigger, { pointerType: "mouse" });
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toContain("Build failed (exit 1)");
+    expect(tip.textContent).toContain("nix build failed");
+    expect(tip.textContent).toContain("Last activation: none recorded");
   });
 });

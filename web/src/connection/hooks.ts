@@ -1,6 +1,7 @@
 // How components read the dashboard's data and act on it. The only way in: no component
 // calls `fetch` or opens a socket itself.
 import { useContext } from "preact/hooks";
+import type { ActivationEvent } from "@/bindings/ActivationEvent";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { AuditEvent } from "@/bindings/AuditEvent";
 import type { Snapshot } from "@/bindings/Snapshot";
@@ -32,6 +33,8 @@ export type ApplyLogView = {
   record: ApplyRecord | null;
   log: HeldLog | null;
   error: string | null;
+  /** The machine's last activation (when its system last switched), or null. */
+  activation: ActivationEvent | null;
 };
 
 /**
@@ -42,13 +45,15 @@ export function useApplyLog(host?: string, applyId?: string): ApplyLogView | nul
   const { snapshot, openLog } = useConnection();
   if (openLog === null) return null;
   if (host !== undefined && (openLog.host !== host || openLog.applyId !== applyId)) return null;
-  const last = snapshot?.hosts.find((h) => h.name === openLog.host)?.last_apply ?? null;
+  const h = snapshot?.hosts.find((x) => x.name === openLog.host);
+  const last = h?.last_apply ?? null;
   return {
     host: openLog.host,
     applyId: openLog.applyId,
     record: last?.apply_id === openLog.applyId ? last : null,
     log: openLog.log,
     error: openLog.error,
+    activation: h?.last_activation ?? null,
   };
 }
 

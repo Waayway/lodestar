@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/sheet";
 import { useActions, useApplyLog } from "@/connection/hooks";
 import { Building, Activation as TerminalIcon } from "@/icons";
+import { activationText } from "@/lib/format";
 import { ago, durationLabel } from "@/lib/time";
 
 /** The log of the apply opened from a row, appended live while it runs. */
@@ -55,6 +56,7 @@ export function ApplyLogSheet({ now }: { now: number }) {
                 </span>
               )}
               <span className="font-mono">{(view?.applyId ?? "").slice(0, 8)}</span>
+              {view?.activation && <span>last activation {activationText(view.activation, now)}</span>}
             </div>
           </SheetDescription>
           {record?.message && record.state !== "ok" && (

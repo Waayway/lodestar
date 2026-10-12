@@ -239,3 +239,10 @@ export function osLabel(os: string): string {
   const b = osBrand(os);
   return b === "nixos" ? "NixOS" : b === "apple" ? "macOS" : os;
 }
+
+/** "2h ago · f63ae42 · Lodestar apply · gen 11": the last switch of a machine's system. */
+export function activationText(e: ActivationEvent, now: number): string {
+  return [ago(e.time, now), shortRev(e.revision), triggerLabel(e), e.generation !== null ? `gen ${e.generation}` : null]
+    .filter((x): x is string => x !== null)
+    .join(" · ");
+}

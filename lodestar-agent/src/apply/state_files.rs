@@ -36,8 +36,7 @@ pub(super) fn apply_file(config: &AgentConfig, id: &str, extension: &str) -> Pat
 pub(super) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |duration| duration.as_secs() as i64)
 }
 
 /// Writes `path` atomically: a temporary sibling, then a rename.

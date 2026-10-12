@@ -8,7 +8,7 @@ use anyhow::{Context, bail};
 use nix::unistd::{Uid, User};
 
 use crate::config::AgentConfig;
-pub use crate::privileges::drop_privileges;
+use crate::privileges::drop_privileges;
 
 /// Runs git against the user's flake checkout, as that user.
 pub struct Git {

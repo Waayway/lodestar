@@ -5,7 +5,8 @@
 mod agents;
 mod demo_handle;
 mod demo_host;
-mod online;
+mod demo_online;
+mod demo_peer;
 mod repo;
 mod start;
 mod tasks;

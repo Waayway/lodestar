@@ -3,22 +3,14 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
+use super::demo_peer::DemoPeer;
 use crate::clock::now;
 use crate::tailscale::{Identity, OnlineProvider, PeerInfo};
 
 /// How long before the demo started an offline demo host was last seen.
 const OFFLINE_LAST_SEEN_SECS: i64 = 3 * 3600;
-
-pub struct DemoPeer {
-    pub host: String,
-    /// Tailscale's OS name (`macOS`, `linux`).
-    pub os: String,
-    pub addr: IpAddr,
-    /// Off for this long after the demo starts (already scaled by speed).
-    pub offline_for: Option<Duration>,
-}
 
 pub struct DemoOnline {
     started: Instant,

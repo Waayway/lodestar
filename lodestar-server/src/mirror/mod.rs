@@ -8,9 +8,8 @@
 //! parsed as an option.
 
 mod git_command;
-#[allow(clippy::module_inception)]
-mod mirror;
+mod git_mirror;
 mod promote_error;
 
-pub use mirror::Mirror;
+pub use git_mirror::Mirror;
 pub use promote_error::PromoteError;

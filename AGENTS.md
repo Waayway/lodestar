@@ -32,7 +32,7 @@ does; `docs/operations.md` for how it is run.
   - `connection/`: the only code that talks to the server: `client.ts` (HTTP,
     `X-Lodestar`, `ApiError`, 403), `feed.ts` (WebSocket, backoff, 403 stop),
     `ConnectionProvider.tsx` (snapshot, open log, audit, actions) and
-    `hooks.ts` (`useFleet`, `useHost`, `useApplyLog`, `useAudit`, `useActions`).
+    `hooks.ts` (`useFleet`, `useApplyLog`, `useAudit`, `useActions`).
     No component calls `fetch` or opens a socket.
   - `lib/`: pure helpers (`format.ts` labels, `applyLog.ts` log merge,
     `time.ts`, `theme.ts`, `cn.ts`).

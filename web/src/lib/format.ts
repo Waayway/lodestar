@@ -6,7 +6,7 @@ import type { CheckoutStatus } from "@/bindings/CheckoutStatus";
 import type { PromoteChannels } from "@/bindings/PromoteChannels";
 import type { HostView } from "@/bindings/HostView";
 import type { SkipReason } from "@/bindings/SkipReason";
-import type { AgentStatus } from "@/connection/client";
+import type { AgentStatus } from "@/lib/apiTypes";
 import { ago } from "@/lib/time";
 
 /** First 7 characters of a revision, keeping a `-dirty` suffix. */
@@ -21,7 +21,7 @@ export function behindLabel(n: number | null): string {
   return n === 0 ? "up to date" : `${n} behind`;
 }
 
-export function onlineLabel(h: HostView, now: number): string {
+export function onlineLabel(h: Pick<HostView, "online" | "last_seen">, now: number): string {
   switch (h.online) {
     case "on":
       return "Online";
@@ -37,11 +37,11 @@ export function skipReasonText(r: SkipReason, flakePath: string | null = null): 
   const checkout = flakePath ?? "the checkout";
   switch (r) {
     case "fetch_failed":
-      return "git fetch failed on the host";
+      return "git fetch failed on the machine";
     case "commit_not_found":
       return "commit not found after fetching";
     case "commit_not_on_channel":
-      return "commit is not on this host's channel";
+      return "commit is not on this machine's channel";
     case "wrong_branch":
       return `${checkout} is on a different branch`;
     case "dirty":
@@ -80,16 +80,25 @@ export function applyBadge(
   }
 }
 
-/** Semantic tone of a host as a whole. */
-export type Tone = ApplyTone | "off" | "warn";
+/** The state of a machine as a whole: `warn` is an agent that does not answer. */
+export type HostTone = ApplyTone | "off" | "warn";
 
-/** The one tone that best describes the host: an off machine or a broken apply wins. */
-export function hostTone(h: HostView): Tone {
-  if (h.online === "off") return "off";
+/**
+ * The one state that best describes a machine, used by both the summary tiles and the row
+ * stripe. A running, failed or skipped apply wins (also on a machine that is off now), then an
+ * agent that does not answer, then off; else ok when it runs its channel's newest commit.
+ */
+export function hostTone(h: HostView): HostTone {
   const t = applyBadge(h.last_apply).tone;
   if (t === "running" || t === "failed" || t === "skipped") return t;
   if (h.online === "agent_unreachable") return "warn";
+  if (h.online === "off") return "off";
   return h.behind === 0 ? "ok" : "idle";
+}
+
+/** The one rule for "needs attention": a failed or skipped apply, or an agent not answering. */
+export function needsAttention(t: HostTone): boolean {
+  return t === "failed" || t === "skipped" || t === "warn";
 }
 
 /** A sentence for an agent's answer to an apply the server sent it, or null when it started. */
@@ -117,18 +126,17 @@ export function count(n: number, noun: string): string {
 export type FleetCounts = { total: number; upToDate: number; updating: number; attention: number };
 
 /**
- * Updating: an apply is running. Needs attention: the last apply failed or was skipped, or
- * the machine is on but its agent does not answer. Up to date: none of those, and running
- * its channel's newest commit.
+ * From `hostTone`: updating while an apply runs, needs attention by `needsAttention`, up to
+ * date for the rest that run their channel's newest commit (on or off).
  */
 export function fleetCounts(hosts: HostView[]): FleetCounts {
   let upToDate = 0;
   let updating = 0;
   let attention = 0;
   for (const h of hosts) {
-    const state = h.last_apply?.state;
-    if (state === "running") updating++;
-    else if (state === "failed" || state === "skipped" || h.online === "agent_unreachable") attention++;
+    const t = hostTone(h);
+    if (t === "running") updating++;
+    else if (needsAttention(t)) attention++;
     else if (h.behind === 0) upToDate++;
   }
   return { total: hosts.length, upToDate, updating, attention };

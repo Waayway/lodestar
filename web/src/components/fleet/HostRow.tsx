@@ -15,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useActions } from "@/connection/hooks";
 import { Apply, Log, Queued } from "@/icons";
 import { cn } from "@/lib/cn";
+import { hostStyle, toneStripe } from "@/lib/tones";
 import {
   type ChannelRole,
   checkoutFlags,
@@ -47,6 +48,9 @@ export function HostRow({
     h.desired_apply_id !== null &&
     h.last_apply?.apply_id !== h.desired_apply_id;
   const flakePath = h.checkout?.flake_path ?? null;
+  // The left edge: one glance down the table shows which machines need attention.
+  const tone = hostTone(h);
+  const stripe = hostStyle[tone];
 
   async function apply() {
     setSending(true);
@@ -58,8 +62,8 @@ export function HostRow({
   }
 
   return (
-    <TableRow data-tone={hostTone(h)} data-host={h.name}>
-      <TableCell>
+    <TableRow data-tone={tone} data-host={h.name}>
+      <TableCell className={stripe ? toneStripe[stripe] : undefined}>
         <div className="flex items-center gap-3">
           <OsIcon os={h.os} />
           <div>

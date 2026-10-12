@@ -48,7 +48,7 @@ export function PageHeader({
 export function DemoBanner() {
   return (
     <div className="border-accent-line bg-accent-soft text-accent border-b px-4 py-1.5 text-center text-xs font-medium tracking-wide">
-      Demo · simulated hosts. Nothing here touches a real machine.
+      Demo · simulated machines. Nothing here touches a real machine.
     </div>
   );
 }

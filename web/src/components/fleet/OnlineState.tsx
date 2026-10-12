@@ -1,7 +1,7 @@
 import type { HostView } from "@/bindings/HostView";
-import { Off, Unreachable } from "@/icons";
 import { cn } from "@/lib/cn";
 import { onlineLabel } from "@/lib/format";
+import { onlineStyle, toneFill, toneText } from "@/lib/tones";
 
 /** Whether a machine is on and its agent answers: a dot, or an icon, and the label. */
 export function OnlineState({
@@ -13,23 +13,23 @@ export function OnlineState({
   now: number;
   className?: string;
 }) {
-  const label = onlineLabel(host as HostView, now);
+  const { tone, icon: Icon } = onlineStyle[host.online];
   return (
     <span
       data-state={host.online}
       className={cn(
         "inline-flex items-center gap-[7px] text-[13px] whitespace-nowrap",
-        host.online === "agent_unreachable" && "text-warn",
-        host.online === "off" && "text-muted",
+        // Online keeps the ink for its words; the dot carries the colour.
+        host.online !== "on" && toneText[tone],
         className,
       )}
     >
-      {host.online === "on" && (
-        <span aria-hidden="true" className="bg-ok outline-ok-soft size-[9px] shrink-0 rounded-full outline-2" />
+      {Icon ? (
+        <Icon aria-hidden="true" className="size-4" />
+      ) : (
+        <span aria-hidden="true" className={cn("outline-ok-soft size-[9px] shrink-0 rounded-full outline-2", toneFill[tone])} />
       )}
-      {host.online === "agent_unreachable" && <Unreachable aria-hidden="true" className="size-4" />}
-      {host.online === "off" && <Off aria-hidden="true" className="size-4" />}
-      {label}
+      {onlineLabel(host, now)}
     </span>
   );
 }

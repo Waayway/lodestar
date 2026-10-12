@@ -90,7 +90,7 @@ export function PromoteDialog({
           </DialogTitle>
           <DialogDescription>
             Fast-forwards <span className="font-mono">{pair.to}</span> to this commit and pushes
-            it. Hosts on {pair.to} change only when you apply.
+            it. Machines on {pair.to} change only when you apply.
           </DialogDescription>
         </DialogHeader>
         <div className="border-line bg-bg rounded-sm border p-3">

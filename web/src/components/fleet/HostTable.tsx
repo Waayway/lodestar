@@ -15,7 +15,7 @@ export function HostTable({
   now: number;
   promote: PromoteChannels | null;
 }) {
-  if (hosts.length === 0) return <EmptyState title="No hosts yet." />;
+  if (hosts.length === 0) return <EmptyState title="No machines yet." />;
   const sorted = [...hosts].sort(
     (a, b) => a.channel.localeCompare(b.channel) || a.name.localeCompare(b.name),
   );

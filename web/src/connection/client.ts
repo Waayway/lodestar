@@ -4,14 +4,9 @@
 import type { AuditEvent } from "@/bindings/AuditEvent";
 import type { Snapshot } from "@/bindings/Snapshot";
 
-/** What the server got back from the agent when it sent an apply. */
-export type AgentStatus = "202" | "409" | "200" | "unreachable" | "error";
+import type { ApplyChannelResponse, ApplyHostResponse } from "@/lib/apiTypes";
 
-export type ApplyHostResponse = { apply_id: string; agent_status: AgentStatus };
-export type ApplyChannelResponse = {
-  apply_ids: Record<string, string>;
-  agent_status: Record<string, AgentStatus>;
-};
+export type { AgentStatus, ApplyChannelResponse, ApplyHostResponse } from "@/lib/apiTypes";
 
 export class ApiError extends Error {
   constructor(

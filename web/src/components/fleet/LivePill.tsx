@@ -1,7 +1,15 @@
 import { useEffect, useState } from "preact/hooks";
 import type { FeedStatus } from "@/connection/feed";
-import { Disconnected, Forbidden } from "@/icons";
 import { cn } from "@/lib/cn";
+import { feedStyle, toneText } from "@/lib/tones";
+
+/** What screen readers hear: changes only when the feed's state does, never per second. */
+const announced: Record<FeedStatus["kind"], string> = {
+  live: "Live",
+  connecting: "Connecting",
+  waiting: "Disconnected, retrying",
+  forbidden: "No access",
+};
 
 /** The feed's state in the header: Live, Connecting, Disconnected with a countdown, No access. */
 export function LivePill({ feed }: { feed: FeedStatus }) {
@@ -12,33 +20,27 @@ export function LivePill({ feed }: { feed: FeedStatus }) {
     return () => clearInterval(t);
   }, [feed]);
   const label =
-    feed.kind === "live"
-      ? "Live"
-      : feed.kind === "connecting"
-        ? "Connecting"
-        : feed.kind === "forbidden"
-          ? "No access"
-          : `Disconnected · retry in ${Math.max(0, Math.ceil((feed.retryAt - Date.now()) / 1000))}s`;
+    feed.kind === "waiting"
+      ? `Disconnected · retry in ${Math.max(0, Math.ceil((feed.retryAt - Date.now()) / 1000))}s`
+      : announced[feed.kind];
+  const { tone, icon: Icon } = feedStyle[feed.kind];
   return (
     <span
-      role="status"
       data-state={feed.kind}
       className={cn(
         "border-line bg-panel inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[5px] text-[12.5px] whitespace-nowrap",
-        feed.kind === "live" && "text-ok",
-        feed.kind === "connecting" && "text-info",
-        feed.kind === "waiting" && "text-bad",
-        feed.kind === "forbidden" && "text-bad",
+        toneText[tone],
       )}
     >
-      {feed.kind === "live" || feed.kind === "connecting" ? (
-        <span aria-hidden="true" className="size-2 rounded-full bg-current" />
-      ) : feed.kind === "waiting" ? (
-        <Disconnected aria-hidden="true" className="size-4" />
+      {Icon ? (
+        <Icon aria-hidden="true" className="size-4" />
       ) : (
-        <Forbidden aria-hidden="true" className="size-4" />
+        <span aria-hidden="true" className="size-2 rounded-full bg-current" />
       )}
-      {label}
+      <span aria-hidden="true">{label}</span>
+      <span role="status" className="sr-only">
+        {announced[feed.kind]}
+      </span>
     </span>
   );
 }

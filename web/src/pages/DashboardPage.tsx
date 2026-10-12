@@ -35,7 +35,7 @@ export function DashboardPage() {
               feed.kind === "waiting" ? (
                 <ErrorState icon={Disconnected} title="Can't reach the Lodestar server. Retrying." />
               ) : (
-                <EmptyState title="Loading hosts" />
+                <EmptyState title="Loading machines" />
               )
             ) : (
               <>
@@ -63,7 +63,7 @@ function Stats({ snap }: { snap: Snapshot }) {
     <section aria-label="Fleet summary" className="grid grid-cols-2 gap-3 min-[900px]:grid-cols-4">
       <StatTile icon={Machines} tone="accent" value={c.total} label={c.total === 1 ? "machine" : "machines"} />
       <StatTile icon={Applied} tone="ok" value={c.upToDate} label="up to date" />
-      <StatTile icon={Building} tone="running" value={c.updating} label="updating" spin={c.updating > 0} />
+      <StatTile icon={Building} tone="info" value={c.updating} label="updating" spin={c.updating > 0} />
       <StatTile icon={Attention} tone="bad" value={c.attention} label="need attention" />
     </section>
   );

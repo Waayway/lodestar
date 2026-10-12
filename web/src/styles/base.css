@@ -104,9 +104,18 @@
   }
 }
 
-/* Only the building spinner moves, and not for readers who asked for less motion. */
+/*
+ * Only the building spinner moves (plus the dialog/sheet fade and slide), and nothing does
+ * for readers who asked for less motion. Radix unmounts at once when there is no animation.
+ */
 @media (prefers-reduced-motion: reduce) {
-  .animate-spin {
-    animation: none;
+  .animate-spin,
+  [data-slot="dialog-overlay"],
+  [data-slot="dialog-content"],
+  [data-slot="sheet-overlay"],
+  [data-slot="sheet-content"],
+  [data-slot="tooltip-content"] {
+    animation: none !important;
+    transition: none !important;
   }
 }

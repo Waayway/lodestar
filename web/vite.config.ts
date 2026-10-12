@@ -40,7 +40,8 @@ export default defineConfig({
     server: { deps: { inline: [/radix-ui/, /lucide-react/, /sonner/, /@testing-library/, /react-remove-scroll/, /react-style-singleton/, /use-callback-ref/, /use-sidecar/, /aria-hidden/] } },
     // These packages have no `exports` map, so Node would load their CommonJS builds, which
     // require real React. Point tests at their ES builds, as the browser bundle uses.
-    alias: [
+    // Only under Vitest (the config is read by builds too, where the files may be absent).
+    alias: !process.env.VITEST ? [] : [
       "lucide-react",
       "react-remove-scroll",
       "react-remove-scroll-bar",

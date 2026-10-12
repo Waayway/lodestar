@@ -1,27 +1,10 @@
 import type { AuditEvent } from "@/bindings/AuditEvent";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Card } from "@/components/ui/card";
-import {
-  Activation,
-  Applied,
-  Apply,
-  Audit as AuditIcon,
-  Failed,
-  Promote,
-  Skipped,
-} from "@/icons";
-import { type AuditLine, auditLine } from "@/lib/format";
+import { cn } from "@/lib/cn";
+import { auditLine } from "@/lib/format";
+import { auditIcon, toneText } from "@/lib/tones";
 import { ago } from "@/lib/time";
-
-const icons: Record<AuditLine["icon"], typeof Apply> = {
-  apply: Apply,
-  applied: Applied,
-  failed: Failed,
-  skipped: Skipped,
-  activation: Activation,
-  promote: Promote,
-  other: AuditIcon,
-};
 
 /** The newest audit events: who asked for what, and what the machines did. */
 export function AuditList({ events, now }: { events: AuditEvent[] | null; now: number }) {
@@ -32,13 +15,13 @@ export function AuditList({ events, now }: { events: AuditEvent[] | null; now: n
       <ul className="m-0 flex list-none flex-col p-0">
         {events.map((e) => {
           const line = auditLine(e);
-          const Icon = icons[line.icon];
+          const Icon = auditIcon[line.icon];
           return (
             <li
               key={e.id}
               className="border-line-soft grid grid-cols-[28px_minmax(0,1fr)_auto] items-start gap-2.5 border-b border-dotted py-2.5 last:border-b-0"
             >
-              <span className="bg-chip text-accent grid size-7 place-items-center rounded-sm">
+              <span className={cn("bg-chip grid size-7 place-items-center rounded-sm", toneText.accent)}>
                 <Icon aria-hidden="true" className="size-4" />
               </span>
               <div className="min-w-0">

@@ -12,6 +12,8 @@ import {
   channelRole,
   checkoutFlags,
   fleetCounts,
+  hostTone,
+  needsAttention,
   onlineLabel,
   osBrand,
   osLabel,
@@ -296,5 +298,40 @@ describe("auditLine", () => {
       title: "something_new on desktop",
       meta: "alice@example.com",
     });
+  });
+});
+
+describe("hostTone and needs attention", () => {
+  it("classifies a machine the same in the tiles and the row", () => {
+    const offFailed = host({ online: "off", behind: 1, last_apply: apply({ state: "failed" }) });
+    expect(hostTone(offFailed)).toBe("failed");
+    expect(needsAttention(hostTone(offFailed))).toBe(true);
+    expect(fleetCounts([offFailed]).attention).toBe(1);
+
+    const offOk = host({ online: "off", behind: 0, last_apply: apply({ state: "ok" }) });
+    expect(hostTone(offOk)).toBe("off");
+    expect(needsAttention(hostTone(offOk))).toBe(false);
+    expect(fleetCounts([offOk])).toEqual({ total: 1, upToDate: 1, updating: 0, attention: 0 });
+
+    const unreachable = host({ online: "agent_unreachable", last_apply: apply({ state: "ok" }) });
+    expect(hostTone(unreachable)).toBe("warn");
+    expect(fleetCounts([unreachable]).attention).toBe(1);
+
+    const running = host({ online: "off", last_apply: apply({ state: "running", finished_at: null }) });
+    expect(hostTone(running)).toBe("running");
+    expect(fleetCounts([running]).updating).toBe(1);
+  });
+  it("agrees for every combination of online state, apply state and behind", () => {
+    const onlines = ["on", "agent_unreachable", "off"] as const;
+    const states = [null, "idle", "running", "ok", "skipped", "failed"] as const;
+    for (const online of onlines)
+      for (const state of states)
+        for (const behind of [0, 2, null]) {
+          const h = host({ online, behind, last_apply: state ? apply({ state }) : null });
+          const c = fleetCounts([h]);
+          const t = hostTone(h);
+          expect(c.updating).toBe(t === "running" ? 1 : 0);
+          expect(c.attention).toBe(needsAttention(t) ? 1 : 0);
+        }
   });
 });

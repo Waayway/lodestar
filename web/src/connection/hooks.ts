@@ -3,7 +3,6 @@
 import { useContext } from "preact/hooks";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { AuditEvent } from "@/bindings/AuditEvent";
-import type { HostView } from "@/bindings/HostView";
 import type { Snapshot } from "@/bindings/Snapshot";
 import {
   type Actions,
@@ -24,11 +23,6 @@ function useConnection(): ConnectionState {
 export function useFleet(): { snapshot: Snapshot | null; feed: FeedStatus } {
   const { snapshot, feed } = useConnection();
   return { snapshot, feed };
-}
-
-/** One host as the server last reported it, or undefined. */
-export function useHost(name: string): HostView | undefined {
-  return useConnection().snapshot?.hosts.find((h) => h.name === name);
 }
 
 export type ApplyLogView = {

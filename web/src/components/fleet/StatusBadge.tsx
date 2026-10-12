@@ -1,23 +1,7 @@
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
-import { Badge, type BadgeTone } from "@/components/ui/badge";
-import { Applied, Building, Failed, Idle, Skipped } from "@/icons";
-import { type ApplyTone, applyBadge } from "@/lib/format";
-
-const badgeTone: Record<ApplyTone, BadgeTone> = {
-  ok: "ok",
-  running: "running",
-  skipped: "skipped",
-  failed: "failed",
-  idle: "neutral",
-};
-
-const icons: Record<ApplyTone, typeof Applied> = {
-  ok: Applied,
-  running: Building,
-  skipped: Skipped,
-  failed: Failed,
-  idle: Idle,
-};
+import { Badge } from "@/components/ui/badge";
+import { applyBadge } from "@/lib/format";
+import { applyStyle } from "@/lib/tones";
 
 /** An apply's state: colour, icon and the reviewed label (`applyBadge`). Spins while building. */
 export function StatusBadge({
@@ -31,10 +15,10 @@ export function StatusBadge({
   className?: string;
 }) {
   const b = applyBadge(apply, flakePath);
-  const Icon = icons[b.tone];
+  const { tone, icon: Icon, spin } = applyStyle[b.tone];
   return (
-    <Badge tone={badgeTone[b.tone]} data-state={b.tone} className={className}>
-      <Icon aria-hidden="true" className={b.tone === "running" ? "animate-spin" : undefined} />
+    <Badge tone={tone} data-state={b.tone} className={className}>
+      <Icon aria-hidden="true" className={spin ? "animate-spin" : undefined} />
       <span className="truncate">{b.text}</span>
     </Badge>
   );

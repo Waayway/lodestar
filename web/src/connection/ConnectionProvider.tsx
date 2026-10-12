@@ -247,7 +247,7 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
             .filter((n): n is string => n !== null);
           const started = Object.values(r.agent_status).filter((s) => s === "202").length;
           const total = Object.keys(r.apply_ids).length;
-          const summary = `Apply started on ${started} of ${total} ${total === 1 ? "host" : "hosts"} on ${channel}`;
+          const summary = `Apply started on ${started} of ${total} ${total === 1 ? "machine" : "machines"} on ${channel}`;
           if (notes.length > 0)
             toast.warning(summary, {
               description: (

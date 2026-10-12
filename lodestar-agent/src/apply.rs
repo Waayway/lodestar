@@ -127,32 +127,56 @@ pub fn read_record(cfg: &AgentConfig, id: &str) -> Option<ApplyRecord> {
     if !is_valid_apply_id(id) {
         return None;
     }
+    let rec = load_record(cfg, id)?;
+    Some(settle_running(cfg, rec))
+}
+
+fn load_record(cfg: &AgentConfig, id: &str) -> Option<ApplyRecord> {
     let raw = fs::read(file(cfg, id, "json")).ok()?;
-    let mut rec: ApplyRecord = serde_json::from_slice(&raw).ok()?;
-    if rec.state == ApplyState::Running {
-        let pid_alive = fs::read_to_string(file(cfg, id, "pid"))
-            .ok()
-            .and_then(|s| s.trim().parse::<i32>().ok())
-            .is_some_and(pid_alive);
-        // Held only for this check (and the clean-up below), never across a wait.
-        let lock = try_lock_apply(cfg);
-        if !pid_alive || lock.is_some() {
-            rec.state = ApplyState::Failed;
-            rec.message = Some("interrupted".into());
-        }
-        if rec.state == ApplyState::Failed && lock.is_some() {
-            // No wrapper can be running: make the outcome permanent and drop the marker.
-            if rec.finished_at.is_none() {
-                rec.finished_at = Some(now());
-            }
-            if let Err(e) = write_record(cfg, &rec) {
-                eprintln!("lodestar-agent: {e:#}");
-            }
-            let _ = fs::remove_file(file(cfg, id, "pid"));
-            let _ = fs::remove_file(in_progress_marker(cfg));
-        }
+    serde_json::from_slice(&raw).ok()
+}
+
+/// Second half of `read_record`: `rec` was read from disk (without the lock) and may be stale.
+/// The wrapper can finish between that read and the checks here (write its final record,
+/// remove the pid file and the marker, drop the lock), so a `Running` record is re-read
+/// before it is declared interrupted, and only rewritten while it is still `Running` on disk
+/// under the lock. Public for tests.
+#[doc(hidden)]
+pub fn settle_running(cfg: &AgentConfig, rec: ApplyRecord) -> ApplyRecord {
+    if rec.state != ApplyState::Running {
+        return rec;
     }
-    Some(rec)
+    let id = rec.apply_id.clone();
+    let pid_alive = fs::read_to_string(file(cfg, &id, "pid"))
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .is_some_and(pid_alive);
+    // Held only for this check (and the clean-up below), never across a wait.
+    let lock = try_lock_apply(cfg);
+    if pid_alive && lock.is_none() {
+        return rec;
+    }
+    // The wrapper may have finished since `rec` was read: what is on disk now wins. With the
+    // lock held no wrapper can change it any more.
+    let mut current = match load_record(cfg, &id) {
+        Some(r) if r.state != ApplyState::Running => return r,
+        Some(r) => r,
+        None => rec,
+    };
+    current.state = ApplyState::Failed;
+    current.message = Some("interrupted".into());
+    if lock.is_some() {
+        // No wrapper can be running: make the outcome permanent and drop the marker.
+        if current.finished_at.is_none() {
+            current.finished_at = Some(now());
+        }
+        if let Err(e) = write_record(cfg, &current) {
+            eprintln!("lodestar-agent: {e:#}");
+        }
+        let _ = fs::remove_file(file(cfg, &id, "pid"));
+        let _ = fs::remove_file(in_progress_marker(cfg));
+    }
+    current
 }
 
 fn record_ids(cfg: &AgentConfig) -> Vec<String> {

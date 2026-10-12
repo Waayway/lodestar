@@ -2,7 +2,7 @@ mod common;
 use common::*;
 use lodestar_agent::apply::{
     applies_dir, clear_stale_marker, latest_record, prune, read_log, read_record, run_apply,
-    try_lock_apply,
+    settle_running, try_lock_apply,
 };
 use lodestar_agent::git::Git;
 use lodestar_proto::{ApplyRecord, ApplyState, SkipReason};
@@ -346,4 +346,33 @@ fn daemon_home_is_roots_home_per_os() {
     assert_eq!(daemon_home(&f.cfg), "/var/root");
     f.cfg.os = "linux".into();
     assert_eq!(daemon_home(&f.cfg), "/root");
+}
+
+/// The wrapper finishes between the daemon's read of `<id>.json` (still `Running`) and its
+/// lock check: the final record must survive, not be overwritten as "interrupted".
+#[test]
+fn wrapper_finishing_after_the_read_keeps_its_result() {
+    let f = fixture();
+    // The wrapper was running: Running record, its pid file and the in-progress marker.
+    write_record(&f, "race", ApplyState::Running, 100);
+    std::fs::write(
+        applies_dir(&f.cfg).join("race.pid"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+    // The daemon reads the record while the wrapper still runs.
+    let stale: ApplyRecord =
+        serde_json::from_slice(&std::fs::read(applies_dir(&f.cfg).join("race.json")).unwrap())
+            .unwrap();
+    assert_eq!(stale.state, ApplyState::Running);
+    // Now the wrapper finishes: final record, pid file removed, lock released (never held here).
+    write_record(&f, "race", ApplyState::Ok, 100);
+    std::fs::remove_file(applies_dir(&f.cfg).join("race.pid")).unwrap();
+    // The daemon continues with its stale copy: pid gone and lock free.
+    let rec = settle_running(&f.cfg, stale);
+    assert_eq!(rec.state, ApplyState::Ok, "{rec:?}");
+    assert_eq!(rec.message, None);
+    // And the file on disk still says Ok.
+    let on_disk = read_record(&f.cfg, "race").unwrap();
+    assert_eq!(on_disk.state, ApplyState::Ok, "{on_disk:?}");
 }

@@ -1,5 +1,5 @@
 //! Demo mode: the real server, poller, database, git mirror and dashboard against a
-//! simulated fleet (a throwaway git repo and in-process simulated agents). All demo
+//! simulated set of hosts (a throwaway git repo and in-process simulated agents). All demo
 //! timings are divided by `speed`.
 
 mod agents;
@@ -25,8 +25,8 @@ use repo::{DemoRepo, STABLE_AT};
 
 /// Seconds between new commits on `unstable`.
 const COMMIT_EVERY_SECS: f64 = 180.0;
-/// Seconds apollo stays offline.
-const APOLLO_OFFLINE_SECS: f64 = 120.0;
+/// Seconds laptop-2 stays offline.
+const LAPTOP_2_OFFLINE_SECS: f64 = 120.0;
 const POLL_SECS: f64 = 5.0;
 const MIRROR_FETCH_SECS: f64 = 30.0;
 const DEMO_USER: &str = "demo";
@@ -37,7 +37,7 @@ pub(crate) fn now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// One row of the demo fleet.
+/// One row of the demo host list.
 struct DemoHost {
     name: &'static str,
     system: &'static str,
@@ -71,18 +71,18 @@ const fn host(
 const DEMO_HOSTS: [DemoHost; 7] = [
     DemoHost {
         script: Script::Dirty,
-        ..host("atlas", "aarch64-darwin", "unstable", 3)
+        ..host("laptop-1", "aarch64-darwin", "unstable", 3)
     },
     DemoHost {
-        offline_for: Some(APOLLO_OFFLINE_SECS),
-        ..host("apollo", "aarch64-darwin", "unstable", 5)
+        offline_for: Some(LAPTOP_2_OFFLINE_SECS),
+        ..host("laptop-2", "aarch64-darwin", "unstable", 5)
     },
-    host("hermes", "x86_64-linux", "unstable", 2),
+    host("desktop", "x86_64-linux", "unstable", 2),
     DemoHost {
         unreachable: true,
-        ..host("hephaestus", "x86_64-linux", "unstable", 1)
+        ..host("workstation", "x86_64-linux", "unstable", 1)
     },
-    host("nixos-manager", "x86_64-linux", "stable", 0),
+    host("server-1", "x86_64-linux", "stable", 0),
     host("vpn", "x86_64-linux", "stable", 1),
     DemoHost {
         script: Script::FailFirst,

@@ -19,7 +19,7 @@ describe("request headers", () => {
   it("sends X-Lodestar on every request (CSRF guard)", async () => {
     const fetchMock = stubFetch();
     await getSnapshot();
-    await applyHost("hermes");
+    await applyHost("desktop");
     await promote("a".repeat(40));
     expect(fetchMock).toHaveBeenCalledTimes(3);
     for (const call of fetchMock.mock.calls) {

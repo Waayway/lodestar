@@ -1,4 +1,4 @@
-//! Simulated fleet agents: one in-process HTTP server per demo host, implementing the real
+//! Simulated agents: one in-process HTTP server per demo host, implementing the real
 //! agent API (`GET /status`, `POST /apply`, `GET /apply/log`, `GET /activations`) with the
 //! agent's status codes. An apply streams a realistic log over ~10 s (divided by the demo
 //! speed) and ends as the host's script says.
@@ -203,7 +203,7 @@ impl SimAgent {
         step(
             1.0,
             format!(
-                "From https://github.com/Waayway/nixos-config\n   {old}..{short}  {channel:<10} -> origin/{channel}"
+                "From https://example.com/infra.git\n   {old}..{short}  {channel:<10} -> origin/{channel}"
             ),
         )
         .await;

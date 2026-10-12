@@ -34,27 +34,27 @@ async fn status_lists_seven_hosts() {
     let (code, out) = go(&c, Command::Status).await;
     assert_eq!(code, 0);
     assert_eq!(out.lines().count(), 8, "{out}"); // header + 7
-    assert!(out.contains("hermes") && out.contains("atlas"), "{out}");
+    assert!(out.contains("desktop") && out.contains("laptop-1"), "{out}");
 }
 
 #[tokio::test]
-async fn rebuild_hermes_wait_succeeds() {
+async fn rebuild_desktop_wait_succeeds() {
     let (_d, c) = start().await;
     // Wait until the agent has been polled so the apply reaches it.
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let (code, out) = go(&c, rebuild("hermes", true)).await;
+    let (code, out) = go(&c, rebuild("desktop", true)).await;
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("apply_id") && out.contains("hermes: ok"),
+        out.contains("apply_id") && out.contains("desktop: ok"),
         "{out}"
     );
 }
 
 #[tokio::test]
-async fn rebuild_atlas_wait_reports_skipped_dirty() {
+async fn rebuild_laptop_1_wait_reports_skipped_dirty() {
     let (_d, c) = start().await;
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let (code, out) = go(&c, rebuild("atlas", true)).await;
+    let (code, out) = go(&c, rebuild("laptop-1", true)).await;
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("skipped (dirty)"), "{out}");
 }
@@ -63,7 +63,7 @@ async fn rebuild_atlas_wait_reports_skipped_dirty() {
 async fn posts_carry_x_lodestar_and_errors_are_clear() {
     let (_d, c) = start().await;
     // The demo server rejects a POST without X-Lodestar, so success proves the header is sent.
-    let (code, _) = go(&c, rebuild("hermes", false)).await;
+    let (code, _) = go(&c, rebuild("desktop", false)).await;
     assert_eq!(code, 0);
     let err = run(&c, rebuild("nope", false), &mut Vec::new())
         .await

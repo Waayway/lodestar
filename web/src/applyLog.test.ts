@@ -59,7 +59,7 @@ describe("mergeChunk", () => {
 });
 
 describe("watchLog", () => {
-  const open = (running: boolean | null) => ({ host: "hermes", applyId: "a1", running });
+  const open = (running: boolean | null) => ({ host: "desktop", applyId: "a1", running });
   const rec = (apply_id: string, state: ApplyRecord["state"]): ApplyRecord => ({
     apply_id,
     commit: "c".repeat(40),
@@ -90,7 +90,7 @@ describe("watchLog", () => {
   const snapshotMsg = (last_apply: ApplyRecord | null): WsMessage => ({
     type: "snapshot",
     data: {
-      hosts: [(hostMsg("hermes", last_apply).data as HostView)],
+      hosts: [(hostMsg("desktop", last_apply).data as HostView)],
       channels: [],
       promote_candidate: null,
       promote: null,
@@ -104,15 +104,15 @@ describe("watchLog", () => {
     expect(watchLog(open(true), snapshotMsg(rec("a1", "ok")))).toEqual({ refetch: true, running: false });
   });
   it("refetches when the open apply stops running", () => {
-    expect(watchLog(open(true), hostMsg("hermes", rec("a1", "failed")))).toEqual({ refetch: true, running: false });
+    expect(watchLog(open(true), hostMsg("desktop", rec("a1", "failed")))).toEqual({ refetch: true, running: false });
   });
   it("refetches when a newer apply replaced a running one", () => {
-    expect(watchLog(open(true), hostMsg("hermes", rec("a2", "running")))).toEqual({ refetch: true, running: false });
+    expect(watchLog(open(true), hostMsg("desktop", rec("a2", "running")))).toEqual({ refetch: true, running: false });
   });
   it("does nothing while it keeps running, for an apply already finished, or for other hosts", () => {
-    expect(watchLog(open(true), hostMsg("hermes", rec("a1", "running")))).toEqual({ refetch: false, running: true });
-    expect(watchLog(open(false), hostMsg("hermes", rec("a1", "ok")))).toEqual({ refetch: false, running: false });
-    expect(watchLog(open(true), hostMsg("atlas", rec("a1", "ok")))).toEqual({ refetch: false, running: true });
+    expect(watchLog(open(true), hostMsg("desktop", rec("a1", "running")))).toEqual({ refetch: false, running: true });
+    expect(watchLog(open(false), hostMsg("desktop", rec("a1", "ok")))).toEqual({ refetch: false, running: false });
+    expect(watchLog(open(true), hostMsg("laptop-1", rec("a1", "ok")))).toEqual({ refetch: false, running: true });
     expect(watchLog(open(true), { type: "channels_updated", data: [] })).toEqual({ refetch: false, running: true });
   });
 });

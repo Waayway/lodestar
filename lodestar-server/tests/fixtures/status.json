@@ -4,8 +4,8 @@
   "Self": {
     "ID": "n1",
     "PublicKey": "nodekey:self",
-    "HostName": "nixos-manager",
-    "DNSName": "nixos-manager.tail1234.ts.net.",
+    "HostName": "manager",
+    "DNSName": "manager.tail1234.ts.net.",
     "OS": "linux",
     "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"],
     "Tags": ["tag:lodestar"],

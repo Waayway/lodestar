@@ -1,4 +1,4 @@
-//! The demo's throwaway config repo: a bare `fleet.git` (the server's "GitHub") and a work
+//! The demo's throwaway config repo: a bare `infra.git` (the server's "GitHub") and a work
 //! clone that commits to `unstable`.
 
 use std::path::{Path, PathBuf};
@@ -11,18 +11,18 @@ use super::now;
 
 /// Subjects of the seeded `unstable` history, oldest first.
 const SEED_SUBJECTS: [&str; 12] = [
-    "feat(darwin): Finder list view in Recents, no .DS_Store on shares/USB, drop Ice",
-    "feat(darwin): PostgreSQL 18 + pgvector service, lxml/xmlsec build libs",
-    "feat(darwin): openssl@3 on PKG_CONFIG_PATH for xmlsec, wkhtmltopdf",
-    "fix(ghostty): no auto secure input on macOS (blocked AeroSpace bindings)",
-    "fix(vscodium): turn off the self-updater on macOS",
-    "fix: drop plain neovim so nvim is the nixvim build",
-    "fix(vscodium): run the settings.json edit as the user",
-    "fix: nixos-manager and hephaestus evaluate again",
-    "feat(fleet): channel, fleet host list and configurationRevision",
-    "feat(fleet): cargo workspace, lodestar-proto types, dev shell and crane packaging",
-    "feat(lodestar-agent): HTTP API, tailscale discovery, source check, activations",
-    "feat(fleet): agent service modules and activation audit hook",
+    "feat: initial flake with a shared base module",
+    "feat(laptop-1): add the host",
+    "feat(laptop-2): add the host",
+    "feat(desktop): GPU drivers and a gaming profile",
+    "fix(desktop): suspend no longer wakes immediately",
+    "feat(server-1): add the host with sshd and restic",
+    "feat(media): jellyfin and the media disks",
+    "fix: every host evaluates again after the module split",
+    "feat(vpn): wireguard server",
+    "chore: nix flake update",
+    "feat(workstation): add the host",
+    "fix(laptop-1): fingerprint reader for sudo",
 ];
 
 /// `stable` starts at this seeded commit (1-based).
@@ -30,14 +30,14 @@ pub const STABLE_AT: usize = 8;
 
 /// Subjects for the commits that keep landing on `unstable`, used in turn.
 const NEW_SUBJECTS: [&str; 8] = [
-    "fix(zsh): skip cd=z alias in Claude Code shells",
-    "feat(hermes): bump immich to the latest release",
-    "fix(media): jellyfin hardware transcoding on the iGPU",
+    "fix(shell): faster prompt in large git repos",
+    "feat(desktop): bump the photo library service",
+    "fix(media): hardware transcoding on the iGPU",
     "chore: nix flake update",
     "feat(vpn): wireguard peer for the travel router",
-    "fix(atlas): aerospace gaps on the external display",
-    "feat(nixos-manager): nightly restic backup of /var/lib",
-    "fix(apollo): battery-friendly tailscale settings",
+    "fix(laptop-1): window gaps on the external display",
+    "feat(server-1): nightly backup of /var/lib",
+    "fix(laptop-2): battery-friendly tailscale settings",
 ];
 
 async fn git(dir: &Path, args: &[&str], date: Option<i64>) -> anyhow::Result<String> {
@@ -47,7 +47,7 @@ async fn git(dir: &Path, args: &[&str], date: Option<i64>) -> anyhow::Result<Str
             "-c",
             "user.name=lodestar-demo",
             "-c",
-            "user.email=demo@fleet.invalid",
+            "user.email=demo@lodestar.invalid",
         ])
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -83,7 +83,7 @@ impl DemoRepo {
     /// Creates the repos under `dir` and seeds `unstable` (12 commits, a few hours apart)
     /// and `stable` (at the 8th). Returns the repo and the seeded commits, oldest first.
     pub async fn create(dir: &Path) -> anyhow::Result<(DemoRepo, Vec<String>)> {
-        let bare = dir.join("fleet.git");
+        let bare = dir.join("infra.git");
         let work = dir.join("work");
         std::fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
         let bare_s = bare.to_str().context("temp dir path is not UTF-8")?;

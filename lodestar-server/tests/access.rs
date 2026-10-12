@@ -17,7 +17,7 @@ use tower::ServiceExt;
 
 fn cfg() -> AccessConfig {
     AccessConfig::Tailscale {
-        allowed_users: vec!["Waayway@github".into()],
+        allowed_users: vec!["alice@example.com".into()],
         allowed_tags: vec![
             "tag:nixos".into(),
             "tag:personal".into(),
@@ -34,7 +34,7 @@ fn whois(name: &str) -> Identity {
 fn parse_status_fixture() {
     let peers = parse_status(include_str!("fixtures/status.json")).unwrap();
     assert_eq!(peers.len(), 4);
-    let me = &peers["nixos-manager"];
+    let me = &peers["manager"];
     assert!(me.online);
     assert_eq!(me.addr, Some("100.64.0.1".parse::<IpAddr>().unwrap()));
     let laptop = &peers["laptop"];
@@ -57,12 +57,12 @@ fn parse_status_fixture() {
 #[test]
 fn user_login_allowed() {
     let id = whois("whois-user.json");
-    assert_eq!(id.login.as_deref(), Some("Waayway@github"));
+    assert_eq!(id.login.as_deref(), Some("alice@example.com"));
     assert_eq!(id.node, "laptop");
     assert_eq!(
         decide(&cfg(), Some(&id)),
         Access::Allowed {
-            actor: "Waayway@github".into()
+            actor: "alice@example.com".into()
         }
     );
 }

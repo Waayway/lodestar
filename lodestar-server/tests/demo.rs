@@ -96,8 +96,8 @@ async fn wait_polled(d: &DemoHandle, name: &str) {
 #[tokio::test]
 async fn demo_starts_and_serves_snapshot() {
     let d = start().await;
-    let s = wait_for(&d, 10, "atlas checkout", |s| {
-        host(s, "atlas").checkout.is_some()
+    let s = wait_for(&d, 10, "laptop-1 checkout", |s| {
+        host(s, "laptop-1").checkout.is_some()
     })
     .await;
     assert!(s.demo);
@@ -107,33 +107,33 @@ async fn demo_starts_and_serves_snapshot() {
     assert_eq!(names, ["stable", "unstable"]);
     assert!(head(&s, "unstable").is_some());
     assert!(head(&s, "stable").is_some());
-    assert!(host(&s, "atlas").checkout.as_ref().unwrap().dirty);
+    assert!(host(&s, "laptop-1").checkout.as_ref().unwrap().dirty);
 }
 
 #[tokio::test]
-async fn demo_apply_hermes_reaches_ok() {
+async fn demo_apply_desktop_reaches_ok() {
     let d = start().await;
-    wait_polled(&d, "hermes").await;
-    apply(&d, "hermes").await;
-    let s = wait_for(&d, 10, "hermes ok", |s| {
-        last_state(s, "hermes") == Some(ApplyState::Ok)
+    wait_polled(&d, "desktop").await;
+    apply(&d, "desktop").await;
+    let s = wait_for(&d, 10, "desktop ok", |s| {
+        last_state(s, "desktop") == Some(ApplyState::Ok)
     })
     .await;
-    let h = host(&s, "hermes");
+    let h = host(&s, "desktop");
     assert_eq!(h.running, head(&s, "unstable"));
     assert_eq!(h.behind, Some(0));
 }
 
 #[tokio::test]
-async fn demo_apply_atlas_skips_dirty() {
+async fn demo_apply_laptop_1_skips_dirty() {
     let d = start().await;
-    wait_polled(&d, "atlas").await;
-    apply(&d, "atlas").await;
-    let s = wait_for(&d, 10, "atlas skipped", |s| {
-        last_state(s, "atlas") == Some(ApplyState::Skipped)
+    wait_polled(&d, "laptop-1").await;
+    apply(&d, "laptop-1").await;
+    let s = wait_for(&d, 10, "laptop-1 skipped", |s| {
+        last_state(s, "laptop-1") == Some(ApplyState::Skipped)
     })
     .await;
-    let a = host(&s, "atlas").last_apply.clone().unwrap();
+    let a = host(&s, "laptop-1").last_apply.clone().unwrap();
     assert_eq!(a.skip_reason, Some(SkipReason::Dirty));
 }
 
@@ -151,22 +151,22 @@ async fn demo_media_first_apply_fails() {
 }
 
 #[tokio::test]
-async fn demo_apollo_resend_after_online() {
+async fn demo_laptop_2_resend_after_online() {
     let d = start().await;
     let s = snapshot(&d).await;
-    assert_eq!(host(&s, "apollo").online, OnlineState::Off);
-    let body = apply(&d, "apollo").await;
+    assert_eq!(host(&s, "laptop-2").online, OnlineState::Off);
+    let body = apply(&d, "laptop-2").await;
     assert_eq!(body["agent_status"], "unreachable", "{body}");
-    let s = wait_for(&d, 20, "apollo ok", |s| {
-        last_state(s, "apollo") == Some(ApplyState::Ok)
+    let s = wait_for(&d, 20, "laptop-2 ok", |s| {
+        last_state(s, "laptop-2") == Some(ApplyState::Ok)
     })
     .await;
-    let a = host(&s, "apollo").last_apply.clone().unwrap();
+    let a = host(&s, "laptop-2").last_apply.clone().unwrap();
     assert_eq!(
         Some(a.apply_id),
         body["apply_id"].as_str().map(String::from)
     );
-    assert_eq!(host(&s, "apollo").running, Some(a.commit));
+    assert_eq!(host(&s, "laptop-2").running, Some(a.commit));
 }
 
 #[tokio::test]

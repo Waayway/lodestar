@@ -165,7 +165,7 @@ fn activation(line: u64) -> ActivationEvent {
         revision: OLD.into(),
         generation: Some(line),
         trigger: "manual".into(),
-        sudo_user: Some("thijs".into()),
+        sudo_user: Some("alice".into()),
     }
 }
 

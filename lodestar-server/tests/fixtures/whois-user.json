@@ -7,8 +7,8 @@
   },
   "UserProfile": {
     "ID": 42,
-    "LoginName": "Waayway@github",
-    "DisplayName": "Thijs van Waaij"
+    "LoginName": "alice@example.com",
+    "DisplayName": "Alice"
   },
   "CapMap": {}
 }

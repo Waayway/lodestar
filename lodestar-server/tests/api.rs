@@ -594,7 +594,7 @@ async fn access_denied_on_api_ws_and_static() {
     let agent = fake_agent(fake.clone()).await;
     // StaticOnline has no whois identities, so Tailscale access control denies everyone.
     let access = AccessConfig::Tailscale {
-        allowed_users: vec!["Waayway@github".into()],
+        allowed_users: vec!["alice@example.com".into()],
         allowed_tags: vec!["tag:lodestar".into()],
     };
     let e = env_with_access(

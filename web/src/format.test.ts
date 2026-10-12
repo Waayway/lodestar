@@ -7,7 +7,7 @@ const REV = "0123456789abcdef0123456789abcdef01234567";
 
 function host(over: Partial<HostView>): HostView {
   return {
-    name: "hermes",
+    name: "desktop",
     os: "nixos",
     channel: "unstable",
     online: "on",

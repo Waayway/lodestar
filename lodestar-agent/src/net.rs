@@ -84,15 +84,15 @@ mod tests {
 
     #[test]
     fn manager_addrs_adds_own_tailscale_addrs_when_manager_is_this_host() {
-        let own: Vec<IpAddr> = vec!["100.92.102.84".parse().unwrap()];
+        let own: Vec<IpAddr> = vec!["100.64.0.10".parse().unwrap()];
         let got = manager_addrs(vec!["127.0.0.2".parse().unwrap()], &own);
-        assert!(got.contains(&"100.92.102.84".parse().unwrap()));
+        assert!(got.contains(&"100.64.0.10".parse().unwrap()));
     }
 
     #[test]
     fn manager_addrs_unchanged_for_a_remote_manager() {
         let own: Vec<IpAddr> = vec!["100.95.164.9".parse().unwrap()];
-        let remote: IpAddr = "100.92.102.84".parse().unwrap();
+        let remote: IpAddr = "100.64.0.10".parse().unwrap();
         assert_eq!(manager_addrs(vec![remote], &own), vec![remote]);
     }
 }

@@ -23,13 +23,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Runs the fleet server.
+    /// Runs the Lodestar server.
     Serve {
         /// Server configuration (JSON).
         #[arg(long)]
         config: PathBuf,
     },
-    /// Runs the real server and dashboard against a simulated fleet.
+    /// Runs the real server and dashboard against simulated hosts.
     Demo {
         /// Dashboard address. Access control is off in demo mode.
         #[arg(long, default_value = "127.0.0.1:8080")]

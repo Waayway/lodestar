@@ -18,7 +18,7 @@ export function HostTable({
   if (hosts.length === 0) {
     return (
       <p className="text-muted-foreground rounded-lg border border-dashed py-12 text-center text-sm">
-        No hosts in the fleet yet.
+        No hosts yet.
       </p>
     );
   }

@@ -1,5 +1,10 @@
 # Fleet manager: dashboard + push agent (design)
 
+> **Historical.** Written for `Waayway/nixos-config`, where Lodestar was built as the
+> "fleet manager" (`pkgs/fleet`, `modules/fleet`, host attributes `fleet` and `channel`).
+> Names, paths and host names below are from that repository; see `README.md` and
+> `docs/operations.md` for the standalone project.
+
 Date: 2026-10-12. Status: approved, revised after review (see "Review changes").
 
 ## Goal

@@ -1,4 +1,4 @@
-//! HTTP client for the fleet agent API.
+//! HTTP client for the Lodestar agent API.
 //!
 //! `addr` is the agent's `host:port` (see `poller::agent_base`).
 

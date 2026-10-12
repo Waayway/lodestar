@@ -176,6 +176,6 @@
         }
       );
 
-      formatter = forEachSystem ({ pkgs, ... }: pkgs.nixfmt);
+      formatter = forEachSystem ({ pkgs, ... }: pkgs.nixfmt-tree);
     };
 }

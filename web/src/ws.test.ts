@@ -27,7 +27,7 @@ describe("connectFeed access check", () => {
     vi.useFakeTimers();
     FakeSocket.all = [];
     vi.stubGlobal("WebSocket", FakeSocket);
-    vi.stubGlobal("location", { protocol: "http:", host: "fleet.test" });
+    vi.stubGlobal("location", { protocol: "http:", host: "lodestar.test" });
   });
   afterEach(() => {
     vi.useRealTimers();

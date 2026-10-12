@@ -1,4 +1,4 @@
-//! Reads the activation audit file written by the fleet activation snippet.
+//! Reads the activation audit file written by the activation audit hook.
 
 use std::path::Path;
 

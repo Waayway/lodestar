@@ -1,5 +1,10 @@
 # Fleet Manager Implementation Plan
 
+> **Historical.** Written for `Waayway/nixos-config`, where Lodestar was built as the
+> "fleet manager" (`pkgs/fleet`, `modules/fleet`, host attributes `fleet` and `channel`).
+> Names, paths and host names below are from that repository; see `README.md` and
+> `docs/operations.md` for the standalone project.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Rust fleet server (dashboard on nixos-manager) and a Rust agent on every NixOS/nix-darwin host. The server shows which commit each host runs and, on a button press, pushes "go to commit X and switch" to the agents.

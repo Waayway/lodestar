@@ -188,7 +188,7 @@ export function App() {
       <div className="min-h-dvh">
         {snap?.demo && (
           <div className="bg-demo text-demo-foreground border-b border-demo-foreground/15 px-4 py-1.5 text-center text-xs font-medium tracking-wide">
-            Demo · simulated fleet. Nothing here touches a real machine.
+            Demo · simulated hosts. Nothing here touches a real machine.
           </div>
         )}
         <header className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-4 gap-y-1 px-4 pt-5 pb-3 sm:px-6">
@@ -211,12 +211,12 @@ export function App() {
             <div className="py-16 text-center">
               <p className="text-sm font-medium">You don't have access to this dashboard</p>
               <p className="text-muted-foreground mt-1 text-sm">
-                The Lodestar server only lets in the owner's Tailscale login and tagged fleet devices.
+                The Lodestar server only lets in its allowed Tailscale users and tagged devices.
               </p>
             </div>
           ) : snap === null ? (
             <p className="text-muted-foreground py-16 text-center text-sm">
-              {feed.kind === "waiting" ? "Can't reach the Lodestar server. Retrying." : "Loading fleet"}
+              {feed.kind === "waiting" ? "Can't reach the Lodestar server. Retrying." : "Loading hosts"}
             </p>
           ) : (
             <>

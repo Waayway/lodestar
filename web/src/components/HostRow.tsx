@@ -251,7 +251,7 @@ function Checkout({ checkout: c, running }: { checkout: CheckoutStatus | null; r
 }
 
 function triggerLabel(e: ActivationEvent): string {
-  if (e.trigger.startsWith("apply:")) return "fleet apply";
+  if (e.trigger.startsWith("apply:")) return "Lodestar apply";
   if (e.trigger === "manual") return e.sudo_user ? `manual (${e.sudo_user})` : "manual";
   return e.trigger;
 }

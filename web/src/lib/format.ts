@@ -1,5 +1,9 @@
 // Labels for the dashboard. Pure functions over the generated bindings; times are unix seconds.
+import type { ActivationEvent } from "@/bindings/ActivationEvent";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
+import type { AuditEvent } from "@/bindings/AuditEvent";
+import type { CheckoutStatus } from "@/bindings/CheckoutStatus";
+import type { PromoteChannels } from "@/bindings/PromoteChannels";
 import type { HostView } from "@/bindings/HostView";
 import type { SkipReason } from "@/bindings/SkipReason";
 import type { AgentStatus } from "@/connection/client";
@@ -20,11 +24,11 @@ export function behindLabel(n: number | null): string {
 export function onlineLabel(h: HostView, now: number): string {
   switch (h.online) {
     case "on":
-      return "on";
+      return "Online";
     case "agent_unreachable":
-      return "on, agent unreachable";
+      return "Agent not answering";
     case "off":
-      return h.last_seen === null ? "off" : `off · last seen ${ago(h.last_seen, now)}`;
+      return h.last_seen === null ? "Off" : `Off · last seen ${ago(h.last_seen, now)}`;
   }
 }
 
@@ -47,56 +51,42 @@ export function skipReasonText(r: SkipReason, flakePath: string | null = null): 
   }
 }
 
-export type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+/** The state an apply is in, as the dashboard colours it (see the state system in the style guide). */
+export type ApplyTone = "ok" | "running" | "skipped" | "failed" | "idle";
 
+/** The text and tone of an apply's status badge. */
 export function applyBadge(
   a: ApplyRecord | null,
   flakePath: string | null = null,
-): { text: string; variant: BadgeVariant } {
-  if (a === null) return { text: "Never applied", variant: "outline" };
+): { text: string; tone: ApplyTone } {
+  if (a === null) return { text: "Never applied", tone: "idle" };
   switch (a.state) {
     case "idle":
-      return { text: "Idle", variant: "outline" };
+      return { text: "Idle", tone: "idle" };
     case "running":
-      return { text: "Applying", variant: "secondary" };
+      return { text: "Applying", tone: "running" };
     case "ok":
-      return { text: "Applied", variant: "default" };
+      return { text: "Applied", tone: "ok" };
     case "skipped":
       return {
         text: a.skip_reason ? `Skipped: ${skipReasonText(a.skip_reason, flakePath)}` : "Skipped",
-        variant: "outline",
+        tone: "skipped",
       };
     case "failed": {
       const what = a.message && /\bbuild\b/i.test(a.message) ? "Build failed" : "Failed";
       const code = a.exit_code !== null && a.exit_code !== 0 ? ` (exit ${a.exit_code})` : "";
-      return { text: what + code, variant: "destructive" };
+      return { text: what + code, tone: "failed" };
     }
   }
 }
 
-/** Semantic tone of a host row: drives the status stripe and badge colours. */
-export type Tone = "ok" | "running" | "skipped" | "failed" | "off" | "warn" | "idle";
-
-export function applyTone(a: ApplyRecord | null): Tone {
-  if (a === null) return "idle";
-  switch (a.state) {
-    case "ok":
-      return "ok";
-    case "running":
-      return "running";
-    case "skipped":
-      return "skipped";
-    case "failed":
-      return "failed";
-    case "idle":
-      return "idle";
-  }
-}
+/** Semantic tone of a host as a whole. */
+export type Tone = ApplyTone | "off" | "warn";
 
 /** The one tone that best describes the host: an off machine or a broken apply wins. */
 export function hostTone(h: HostView): Tone {
   if (h.online === "off") return "off";
-  const t = applyTone(h.last_apply);
+  const t = applyBadge(h.last_apply).tone;
   if (t === "running" || t === "failed" || t === "skipped") return t;
   if (h.online === "agent_unreachable") return "warn";
   return h.behind === 0 ? "ok" : "idle";
@@ -116,4 +106,128 @@ export function agentStatusText(host: string, s: AgentStatus): string | null {
     case "error":
       return `${host}: the agent returned an error`;
   }
+}
+
+/** "1 machine", "3 machines". */
+export function count(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+/** The four numbers at the top of the dashboard. */
+export type FleetCounts = { total: number; upToDate: number; updating: number; attention: number };
+
+/**
+ * Updating: an apply is running. Needs attention: the last apply failed or was skipped, or
+ * the machine is on but its agent does not answer. Up to date: none of those, and running
+ * its channel's newest commit.
+ */
+export function fleetCounts(hosts: HostView[]): FleetCounts {
+  let upToDate = 0;
+  let updating = 0;
+  let attention = 0;
+  for (const h of hosts) {
+    const state = h.last_apply?.state;
+    if (state === "running") updating++;
+    else if (state === "failed" || state === "skipped" || h.online === "agent_unreachable") attention++;
+    else if (h.behind === 0) upToDate++;
+  }
+  return { total: hosts.length, upToDate, updating, attention };
+}
+
+/** A revision without its `-dirty` suffix. */
+export const stripDirty = (rev: string) => rev.replace(/-dirty$/, "");
+
+/** What is notable about a host's checkout; empty when it is clean and running. */
+export function checkoutFlags(
+  c: CheckoutStatus,
+  running: string | null,
+): { text: string; warn: boolean }[] {
+  const flags: { text: string; warn: boolean }[] = [];
+  if (c.dirty) flags.push({ text: "local changes", warn: true });
+  if (c.untracked > 0) flags.push({ text: `${c.untracked} untracked`, warn: false });
+  if (c.ahead !== null && c.ahead > 0) flags.push({ text: `${c.ahead} ahead`, warn: true });
+  if (c.head !== null && running !== null && c.head !== stripDirty(running))
+    flags.push({ text: "checkout is not the running system", warn: true });
+  return flags;
+}
+
+/** Who or what switched the system, for an activation. */
+export function triggerLabel(e: Pick<ActivationEvent, "trigger" | "sudo_user">): string {
+  if (e.trigger.startsWith("apply:")) return "Lodestar apply";
+  if (e.trigger === "manual") return e.sudo_user ? `manual (${e.sudo_user})` : "manual";
+  return e.trigger;
+}
+
+/** What an audit row shows: which icon, a line of text, and a quieter line under it. */
+export type AuditLine = {
+  icon: "apply" | "applied" | "failed" | "skipped" | "activation" | "promote" | "other";
+  title: string;
+  meta: string;
+};
+
+const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+
+export function auditLine(e: AuditEvent): AuditLine {
+  const d = (e.details !== null && typeof e.details === "object" && !Array.isArray(e.details)
+    ? e.details
+    : {}) as Record<string, unknown>;
+  const host = e.host ?? "?";
+  switch (e.kind) {
+    case "apply_requested": {
+      const commit = str(d.commit);
+      return {
+        icon: "apply",
+        title: `Apply newest on ${host}`,
+        meta: commit ? `${e.actor} · ${shortRev(commit)}` : e.actor,
+      };
+    }
+    case "apply_finished": {
+      const rec = d as unknown as ApplyRecord;
+      const b = applyBadge(typeof rec.state === "string" ? rec : null);
+      const icon = b.tone === "ok" ? "applied" : b.tone === "failed" ? "failed" : b.tone === "skipped" ? "skipped" : "other";
+      const commit = str(rec.commit);
+      return { icon, title: `${host} · ${b.text}`, meta: commit ? `apply · ${shortRev(commit)}` : "apply" };
+    }
+    case "activation": {
+      const trigger = str(d.trigger) ?? "";
+      const rev = str(d.revision);
+      if (trigger.startsWith("apply:"))
+        return { icon: "applied", title: `${host} switched to ${rev ? shortRev(rev) : "a new system"}`, meta: "activation · apply" };
+      const who = str(d.sudo_user);
+      return {
+        icon: "activation",
+        title: trigger === "manual" ? `${host} switched by hand` : `${host} switched to ${rev ? shortRev(rev) : "a new system"}`,
+        meta: ["activation", trigger || null, who].filter((x): x is string => !!x).join(" · "),
+      };
+    }
+    case "promote": {
+      const commit = str(d.commit);
+      const channel = str(d.channel) ?? "channel";
+      return { icon: "promote", title: `${channel} moved to ${commit ? shortRev(commit) : "?"}`, meta: `promote · ${e.actor}` };
+    }
+    default:
+      return { icon: "other", title: e.host ? `${e.kind} on ${e.host}` : e.kind, meta: e.actor };
+  }
+}
+
+/** How a channel is drawn: the promote target as `stable`, its source as `unstable`. */
+export type ChannelRole = "stable" | "unstable" | "other";
+
+export function channelRole(name: string, promote: PromoteChannels | null): ChannelRole {
+  if (promote) return name === promote.to ? "stable" : name === promote.from ? "unstable" : "other";
+  return name === "stable" ? "stable" : name === "unstable" ? "unstable" : "other";
+}
+
+/** Which brand mark an agent's `os` gets (NixOS for Linux hosts, which Lodestar runs on). */
+export function osBrand(os: string): "nixos" | "apple" | null {
+  const o = os.toLowerCase();
+  if (o === "nixos" || o === "linux") return "nixos";
+  if (o === "darwin" || o === "macos") return "apple";
+  return null;
+}
+
+/** "NixOS", "macOS", or the agent's own word. */
+export function osLabel(os: string): string {
+  const b = osBrand(os);
+  return b === "nixos" ? "NixOS" : b === "apple" ? "macOS" : os;
 }

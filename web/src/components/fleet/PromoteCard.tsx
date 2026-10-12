@@ -1,6 +1,7 @@
 import { useState } from "preact/hooks";
 import type { ChannelView } from "@/bindings/ChannelView";
 import type { PromoteChannels } from "@/bindings/PromoteChannels";
+import { CommitHash } from "@/components/fleet/CommitHash";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,19 +14,43 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useActions } from "@/connection/hooks";
+import { Promote } from "@/icons";
 import { shortRev } from "@/lib/format";
 
-/**
- * "Promote from → to" (by default unstable → stable): fast-forwards `to` to `commit` after a
- * confirmation. The commit is fixed when the dialog opens, so a commit landing on `from`
- * meanwhile can't change what the confirmation promotes.
- */
-export function PromoteDialog({
-  commit: candidate,
+/** Between the two channel cards: what can be promoted, and the button that asks first. */
+export function PromoteCard({
+  candidate,
   pair,
   channels,
 }: {
-  commit: string;
+  /** The commit on `pair.from` that `pair.to` can fast-forward to. */
+  candidate: string;
+  pair: PromoteChannels;
+  channels: ChannelView[];
+}) {
+  return (
+    <div className="border-accent-line bg-panel text-accent flex min-w-[170px] flex-col items-center justify-center gap-2 rounded-md border p-3 text-center">
+      <Promote aria-hidden="true" className="size-[22px]" />
+      <strong className="text-fg">Ready to promote</strong>
+      <small className="text-muted text-xs">
+        <span className="font-mono">{pair.from}</span> → <span className="font-mono">{pair.to}</span>
+      </small>
+      <PromoteDialog candidate={candidate} pair={pair} channels={channels} />
+    </div>
+  );
+}
+
+/**
+ * "Promote from → to": fast-forwards `to` to the candidate after a confirmation. The commit
+ * is fixed when the dialog opens, so a commit landing on `from` meanwhile can't change what
+ * the confirmation promotes.
+ */
+export function PromoteDialog({
+  candidate,
+  pair,
+  channels,
+}: {
+  candidate: string;
   pair: PromoteChannels;
   channels: ChannelView[];
 }) {
@@ -56,9 +81,7 @@ export function PromoteDialog({
       }}
     >
       <DialogTrigger asChild>
-        <Button size="sm" className="self-start">
-          Promote {pair.from} → {pair.to}
-        </Button>
+        <Button size="sm">Promote {shortRev(candidate)}</Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
@@ -70,13 +93,13 @@ export function PromoteDialog({
             it. Hosts on {pair.to} change only when you apply.
           </DialogDescription>
         </DialogHeader>
-        <div className="bg-muted/50 rounded-md border p-3 text-sm">
+        <div className="border-line bg-bg rounded-sm border p-3">
           <div className="flex items-baseline gap-2">
-            <span className="font-mono font-semibold">{shortRev(shown)}</span>
+            <CommitHash rev={shown} className="font-semibold" />
             <span className="min-w-0 break-words">{subject ?? "(subject unavailable)"}</span>
           </div>
           {targetHead && (
-            <div className="text-muted-foreground mt-1 text-xs">
+            <div className="text-muted mt-1 text-xs">
               {pair.to} is now at <span className="font-mono">{shortRev(targetHead)}</span>
             </div>
           )}

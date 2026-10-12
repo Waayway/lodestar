@@ -1,88 +1,117 @@
-import { useEffect, useState } from "preact/hooks";
-import { ApplyLogSheet } from "@/components/ApplyLogSheet";
-import { ChannelBar } from "@/components/ChannelBar";
-import { HostTable } from "@/components/HostTable";
-import type { FeedStatus } from "@/connection/feed";
-import { useFleet } from "@/connection/hooks";
+import { ApplyLogSheet } from "@/components/fleet/ApplyLogSheet";
+import { AuditList } from "@/components/fleet/AuditList";
+import { ChannelCard } from "@/components/fleet/ChannelCard";
+import { HostTable } from "@/components/fleet/HostTable";
+import { PromoteCard } from "@/components/fleet/PromoteCard";
+import { StatTile } from "@/components/fleet/StatTile";
+import { EmptyState } from "@/components/layout/EmptyState";
+import { ErrorState } from "@/components/layout/ErrorState";
+import { DemoBanner, PageHeader } from "@/components/layout/PageHeader";
+import { Section } from "@/components/layout/Section";
+import { useAudit, useFleet } from "@/connection/hooks";
+import { Applied, Attention, Audit, Building, Channel, Disconnected, Forbidden, Machines } from "@/icons";
 import { cn } from "@/lib/cn";
+import { channelRole, fleetCounts } from "@/lib/format";
 import { useNow } from "@/lib/time";
+import type { Snapshot } from "@/bindings/Snapshot";
 
 /** The dashboard: composes the sections; data comes from `connection/hooks`. */
 export function DashboardPage() {
   const { snapshot: snap, feed } = useFleet();
+  const audit = useAudit();
   const now = useNow(15_000);
   return (
     <>
-      <div className="min-h-dvh">
-        {snap?.demo && (
-          <div className="bg-demo text-demo-foreground border-b border-demo-foreground/15 px-4 py-1.5 text-center text-xs font-medium tracking-wide">
-            Demo · simulated hosts. Nothing here touches a real machine.
-          </div>
-        )}
-        <header className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-4 gap-y-1 px-4 pt-5 pb-3 sm:px-6">
-          <h1 className="flex items-baseline gap-2 text-lg font-semibold tracking-tight">
-            <span className="font-mono">lodestar</span>
-            {snap && (
-              <span className="text-muted-foreground text-sm font-normal">
-                {snap.hosts.length} {snap.hosts.length === 1 ? "host" : "hosts"}
-              </span>
-            )}
-          </h1>
-          <div className="text-muted-foreground ml-auto flex items-center gap-4 text-xs">
-            {snap && <span>Signed in as {snap.viewer}</span>}
-            <FeedIndicator feed={feed} />
-          </div>
-        </header>
-
-        <main className="mx-auto flex max-w-[1400px] flex-col gap-4 px-4 pb-10 sm:px-6">
-          {feed.kind === "forbidden" ? (
-            <div className="py-16 text-center">
-              <p className="text-sm font-medium">You don't have access to this dashboard</p>
-              <p className="text-muted-foreground mt-1 text-sm">
+      {snap?.demo && <DemoBanner />}
+      <div className="px-[clamp(16px,4vw,48px)] pt-7 pb-12">
+        <div className="mx-auto flex max-w-[1240px] min-w-0 flex-col gap-[22px]">
+          <PageHeader feed={feed} viewer={snap?.viewer ?? null} hostCount={snap?.hosts.length ?? null} />
+          <main className="flex min-w-0 flex-col gap-[22px]">
+            {feed.kind === "forbidden" ? (
+              <ErrorState icon={Forbidden} title="You don't have access to this dashboard">
                 The Lodestar server only lets in its allowed Tailscale users and tagged devices.
-              </p>
-            </div>
-          ) : snap === null ? (
-            <p className="text-muted-foreground py-16 text-center text-sm">
-              {feed.kind === "waiting" ? "Can't reach the Lodestar server. Retrying." : "Loading hosts"}
-            </p>
-          ) : (
-            <>
-              <ChannelBar snapshot={snap} />
-              <HostTable hosts={snap.hosts} now={now} />
-            </>
-          )}
-        </main>
+              </ErrorState>
+            ) : snap === null ? (
+              feed.kind === "waiting" ? (
+                <ErrorState icon={Disconnected} title="Can't reach the Lodestar server. Retrying." />
+              ) : (
+                <EmptyState title="Loading hosts" />
+              )
+            ) : (
+              <>
+                <Stats snap={snap} />
+                <Channels snap={snap} />
+                <Section title="Machines" icon={Machines}>
+                  <HostTable hosts={snap.hosts} now={now} promote={snap.promote} />
+                </Section>
+                <Section title="Audit" icon={Audit}>
+                  <AuditList events={audit} now={now} />
+                </Section>
+              </>
+            )}
+          </main>
+        </div>
       </div>
       <ApplyLogSheet now={now} />
     </>
   );
 }
 
-function FeedIndicator({ feed }: { feed: FeedStatus }) {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (feed.kind !== "waiting") return;
-    const t = setInterval(() => tick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, [feed]);
-  const label =
-    feed.kind === "live"
-      ? "Live"
-      : feed.kind === "connecting"
-        ? "Connecting"
-        : feed.kind === "forbidden"
-          ? "No access"
-          : `Disconnected · retry in ${Math.max(0, Math.ceil((feed.retryAt - Date.now()) / 1000))}s`;
+function Stats({ snap }: { snap: Snapshot }) {
+  const c = fleetCounts(snap.hosts);
   return (
-    <span className="flex items-center gap-1.5" role="status">
-      <span
+    <section aria-label="Fleet summary" className="grid grid-cols-2 gap-3 min-[900px]:grid-cols-4">
+      <StatTile icon={Machines} tone="accent" value={c.total} label={c.total === 1 ? "machine" : "machines"} />
+      <StatTile icon={Applied} tone="ok" value={c.upToDate} label="up to date" />
+      <StatTile icon={Building} tone="running" value={c.updating} label="updating" spin={c.updating > 0} />
+      <StatTile icon={Attention} tone="bad" value={c.attention} label="need attention" />
+    </section>
+  );
+}
+
+/** Channel cards, with the promote card between the promote pair when there is a candidate. */
+function Channels({ snap }: { snap: Snapshot }) {
+  const pair = snap.promote;
+  const showPromote = snap.promote_candidate !== null && pair !== null;
+  const from = pair && snap.channels.find((c) => c.name === pair.from);
+  const to = pair && snap.channels.find((c) => c.name === pair.to);
+  const between = showPromote && from && to;
+  const rest = between ? snap.channels.filter((c) => c !== from && c !== to) : snap.channels;
+  const card = (c: (typeof snap.channels)[number]) => (
+    <ChannelCard
+      key={c.name}
+      channel={c}
+      hosts={snap.hosts.filter((h) => h.channel === c.name)}
+      role={channelRole(c.name, pair)}
+    />
+  );
+  const promoteCard = showPromote && (
+    <PromoteCard candidate={snap.promote_candidate!} pair={pair!} channels={snap.channels} />
+  );
+  return (
+    <Section title="Channels" icon={Channel}>
+      <div
         className={cn(
-          "size-2 rounded-full",
-          feed.kind === "live" ? "bg-ok" : feed.kind === "connecting" ? "bg-running animate-pulse" : "bg-failed",
+          "grid grid-cols-1 items-stretch gap-3",
+          between && rest.length === 0
+            ? "min-[900px]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
+            : "min-[900px]:grid-cols-[repeat(auto-fit,minmax(280px,1fr))]",
         )}
-      />
-      {label}
-    </span>
+      >
+        {between ? (
+          <>
+            {card(from)}
+            {promoteCard}
+            {card(to)}
+            {rest.map(card)}
+          </>
+        ) : (
+          <>
+            {snap.channels.map(card)}
+            {promoteCard}
+          </>
+        )}
+      </div>
+    </Section>
   );
 }

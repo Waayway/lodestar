@@ -72,7 +72,8 @@ Agent (every enrolled host):
   the store on activation when the package changed (`bin/.lodestar-agent.source`
   holds the store path it came from); the daemon and the apply wrapper run it
 - darwin signing: `/var/lib/lodestar-agent/signing/` (`key.pem`, `cert.pem`,
-  `cert.sha1`; root, 0700); check with
+  `cert.sha1`; root, 0700; with `macos.stableSigning.certificate` the key is
+  placed with `sudo lodestar-agent-signing-key < key.pem`); check with
   `codesign -dr - /var/lib/lodestar-agent/bin/lodestar-agent`
 - NixOS: `systemctl status lodestar-agent`, applies run as transient units
   `lodestar-apply-<id>` (`journalctl -u 'lodestar-apply-*'`)
@@ -104,7 +105,9 @@ dashboard's audit log, with `SUDO_USER` for manual switches.
   `codesign -dr - /var/lib/lodestar-agent/bin/lodestar-agent` shows
   `identifier "org.lodestar.agent" and certificate leaf = H"..."` (not ad-hoc)
   and look for `lodestar-agent: warning:` lines in the switch output. To start
-  over with a new certificate: `sudo rm -rf /var/lib/lodestar-agent/signing`,
+  over with a new certificate (only without `macos.stableSigning.certificate`;
+  with it, a missing key is reported as `no signing key`):
+  `sudo rm -rf /var/lib/lodestar-agent/signing`,
   switch, `sudo launchctl kickstart -k system/org.lodestar.agent`, and allow the
   prompts once more (old entries in System Settings → Privacy & Security can be
   removed). Automatic granting needs an MDM PPPC profile (not supported).

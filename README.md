@@ -151,6 +151,7 @@ nix-darwin only:
 | Option | Default | |
 |---|---|---|
 | `macos.stableSigning.enable` | `true` | sign `binaryPath` with a local certificate so macOS permissions survive updates (see below) |
+| `macos.stableSigning.certificate` | `null` | PEM certificate shared by all Macs; its key is placed once per Mac (see below). Null: each Mac makes its own |
 | `macos.stableSigning.directory` | `/var/lib/lodestar-agent/signing` | root-only key and certificate |
 | `macos.firewall.enable` | `true` | when the macOS firewall is on, allow incoming connections for `binaryPath` |
 
@@ -184,7 +185,7 @@ asks whether *lodestar-agent* may do that. A store build is ad-hoc signed and
 macOS knows it only by its hash, so every new build would ask again.
 
 On nix-darwin the module therefore copies the agent to `binaryPath` and signs
-the copy with a self-signed certificate that is created once on each Mac (in
+the copy with a self-signed certificate (key in
 `/var/lib/lodestar-agent/signing`, root only, never in the System or login
 keychain, never in git). Its designated requirement is
 `identifier "org.lodestar.agent" and certificate leaf = H"<sha1>"`, the same
@@ -198,7 +199,14 @@ for every build, so:
   prompt.
 - If signing fails the switch still succeeds: the agent runs ad-hoc signed and
   the activation prints a warning.
-- New certificate: `sudo rm -rf /var/lib/lodestar-agent/signing`, switch, then
+- One key for all Macs (recommended): set `macos.stableSigning.certificate` to
+  the PEM certificate (public, fine in git) and keep the private key in a
+  password manager. On each Mac, once: `sudo lodestar-agent-signing-key <
+  key.pem` (for example `op document get "Lodestar Agent Signing Key" | sudo
+  lodestar-agent-signing-key`), then switch. The module never creates a key
+  then; without the key it warns and the agent stays ad-hoc signed.
+- Without `certificate`, each Mac creates its own on first activation. New
+  certificate: `sudo rm -rf /var/lib/lodestar-agent/signing`, switch, then
   `sudo launchctl kickstart -k system/org.lodestar.agent`; macOS asks once more.
 - Granting without any click needs an MDM (PPPC profile); that is out of scope.
 

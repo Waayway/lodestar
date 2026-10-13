@@ -16,7 +16,8 @@
   lib,
   source,
   binaryPath,
-  # Darwin only: { sign = bool; dir = signing state dir; firewall = bool; }.
+  # Darwin only: { sign = bool; dir = signing state dir; certificate = PEM text or
+  # null; firewall = bool; }.
   darwin ? null,
 }:
 let
@@ -45,6 +46,8 @@ let
   new = "${dir}/.lodestar-agent.new";
 
   sign = darwin != null && darwin.sign;
+  certificate = if sign then darwin.certificate or null else null;
+  certificateFile = pkgs.writeText "lodestar-agent-signing.pem" certificate;
   firewall = darwin != null && darwin.firewall;
 
   # Darwin: ensure_identity, signed_ok, sign_file.
@@ -52,25 +55,45 @@ let
     signing_dir=${lib.escapeShellArg darwin.dir}
     sha1=""
 
-    # Creates the key and certificate once; sets sha1. Returns non-zero on failure.
+    # Sets sha1 from the configured certificate (and a key placed for it), or creates
+    # a key and certificate once. Returns non-zero on failure.
     ensure_identity() {
-      if [ ! -s "$signing_dir/key.pem" ] || [ ! -s "$signing_dir/cert.pem" ]; then
-        echo "lodestar-agent: creating the local code-signing certificate in $signing_dir" >&2
-        (
-          umask 077
-          ${bin.mkdir} -p "$signing_dir" &&
-            ${bin.chmod} 0700 "$signing_dir" &&
-            ${bin.rm} -f "$signing_dir/key.pem.new" "$signing_dir/cert.pem.new" &&
-            ${bin.openssl} req -x509 -newkey rsa:2048 -nodes -days 36500 \
-              -subj "/CN=Lodestar Agent Code Signing" \
-              -addext "keyUsage=critical,digitalSignature" \
-              -addext "extendedKeyUsage=critical,codeSigning" \
-              -addext "basicConstraints=critical,CA:false" \
-              -keyout "$signing_dir/key.pem.new" -out "$signing_dir/cert.pem.new" 2>/dev/null &&
-            ${bin.mv} -f "$signing_dir/key.pem.new" "$signing_dir/key.pem" &&
-            ${bin.mv} -f "$signing_dir/cert.pem.new" "$signing_dir/cert.pem"
-        ) || return 1
-      fi
+      ${
+        if certificate != null then
+          ''
+            ${bin.mkdir} -p "$signing_dir" && ${bin.chmod} 0700 "$signing_dir" || return 1
+            if [ ! -s "$signing_dir/key.pem" ]; then
+              echo "lodestar-agent: no signing key in $signing_dir; place it once with: <key.pem sudo lodestar-agent-signing-key" >&2
+              return 1
+            fi
+            if [ "$(${bin.openssl} x509 -in ${certificateFile} -noout -pubkey)" != \
+              "$(${bin.openssl} pkey -in "$signing_dir/key.pem" -pubout 2>/dev/null)" ]; then
+              echo "lodestar-agent: $signing_dir/key.pem does not belong to the configured certificate" >&2
+              return 1
+            fi
+            ${bin.cat} ${certificateFile} > "$signing_dir/cert.pem" || return 1
+          ''
+        else
+          ''
+            if [ ! -s "$signing_dir/key.pem" ] || [ ! -s "$signing_dir/cert.pem" ]; then
+              echo "lodestar-agent: creating the local code-signing certificate in $signing_dir" >&2
+              (
+                umask 077
+                ${bin.mkdir} -p "$signing_dir" &&
+                  ${bin.chmod} 0700 "$signing_dir" &&
+                  ${bin.rm} -f "$signing_dir/key.pem.new" "$signing_dir/cert.pem.new" &&
+                  ${bin.openssl} req -x509 -newkey rsa:2048 -nodes -days 36500 \
+                    -subj "/CN=Lodestar Agent Code Signing" \
+                    -addext "keyUsage=critical,digitalSignature" \
+                    -addext "extendedKeyUsage=critical,codeSigning" \
+                    -addext "basicConstraints=critical,CA:false" \
+                    -keyout "$signing_dir/key.pem.new" -out "$signing_dir/cert.pem.new" 2>/dev/null &&
+                  ${bin.mv} -f "$signing_dir/key.pem.new" "$signing_dir/key.pem" &&
+                  ${bin.mv} -f "$signing_dir/cert.pem.new" "$signing_dir/cert.pem"
+              ) || return 1
+            fi
+          ''
+      }
       ${bin.chmod} 0700 "$signing_dir" || return 1
       sha1="$(${bin.openssl} x509 -in "$signing_dir/cert.pem" -noout -fingerprint -sha1 |
         ${bin.sed} 's/.*=//; s/://g' | ${bin.tr} -d '[:space:]')" || return 1

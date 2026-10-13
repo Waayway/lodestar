@@ -14,6 +14,35 @@ let
   inherit (lib) mkOption types;
   daemonPath = "/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/usr/bin:/bin:/usr/sbin:/sbin";
   log = "/var/log/lodestar-agent.log";
+  signing = cfg.macos.stableSigning;
+
+  # Installs the private key for `certificate` from stdin, after checking it matches.
+  signingKeyTool = pkgs.writeShellApplication {
+    name = "lodestar-agent-signing-key";
+    runtimeInputs = [
+      pkgs.coreutils
+      (lib.getBin pkgs.openssl)
+    ];
+    text = ''
+      if [ "$(id -u)" != 0 ]; then
+        echo "usage: sudo lodestar-agent-signing-key < key.pem" >&2
+        exit 1
+      fi
+      dir=${lib.escapeShellArg signing.directory}
+      umask 077
+      mkdir -p "$dir"
+      chmod 0700 "$dir"
+      cat > "$dir/key.pem.new"
+      if [ "$(openssl x509 -in ${pkgs.writeText "lodestar-agent-signing.pem" signing.certificate} -noout -pubkey)" != \
+        "$(openssl pkey -in "$dir/key.pem.new" -pubout 2>/dev/null)" ]; then
+        rm -f "$dir/key.pem.new"
+        echo "lodestar-agent-signing-key: this key does not belong to the configured certificate" >&2
+        exit 1
+      fi
+      mv -f "$dir/key.pem.new" "$dir/key.pem"
+      echo "installed $dir/key.pem; switch (or activate) to sign the agent with it" >&2
+    '';
+  };
 in
 {
   imports = [
@@ -36,13 +65,27 @@ in
         '';
       };
 
+      certificate = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = lib.literalExpression "builtins.readFile ./lodestar-agent-signing.pem";
+        description = ''
+          PEM certificate to sign with on every Mac, so all of them share one code
+          identity. Its private key is not in the configuration: place it once per Mac
+          with `sudo lodestar-agent-signing-key < key.pem` (it lands in `directory`).
+          Until then the agent stays ad-hoc signed and activation warns. Null: each Mac
+          creates its own key and certificate on first activation.
+        '';
+      };
+
       directory = mkOption {
         type = types.str;
         default = "/var/lib/lodestar-agent/signing";
         description = ''
           Root-only (0700) directory with the signing key and certificate (`key.pem`,
-          `cert.pem`, `cert.sha1`), created on first activation. Remove it and switch to
-          get a new certificate (macOS asks for the permissions once more).
+          `cert.pem`, `cert.sha1`). Without `certificate` they are created on first
+          activation; remove the directory and switch to get a new certificate (macOS
+          asks for the permissions once more).
         '';
       };
     };
@@ -58,6 +101,10 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    environment.systemPackages = lib.mkIf (signing.enable && signing.certificate != null) [
+      signingKeyTool
+    ];
+
     launchd.daemons.lodestar-agent.serviceConfig = {
       Label = "org.lodestar.agent";
       ProgramArguments = [
@@ -95,6 +142,7 @@ in
         darwin = {
           sign = cfg.macos.stableSigning.enable;
           dir = cfg.macos.stableSigning.directory;
+          inherit (cfg.macos.stableSigning) certificate;
           firewall = cfg.macos.firewall.enable;
         };
       }

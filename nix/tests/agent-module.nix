@@ -88,6 +88,9 @@ let
     services.lodestar-agent.macos.stableSigning.enable = false;
     services.lodestar-agent.macos.firewall.enable = false;
   };
+  shared = evalDarwin {
+    services.lodestar-agent.macos.stableSigning.certificate = "-----BEGIN CERTIFICATE-----\n";
+  };
   custom = evalDarwin { services.lodestar-agent.binaryPath = "/opt/lodestar/agent"; };
 
   programOf =
@@ -140,6 +143,19 @@ let
         && has "/var/lib/lodestar-agent/bin/lodestar-agent" (scriptOf unsigned);
       what = "stableSigning and firewall off: the snippet only copies";
     }
+    {
+      ok =
+        has "openssl pkey" (scriptOf shared)
+        && !(has "req -x509" (scriptOf shared))
+        && has "req -x509" (scriptOf signed);
+      what = "with a certificate the snippet checks the placed key and never creates one";
+    }
+    {
+      ok =
+        lib.elem "lodestar-agent-signing-key" (map lib.getName shared.environment.systemPackages)
+        && !(lib.elem "lodestar-agent-signing-key" (map lib.getName signed.environment.systemPackages));
+      what = "the signing-key tool is installed only with a certificate";
+    }
   ];
 
   failed = builtins.filter (check: !check.ok) checks;
@@ -161,6 +177,13 @@ pkgs.runCommand "lodestar-agent-module"
   ''
     shellcheck -s bash ${snippet "darwin-signed" (scriptOf signed)}
     shellcheck -s bash ${snippet "darwin-unsigned" (scriptOf unsigned)}
+    shellcheck -s bash ${snippet "darwin-shared" (scriptOf shared)}
+    # writeShellApplication shellchecks the tool when it builds.
+    test -x ${
+      lib.findFirst (
+        p: lib.getName p == "lodestar-agent-signing-key"
+      ) null shared.environment.systemPackages
+    }/bin/lodestar-agent-signing-key
     shellcheck -s bash ${snippet "nixos" linuxSnippet}
     touch $out
   ''

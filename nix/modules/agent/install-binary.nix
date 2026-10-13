@@ -112,11 +112,17 @@ let
 
     # Signs $1 in place with a throwaway keychain.
     sign_file() {
-      local work password keychain status
+      local work password keychain status line
+      local -a searchlist=()
       work="$(${bin.mktemp} -d "$signing_dir/sign.XXXXXX")" || return 1
       password="$(${bin.openssl} rand -hex 32)" || { ${bin.rm} -rf "$work"; return 1; }
       keychain="$work/sign.keychain-db"
       status=0
+      # codesign before macOS 27 finds no identity in a keychain outside the search
+      # list, even with --keychain: add it for the signing only, then restore the list.
+      while IFS= read -r line; do
+        [ -n "$line" ] && searchlist+=("$line")
+      done < <(${bin.security} list-keychains -d user | ${bin.sed} 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
       # 3DES and a SHA-1 MAC: `security import` before macOS 27 rejects OpenSSL 3's
       # default (AES-256, SHA-256 MAC) as a wrong password.
       LODESTAR_P12_PASS="$password" ${bin.openssl} pkcs12 -export \
@@ -130,9 +136,11 @@ let
           -f pkcs12 -T ${bin.codesign} >/dev/null &&
         ${bin.security} set-key-partition-list -S apple-tool:,apple: -s -k "$password" \
           "$keychain" >/dev/null &&
+        ${bin.security} list-keychains -d user -s "$keychain" "''${searchlist[@]}" &&
         ${bin.codesign} --force --keychain "$keychain" -s "$sha1" -i ${identifier} \
           -r="designated => $(requirement)" "$1" ||
         status=1
+      ${bin.security} list-keychains -d user -s "''${searchlist[@]}" >/dev/null 2>&1 || true
       ${bin.security} delete-keychain "$keychain" >/dev/null 2>&1 || true
       ${bin.rm} -rf "$work"
       return "$status"

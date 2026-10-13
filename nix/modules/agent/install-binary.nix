@@ -117,7 +117,10 @@ let
       password="$(${bin.openssl} rand -hex 32)" || { ${bin.rm} -rf "$work"; return 1; }
       keychain="$work/sign.keychain-db"
       status=0
+      # 3DES and a SHA-1 MAC: `security import` before macOS 27 rejects OpenSSL 3's
+      # default (AES-256, SHA-256 MAC) as a wrong password.
       LODESTAR_P12_PASS="$password" ${bin.openssl} pkcs12 -export \
+          -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
           -inkey "$signing_dir/key.pem" -in "$signing_dir/cert.pem" -name lodestar-agent \
           -passout env:LODESTAR_P12_PASS -out "$work/identity.p12" &&
         ${bin.security} create-keychain -p "$password" "$keychain" &&

@@ -80,9 +80,11 @@ in
       default = null;
       description = ''
         SSH key with write access to `pushUrl` (needed for promote); a path outside the
-        Nix store, readable by the `lodestar-server` user, e.g. with sops-nix
-        `sops.secrets.<name> = { owner = "lodestar-server"; mode = "0400"; };` and
-        `deployKeyFile = config.sops.secrets.<name>.path;`.
+        Nix store, readable by the `lodestar-server` user, from a secrets module such
+        as opnix (`services.onepassword-secrets.secrets.<name> = { reference = "op://…";
+        owner = "lodestar-server"; mode = "0400"; };` and
+        `deployKeyFile = config.services.onepassword-secrets.secretPaths.<name>;`) or
+        sops-nix (`config.sops.secrets.<name>.path`).
       '';
     };
 

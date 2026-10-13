@@ -162,7 +162,7 @@ nix-darwin only:
 | `hosts` | `{}` | `attrsOf { channel; os; system; user; }`, usually `lodestar.lib.hostsFrom { ... }` |
 | `repoUrl` | (required) | mirrored read-only |
 | `pushUrl` | `null` | where promote pushes; required unless `promote = null` |
-| `deployKeyFile` | `null` | SSH key with write access to `pushUrl`, readable by `lodestar-server` (outside the store, e.g. sops-nix) |
+| `deployKeyFile` | `null` | SSH key with write access to `pushUrl`, readable by `lodestar-server` (outside the store, e.g. opnix or sops-nix) |
 | `listenAddress` | (required) | this host's Tailscale IP; anything else is refused |
 | `listenPort` | `8080` | opened on `tailscale0` |
 | `allowedUsers` | `[]` | Tailscale logins allowed in |

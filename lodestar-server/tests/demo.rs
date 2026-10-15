@@ -207,9 +207,16 @@ async fn demo_has_services_in_every_state() {
             && fleet
                 .services
                 .iter()
+                .any(|s| s.id == "backup-ui" && s.check.state == ServiceState::Down)
+            && fleet
+                .services
+                .iter()
                 .any(|s| s.host_online == Some(OnlineState::Off))
     })
     .await;
+    let stuck = fleet.services.iter().find(|s| s.id == "backup-ui").unwrap();
+    assert_eq!(stuck.check.state, ServiceState::Down);
+    assert_eq!(stuck.host_online, Some(OnlineState::AgentUnreachable));
     assert!(fleet.services.iter().any(|s| s.group == "Apps"));
     assert!(fleet.services.iter().any(|s| s.group == "Media"));
 }

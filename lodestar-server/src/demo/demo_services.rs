@@ -124,11 +124,21 @@ pub(crate) async fn start_demo_services() -> anyhow::Result<(Vec<Link>, JoinHand
         link(
             "truenas",
             "TrueNAS",
-            format!("{base}/"),
+            format!("http://{closed}/"),
             "Infrastructure",
-            "Storage on a host that is offline",
+            "Storage; its host is offline for a while",
             Some("truenas"),
             OFFLINE_HOST,
+            true,
+        ),
+        link(
+            "backup-ui",
+            "Backup console",
+            format!("{base}/bad"),
+            "Infrastructure",
+            "Down while the workstation agent does not answer",
+            None,
+            "workstation",
             true,
         ),
     ];

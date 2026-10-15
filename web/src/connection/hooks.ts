@@ -1,9 +1,10 @@
 // How components read the dashboard's data and act on it. The only way in: no component
 // calls `fetch` or opens a socket itself.
-import { useContext } from "preact/hooks";
+import { useContext, useMemo } from "preact/hooks";
 import type { ActivationEvent } from "@/bindings/ActivationEvent";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { AuditEvent } from "@/bindings/AuditEvent";
+import type { ServiceView } from "@/bindings/ServiceView";
 import type { Snapshot } from "@/bindings/Snapshot";
 import {
   type Actions,
@@ -60,6 +61,20 @@ export function useApplyLog(host?: string, applyId?: string): ApplyLogView | nul
 /** The newest audit events, newest first; null until loaded. */
 export function useAudit(): AuditEvent[] | null {
   return useConnection().audit;
+}
+
+/**
+ * The service links (null until the first snapshot), each with its host's current online state
+ * from the fleet list, so a host update alone moves the cards. Links on a host outside the
+ * fleet keep the state the server sent.
+ */
+export function useServices(): ServiceView[] | null {
+  const { snapshot } = useConnection();
+  return useMemo(() => {
+    if (snapshot === null) return null;
+    const online = new Map(snapshot.hosts.map((h) => [h.name, h.online]));
+    return snapshot.services.map((s) => ({ ...s, host_online: online.get(s.host) ?? s.host_online }));
+  }, [snapshot]);
 }
 
 export function useActions(): Actions {

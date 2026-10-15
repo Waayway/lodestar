@@ -9,6 +9,7 @@ import type { ChannelView } from "@/bindings/ChannelView";
 import type { HostView } from "@/bindings/HostView";
 import type { LogChunk } from "@/bindings/LogChunk";
 import type { PromoteChannels } from "@/bindings/PromoteChannels";
+import type { ServiceView } from "@/bindings/ServiceView";
 import type { Snapshot } from "@/bindings/Snapshot";
 import type { WsMessage } from "@/bindings/WsMessage";
 import * as client from "@/connection/client";
@@ -29,7 +30,8 @@ type Action =
   | { type: "snapshot"; data: Snapshot }
   | { type: "host"; data: HostView }
   | { type: "channels"; data: ChannelView[] }
-  | { type: "candidate"; data: string | null };
+  | { type: "candidate"; data: string | null }
+  | { type: "services"; data: ServiceView[] };
 
 export function reduceSnapshot(s: Snapshot | null, a: Action): Snapshot | null {
   if (a.type === "snapshot") return a.data;
@@ -44,6 +46,8 @@ export function reduceSnapshot(s: Snapshot | null, a: Action): Snapshot | null {
       return { ...s, channels: a.data };
     case "candidate":
       return { ...s, promote_candidate: a.data };
+    case "services":
+      return { ...s, services: a.data };
   }
 }
 
@@ -218,6 +222,9 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
               }
               break;
             }
+            case "services_updated":
+              dispatch({ type: "services", data: m.data });
+              break;
             case "apply_log":
               onChunk(m.data);
               break;

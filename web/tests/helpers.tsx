@@ -3,6 +3,7 @@ import type { ComponentChildren } from "preact";
 import { vi } from "vitest";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { HostView } from "@/bindings/HostView";
+import type { ServiceView } from "@/bindings/ServiceView";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { type Actions, ActionsContext } from "@/connection/ConnectionProvider";
 
@@ -37,6 +38,21 @@ export function host(over: Partial<HostView>): HostView {
     last_apply: null,
     desired_apply_id: null,
     last_activation: null,
+    ...over,
+  };
+}
+
+export function service(over: Partial<ServiceView>): ServiceView {
+  return {
+    id: "grafana",
+    title: "Grafana",
+    url: "https://grafana.example.test",
+    group: "Monitoring",
+    description: null,
+    icon: null,
+    host: "desktop",
+    host_online: "on",
+    check: { state: "up", reason: null, latency_ms: 12, checked_at: NOW - 5, since: NOW - 100 },
     ...over,
   };
 }

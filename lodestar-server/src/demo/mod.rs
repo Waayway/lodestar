@@ -7,6 +7,7 @@ mod demo_handle;
 mod demo_host;
 mod demo_online;
 mod demo_peer;
+mod demo_services;
 mod repo;
 mod start;
 mod tasks;

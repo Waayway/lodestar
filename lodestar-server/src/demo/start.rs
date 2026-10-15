@@ -10,6 +10,7 @@ use super::agents::{self, HostSetup, SimAgent};
 use super::demo_host::DEMO_HOSTS;
 use super::demo_online::DemoOnline;
 use super::demo_peer::DemoPeer;
+use super::demo_services::start_demo_services;
 use super::repo::{DemoRepo, STABLE_AT};
 use super::tasks::Tasks;
 use crate::clock::now;
@@ -128,7 +129,8 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         tailscale_bin: "tailscale".into(),
         promote: Some(lodestar_proto::PromoteChannels::default()),
     };
-    let links: Vec<Link> = Vec::new();
+    let (links, services_task): (Vec<Link>, _) = start_demo_services().await?;
+    tasks.push(services_task);
     let online: Arc<dyn OnlineProvider> = Arc::new(DemoOnline::new(peers));
     let server = server::start(
         config.clone(),

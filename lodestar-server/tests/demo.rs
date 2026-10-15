@@ -194,3 +194,22 @@ async fn demo_promote_moves_stable() {
     let fleet = snapshot(&demo_handle).await;
     assert_eq!(head(&fleet, "stable"), Some(candidate));
 }
+
+#[tokio::test]
+async fn demo_has_services_in_every_state() {
+    use lodestar_proto::ServiceState;
+    let demo_handle = start().await;
+    let fleet = wait_for(&demo_handle, 10, "services in every state", |fleet| {
+        let has = |state: ServiceState| fleet.services.iter().any(|s| s.check.state == state);
+        has(ServiceState::Up)
+            && has(ServiceState::Down)
+            && has(ServiceState::Unchecked)
+            && fleet
+                .services
+                .iter()
+                .any(|s| s.host_online == Some(OnlineState::Off))
+    })
+    .await;
+    assert!(fleet.services.iter().any(|s| s.group == "Apps"));
+    assert!(fleet.services.iter().any(|s| s.group == "Media"));
+}

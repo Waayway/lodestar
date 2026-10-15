@@ -1,13 +1,12 @@
 # The submodule type of one service link, shared by `lodestar.links.<id>` (host optional,
 # filled in by `linksFrom`) and `services.lodestar-server.links.<id>` (host required), so
-# the two cannot drift. `hostType` is the type of the `host` option, `hostExtra` extra attributes for it (a default).
+# the two cannot drift. Arguments: `hostType`, the type of the `host` option, and optionally
+# `hostDefault`, its default value (omitted: the option is required).
 { lib }:
-{
-  hostType,
-  hostExtra ? { },
-}:
+args@{ hostType, ... }:
 let
   inherit (lib) mkOption types;
+  urlType = types.strMatching "https?://.+";
 in
 types.submodule (
   { name, ... }:
@@ -20,7 +19,7 @@ types.submodule (
         description = "Card title.";
       };
       url = mkOption {
-        type = types.str;
+        type = urlType;
         example = "https://jellyfin.example.com";
         description = "What the card links to.";
       };
@@ -47,7 +46,7 @@ types.submodule (
           type = hostType;
           description = "Machine the service runs on.";
         }
-        // hostExtra
+        // lib.optionalAttrs (args ? hostDefault) { default = args.hostDefault; }
       );
       check = {
         enable = mkOption {
@@ -56,12 +55,12 @@ types.submodule (
           description = "Probe this link.";
         };
         url = mkOption {
-          type = types.nullOr types.str;
+          type = types.nullOr urlType;
           default = null;
           description = "URL to probe instead of `url` (e.g. an internal address).";
         };
         expectStatus = mkOption {
-          type = types.listOf types.int;
+          type = types.listOf (types.ints.between 100 599);
           default = [
             200
             204

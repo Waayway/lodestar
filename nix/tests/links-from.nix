@@ -1,6 +1,6 @@
 # Evaluation check of `lodestar.lib.linksFrom` over stub configurations built from
 # nix/modules/links.nix: host defaulting, an explicit host kept, option defaults,
-# duplicate ids failing, and configurations without the option skipped.
+# duplicate ids and non-http urls failing, and configurations without the option skipped.
 {
   pkgs,
   lib,
@@ -38,6 +38,7 @@ let
       beta = stub "beta" { dup.url = "http://y"; };
     };
   };
+  badUrl = stub "alpha" { bad.url = "javascript:alert(1)"; };
 in
 assert r.a.host == "alpha";
 assert r.a.title == "a";
@@ -61,4 +62,7 @@ assert
     "b"
   ];
 assert !(builtins.tryEval (builtins.deepSeq dup dup)).success;
+assert
+  !(builtins.tryEval (builtins.deepSeq badUrl.config.lodestar.links badUrl.config.lodestar.links))
+  .success;
 pkgs.runCommand "links-from" { } "touch $out"

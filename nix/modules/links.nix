@@ -7,7 +7,7 @@
     type = lib.types.attrsOf (
       import ../lib/linkType.nix { inherit lib; } {
         hostType = lib.types.nullOr lib.types.str;
-        hostExtra.default = null;
+        hostDefault = null;
       }
     );
     default = { };

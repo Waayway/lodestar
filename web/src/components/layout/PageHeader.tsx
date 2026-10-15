@@ -29,26 +29,26 @@ export function PageHeader({
   return (
     <header className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
-      <Logo>
-        {hostCount !== null && (
-          <>
-            <Machines aria-hidden="true" className="size-4" />
-            <span>{count(hostCount, "machine")}</span>
-          </>
-        )}
-      </Logo>
-      <div className="flex flex-wrap items-center gap-2.5">
-        <LivePill feed={feed} />
-        {viewer && (
-          <span
-            title={`Signed in as ${viewer}`}
-            className="border-line bg-panel inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[5px] text-[12.5px] whitespace-nowrap"
-          >
-            <Viewer aria-hidden="true" className="size-4" />
-            <span className="sr-only">Signed in as </span>
-            {viewer}
-          </span>
-        )}
+        <Logo>
+          {hostCount !== null && (
+            <>
+              <Machines aria-hidden="true" className="size-4" />
+              <span>{count(hostCount, "machine")}</span>
+            </>
+          )}
+        </Logo>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <LivePill feed={feed} />
+          {viewer && (
+            <span
+              title={`Signed in as ${viewer}`}
+              className="border-line bg-panel inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[5px] text-[12.5px] whitespace-nowrap"
+            >
+              <Viewer aria-hidden="true" className="size-4" />
+              <span className="sr-only">Signed in as </span>
+              {viewer}
+            </span>
+          )}
           <ThemeToggle />
         </div>
       </div>

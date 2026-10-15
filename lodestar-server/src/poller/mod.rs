@@ -7,6 +7,7 @@ mod host_poll;
 mod log_follower;
 mod poll_loop;
 mod reachability;
+pub mod service_check;
 
 pub use host_poll::poll_once;
 pub use log_follower::follow_log;

@@ -2,6 +2,7 @@
 import type { ChannelView } from "./ChannelView";
 import type { HostView } from "./HostView";
 import type { LogChunk } from "./LogChunk";
+import type { ServiceView } from "./ServiceView";
 import type { Snapshot } from "./Snapshot";
 
-export type WsMessage = { "type": "snapshot", "data": Snapshot } | { "type": "host_updated", "data": HostView } | { "type": "channels_updated", "data": Array<ChannelView> } | { "type": "apply_log", "data": LogChunk };
+export type WsMessage = { "type": "snapshot", "data": Snapshot } | { "type": "host_updated", "data": HostView } | { "type": "channels_updated", "data": Array<ChannelView> } | { "type": "apply_log", "data": LogChunk } | { "type": "services_updated", "data": Array<ServiceView> };

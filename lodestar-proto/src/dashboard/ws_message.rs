@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{ChannelView, HostView, Snapshot};
+use super::{ChannelView, HostView, ServiceView, Snapshot};
 use crate::LogChunk;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
@@ -12,6 +12,7 @@ pub enum WsMessage {
     HostUpdated(Box<HostView>),
     ChannelsUpdated(Vec<ChannelView>),
     ApplyLog(LogChunk),
+    ServicesUpdated(Vec<ServiceView>),
 }
 
 #[cfg(test)]
@@ -38,5 +39,12 @@ mod tests {
         let json = serde_json::to_string(&WsMessage::HostUpdated(Box::new(host_view))).unwrap();
         assert!(json.contains("\"type\":\"host_updated\""), "{json}");
         assert!(json.contains("\"data\":{"), "{json}");
+    }
+
+    #[test]
+    fn services_updated_is_tagged() {
+        let json = serde_json::to_string(&WsMessage::ServicesUpdated(vec![])).unwrap();
+        assert!(json.contains("\"type\":\"services_updated\""), "{json}");
+        assert!(json.contains("\"data\":[]"), "{json}");
     }
 }

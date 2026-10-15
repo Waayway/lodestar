@@ -44,5 +44,6 @@ pub async fn snapshot(state: &AppState, viewer: String) -> Snapshot {
         promote: state.mirror.promote_channels().cloned(),
         viewer,
         demo: state.demo,
+        services: vec![],
     }
 }

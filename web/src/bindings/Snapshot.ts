@@ -2,6 +2,7 @@
 import type { ChannelView } from "./ChannelView";
 import type { HostView } from "./HostView";
 import type { PromoteChannels } from "./PromoteChannels";
+import type { ServiceView } from "./ServiceView";
 
 export type Snapshot = { hosts: Array<HostView>, channels: Array<ChannelView>, promote_candidate: string | null, 
 /**
@@ -11,4 +12,4 @@ promote: PromoteChannels | null, viewer: string,
 /**
  * True only when the server runs in demo mode (simulated hosts).
  */
-demo: boolean, };
+demo: boolean, services: Array<ServiceView>, };

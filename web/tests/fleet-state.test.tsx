@@ -22,6 +22,7 @@ const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   promote: { from: "unstable", to: "stable" },
   viewer: "alice@example.com",
   demo: false,
+  services: [],
   ...over,
 });
 

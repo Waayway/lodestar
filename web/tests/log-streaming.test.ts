@@ -96,6 +96,7 @@ describe("watchLog", () => {
       promote: null,
       viewer: "v",
       demo: false,
+      services: [],
     },
   });
 

@@ -11,5 +11,6 @@ pub use agent::{
 };
 pub use commit_hash::is_commit_hash;
 pub use dashboard::{
-    AuditEvent, ChannelView, HostView, OnlineState, PromoteChannels, Snapshot, WsMessage,
+    AuditEvent, ChannelView, DownReason, HostView, OnlineState, PromoteChannels, ServiceCheck,
+    ServiceState, ServiceView, Snapshot, WsMessage,
 };

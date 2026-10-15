@@ -12,6 +12,9 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     pub agent_port: u16,
     pub hosts_file: PathBuf,
+    /// `links.json` (service links); absent means no links.
+    #[serde(default)]
+    pub links_file: Option<PathBuf>,
     pub repo_url: String,
     pub push_url: String,
     #[serde(default)]
@@ -67,6 +70,7 @@ mod tests {
         assert_eq!((config.mirror_fetch_secs, config.poll_secs), (300, 60));
         assert_eq!(config.tailscale_bin, PathBuf::from("tailscale"));
         assert_eq!(config.deploy_key_file, None);
+        assert_eq!(config.links_file, None);
         assert_eq!(config.promote, Some(PromoteChannels::default()));
         assert!(matches!(config.access, AccessConfig::Tailscale { .. }));
         let disabled: AccessConfig = serde_json::from_str(r#"{"kind":"disabled"}"#).unwrap();

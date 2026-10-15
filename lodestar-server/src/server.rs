@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use tokio::task::JoinHandle;
 
-use crate::config::{ManagedHost, ServerConfig};
+use crate::config::{Link, ManagedHost, ServerConfig};
 use crate::mirror::Mirror;
 use crate::state::AppState;
 use crate::tailscale::OnlineProvider;
@@ -66,6 +66,7 @@ impl Drop for ServerHandle {
 pub async fn start(
     config: ServerConfig,
     hosts: Vec<ManagedHost>,
+    links: Vec<Link>,
     online: Arc<dyn OnlineProvider>,
     demo: bool,
 ) -> anyhow::Result<ServerHandle> {
@@ -74,6 +75,7 @@ pub async fn start(
     let mirror = Arc::new(Mirror::open_or_init(&config).await?);
     let listen = config.listen;
     let mut state = AppState::new(Arc::new(config), connection, mirror, online, hosts)?;
+    state.links = Arc::new(links);
     state.demo = demo;
     let listener = tokio::net::TcpListener::bind(listen)
         .await

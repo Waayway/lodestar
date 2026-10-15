@@ -6,7 +6,7 @@ use sea_orm::DatabaseConnection;
 use tokio::sync::broadcast;
 
 use crate::agent_client::AgentClient;
-use crate::config::{ManagedHost, ServerConfig};
+use crate::config::{Link, ManagedHost, ServerConfig};
 use crate::mirror::Mirror;
 use crate::tailscale::OnlineProvider;
 
@@ -19,6 +19,8 @@ pub struct AppState {
     pub online: Arc<dyn OnlineProvider>,
     pub client: AgentClient,
     pub hosts: Vec<ManagedHost>,
+    /// Service links declared in Nix.
+    pub links: Arc<Vec<Link>>,
     /// Sender of the dashboard broadcast (WebSocket clients subscribe to it).
     pub tx: broadcast::Sender<WsMessage>,
     pub config: Arc<ServerConfig>,
@@ -51,6 +53,7 @@ impl AppState {
             online,
             client: AgentClient::new()?,
             hosts,
+            links: Arc::default(),
             tx: sender,
             config,
             reachable: Arc::default(),

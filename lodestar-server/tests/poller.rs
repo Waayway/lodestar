@@ -205,6 +205,7 @@ async fn env(agent: SocketAddr, online: Option<Arc<dyn OnlineProvider>>) -> Env 
         listen: "127.0.0.1:0".parse().unwrap(),
         agent_port: 7461,
         hosts_file: dir.path().join("hosts.json"),
+        links_file: None,
         repo_url: origin.to_str().unwrap().into(),
         push_url: origin.to_str().unwrap().into(),
         deploy_key_file: None,

@@ -171,6 +171,7 @@ async fn env_with_access(
         listen: "127.0.0.1:0".parse().unwrap(),
         agent_port: 7461,
         hosts_file: dir.path().join("hosts.json"),
+        links_file: None,
         repo_url: repository_url.into(),
         push_url: repository_url.into(),
         deploy_key_file: None,

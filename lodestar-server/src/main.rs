@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use lodestar_server::config::{ServerConfig, load_hosts};
+use lodestar_server::config::{ServerConfig, load_hosts, load_links};
 use lodestar_server::{demo, server, tailscale};
 
 #[derive(Parser)]
@@ -69,8 +69,12 @@ async fn run(command: Command) -> anyhow::Result<()> {
         } => {
             let config = ServerConfig::load(&config_path)?;
             let hosts = load_hosts(&config.hosts_file)?;
+            let links = match &config.links_file {
+                Some(path) => load_links(path)?,
+                None => Vec::new(),
+            };
             let online = tailscale::provider_from_config(&config.online, &config.tailscale_bin)?;
-            server::start(config, hosts, online, false)
+            server::start(config, hosts, links, online, false)
                 .await?
                 .wait()
                 .await

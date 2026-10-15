@@ -13,7 +13,7 @@ use super::demo_peer::DemoPeer;
 use super::repo::{DemoRepo, STABLE_AT};
 use super::tasks::Tasks;
 use crate::clock::now;
-use crate::config::{AccessConfig, ManagedHost, OnlineSource, ServerConfig};
+use crate::config::{AccessConfig, Link, ManagedHost, OnlineSource, ServerConfig};
 use crate::server;
 use crate::tailscale::OnlineProvider;
 
@@ -115,6 +115,7 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         listen,
         agent_port: 7461,
         hosts_file,
+        links_file: None,
         repo_url: repo_url.clone(),
         push_url: repo_url,
         deploy_key_file: None,
@@ -127,8 +128,16 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         tailscale_bin: "tailscale".into(),
         promote: Some(lodestar_proto::PromoteChannels::default()),
     };
+    let links: Vec<Link> = Vec::new();
     let online: Arc<dyn OnlineProvider> = Arc::new(DemoOnline::new(peers));
-    let server = server::start(config.clone(), hosts.clone(), online.clone(), true).await?;
+    let server = server::start(
+        config.clone(),
+        hosts.clone(),
+        links.clone(),
+        online.clone(),
+        true,
+    )
+    .await?;
 
     let every = scaled(COMMIT_EVERY_SECS, speed);
     tasks.push(tokio::spawn(async move {
@@ -148,6 +157,7 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         server: Some(server),
         config,
         hosts,
+        links,
         online,
         tasks: Tasks(tasks),
         _tmp: temporary_dir,

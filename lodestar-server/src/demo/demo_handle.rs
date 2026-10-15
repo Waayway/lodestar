@@ -5,7 +5,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 use super::tasks::Tasks;
-use crate::config::{ManagedHost, ServerConfig};
+use crate::config::{Link, ManagedHost, ServerConfig};
 use crate::server::{self, ServerHandle};
 use crate::state::AppState;
 use crate::tailscale::OnlineProvider;
@@ -20,6 +20,7 @@ pub struct DemoHandle {
     /// What `restart` needs to start the server again on the same state.
     pub(super) config: ServerConfig,
     pub(super) hosts: Vec<ManagedHost>,
+    pub(super) links: Vec<Link>,
     pub(super) online: Arc<dyn OnlineProvider>,
     pub(super) tasks: Tasks,
     pub(super) _tmp: TempDir,
@@ -63,7 +64,14 @@ impl DemoHandle {
         anyhow::ensure!(self.server.is_none(), "the demo server is already running");
         let mut config = self.config.clone();
         config.listen = self.addr;
-        let new = server::start(config, self.hosts.clone(), self.online.clone(), true).await?;
+        let new = server::start(
+            config,
+            self.hosts.clone(),
+            self.links.clone(),
+            self.online.clone(),
+            true,
+        )
+        .await?;
         self.state = new.state.clone();
         self.server = Some(new);
         Ok(())

@@ -29,6 +29,10 @@ export {
   OctagonXIcon as ToastError,
   ShieldOffIcon as Forbidden,
   CloudOffIcon as Disconnected,
+  LayoutGridIcon as Services,
+  CircleCheckIcon as Up,
+  CircleXIcon as Down,
+  ExternalLinkIcon as External,
 } from "lucide-react";
 
 /** The type of any icon above (for props that take an icon). */

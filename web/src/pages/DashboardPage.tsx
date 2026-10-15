@@ -4,12 +4,10 @@ import { ChannelCard } from "@/components/fleet/ChannelCard";
 import { HostTable } from "@/components/fleet/HostTable";
 import { PromoteCard } from "@/components/fleet/PromoteCard";
 import { StatTile } from "@/components/fleet/StatTile";
-import { EmptyState } from "@/components/layout/EmptyState";
-import { ErrorState } from "@/components/layout/ErrorState";
-import { DemoBanner, PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
 import { Section } from "@/components/layout/Section";
-import { useAudit, useFleet } from "@/connection/hooks";
-import { Applied, Attention, Audit, Building, Channel, Disconnected, Forbidden, Machines } from "@/icons";
+import { useAudit } from "@/connection/hooks";
+import { Applied, Attention, Audit, Building, Channel, Machines } from "@/icons";
 import { cn } from "@/lib/cn";
 import { channelRole, fleetCounts } from "@/lib/format";
 import { useNow } from "@/lib/time";
@@ -17,43 +15,23 @@ import type { Snapshot } from "@/bindings/Snapshot";
 
 /** The dashboard: composes the sections; data comes from `connection/hooks`. */
 export function DashboardPage() {
-  const { snapshot: snap, feed } = useFleet();
   const audit = useAudit();
   const now = useNow(15_000);
   return (
-    <>
-      {snap?.demo && <DemoBanner />}
-      <div className="px-[clamp(16px,4vw,48px)] pt-7 pb-12">
-        <div className="mx-auto flex max-w-[1240px] min-w-0 flex-col gap-[22px]">
-          <PageHeader feed={feed} viewer={snap?.viewer ?? null} hostCount={snap?.hosts.length ?? null} />
-          <main className="flex min-w-0 flex-col gap-[22px]">
-            {feed.kind === "forbidden" ? (
-              <ErrorState icon={Forbidden} title="You don't have access to this dashboard">
-                The Lodestar server only lets in its allowed Tailscale users and tagged devices.
-              </ErrorState>
-            ) : snap === null ? (
-              feed.kind === "waiting" ? (
-                <ErrorState icon={Disconnected} title="Can't reach the Lodestar server. Retrying." />
-              ) : (
-                <EmptyState title="Loading machines" />
-              )
-            ) : (
-              <>
-                <Stats snap={snap} />
-                <Channels snap={snap} />
-                <Section title="Machines" icon={Machines}>
-                  <HostTable hosts={snap.hosts} now={now} promote={snap.promote} />
-                </Section>
-                <Section title="Audit" icon={Audit}>
-                  <AuditList events={audit} now={now} />
-                </Section>
-              </>
-            )}
-          </main>
-        </div>
-      </div>
-      <ApplyLogSheet now={now} />
-    </>
+    <PageShell route="fleet" loading="Loading machines" after={<ApplyLogSheet now={now} />}>
+      {(snap) => (
+        <>
+          <Stats snap={snap} />
+          <Channels snap={snap} />
+          <Section title="Machines" icon={Machines}>
+            <HostTable hosts={snap.hosts} now={now} promote={snap.promote} />
+          </Section>
+          <Section title="Audit" icon={Audit}>
+            <AuditList events={audit} now={now} />
+          </Section>
+        </>
+      )}
+    </PageShell>
   );
 }
 

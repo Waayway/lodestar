@@ -1,23 +1,34 @@
 import { Logo } from "@/components/brand/Logo";
 import { ThemeToggle } from "@/components/brand/ThemeToggle";
 import { LivePill } from "@/components/fleet/LivePill";
+import { NavTabs } from "@/components/layout/NavTabs";
 import type { FeedStatus } from "@/connection/feed";
 import { Machines, Viewer } from "@/icons";
 import { count } from "@/lib/format";
+import type { Route } from "@/lib/route";
 
-/** Wordmark and fleet size on the left; feed state, viewer and theme toggle on the right. */
+/**
+ * Wordmark and fleet size on the left; feed state, viewer and theme toggle on the right; the
+ * page tabs under that row.
+ */
 export function PageHeader({
   feed,
   viewer,
   hostCount,
+  route,
+  downCount,
 }: {
   feed: FeedStatus;
   /** Who the server says is looking (null before the first snapshot). */
   viewer: string | null;
   hostCount: number | null;
+  route: Route;
+  /** Services that are down (the count on the Services tab). */
+  downCount: number;
 }) {
   return (
-    <header className="flex flex-wrap items-center justify-between gap-4">
+    <header className="flex min-w-0 flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
       <Logo>
         {hostCount !== null && (
           <>
@@ -38,8 +49,10 @@ export function PageHeader({
             {viewer}
           </span>
         )}
-        <ThemeToggle />
+          <ThemeToggle />
+        </div>
       </div>
+      <NavTabs route={route} downCount={downCount} />
     </header>
   );
 }

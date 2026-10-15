@@ -6,8 +6,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Snapshot } from "@/bindings/Snapshot";
 import { reduceSnapshot, StateContext } from "@/connection/ConnectionProvider";
 import { useServices } from "@/connection/hooks";
+import type { ComponentChildren } from "preact";
+import type { ServiceView } from "@/bindings/ServiceView";
+import { NavTabs } from "@/components/layout/NavTabs";
+import { ServiceCard } from "@/components/services/ServiceCard";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Building, Down, Idle, Off, Unreachable, Up } from "@/icons";
+import { downReasonLabel, groupServices, serviceCounts, serviceLabel, serviceSubLine } from "@/lib/format";
 import { parseRoute } from "@/lib/route";
-import { host, service } from "./helpers";
+import { serviceStyle } from "@/lib/tones";
+import { ServicesPage } from "@/pages/ServicesPage";
+import { host, NOW, service } from "./helpers";
 
 afterEach(cleanup);
 
@@ -73,5 +82,184 @@ describe("useServices", () => {
     const went = reduceSnapshot(s, { type: "host", data: host({ name: "desktop", online: "off" }) });
     rerender(<Probe snap={went} />);
     expect(screen.getByTestId("out").textContent).toBe("a:off,b:off");
+  });
+});
+
+// ---- Task 8: the Services tab ----
+
+const at = (over: Partial<ServiceView["check"]>): ServiceView["check"] => ({
+  state: "up",
+  reason: null,
+  latency_ms: 84,
+  checked_at: NOW - 30,
+  since: NOW - 7200,
+  ...over,
+});
+
+describe("serviceStyle", () => {
+  it.each([
+    ["up", service({ check: at({}) }), "ok", Up, false],
+    ["up but slow", service({ check: at({ latency_ms: 1200 }) }), "warn", Up, false],
+    ["down", service({ check: at({ state: "down", reason: { kind: "timeout" } }) }), "bad", Down, false],
+    ["down, host off", service({ host_online: "off", check: at({ state: "down" }) }), "warn", Off, false],
+    [
+      "down, agent not answering",
+      service({ host_online: "agent_unreachable", check: at({ state: "down" }) }),
+      "warn",
+      Unreachable,
+      false,
+    ],
+    ["pending", service({ check: at({ state: "pending", latency_ms: null, checked_at: null }) }), "info", Building, true],
+    ["unchecked", service({ check: at({ state: "unchecked", latency_ms: null }) }), "neutral", Idle, false],
+  ] as const)("%s", (_name, s, tone, icon, spin) => {
+    const st = serviceStyle(s);
+    expect(st.tone).toBe(tone);
+    expect(st.icon).toBe(icon);
+    expect(!!st.spin).toBe(spin);
+  });
+});
+
+describe("serviceLabel and downReasonLabel", () => {
+  it("words every state", () => {
+    expect(serviceLabel(service({ check: at({}) }))).toBe("Up · 84 ms");
+    expect(serviceLabel(service({ check: at({ state: "down", reason: { kind: "http_status", detail: 502 } }) }))).toBe(
+      "Down: HTTP 502",
+    );
+    expect(serviceLabel(service({ host_online: "off", check: at({ state: "down", reason: { kind: "timeout" } }) }))).toBe(
+      "Down · host off",
+    );
+    expect(serviceLabel(service({ host_online: "agent_unreachable", check: at({ state: "down" }) }))).toBe(
+      "Down · agent not answering",
+    );
+    expect(serviceLabel(service({ check: at({ state: "pending" }) }))).toBe("Checking…");
+    expect(serviceLabel(service({ check: at({ state: "unchecked" }) }))).toBe("Not checked");
+  });
+  it("names every reason", () => {
+    expect(downReasonLabel({ kind: "timeout" })).toBe("timed out");
+    expect(downReasonLabel({ kind: "connection_refused" })).toBe("connection refused");
+    expect(downReasonLabel({ kind: "unreachable" })).toBe("unreachable");
+    expect(downReasonLabel({ kind: "tls" })).toBe("TLS error");
+    expect(downReasonLabel({ kind: "http_status", detail: 502 })).toBe("HTTP 502");
+    expect(downReasonLabel({ kind: "other", detail: "dns failed" })).toBe("dns failed");
+  });
+  it("says when it was checked, or how long it has been down", () => {
+    expect(serviceSubLine(service({ check: at({}) }), NOW)).toBe("checked just now");
+    expect(serviceSubLine(service({ check: at({ checked_at: NOW - 300 }) }), NOW)).toBe("checked 5m ago");
+    expect(serviceSubLine(service({ check: at({ state: "down" }) }), NOW)).toBe("down since 2h");
+    expect(serviceSubLine(service({ check: at({ state: "pending", checked_at: null }) }), NOW)).toBeNull();
+  });
+});
+
+describe("groupServices and serviceCounts", () => {
+  const list = [
+    service({ id: "c", title: "Zulu", group: "Media" }),
+    service({ id: "a", title: "Alpha", group: "Monitoring", check: at({ state: "down" }) }),
+    service({ id: "b", title: "Bravo", group: "Media", check: at({ state: "pending" }) }),
+    service({ id: "d", title: "Delta", group: "Apps", check: at({ state: "unchecked" }) }),
+  ];
+  it("groups by name, cards by title", () => {
+    expect(groupServices(list).map(([g, xs]) => [g, xs.map((x) => x.title)])).toEqual([
+      ["Apps", ["Delta"]],
+      ["Media", ["Bravo", "Zulu"]],
+      ["Monitoring", ["Alpha"]],
+    ]);
+  });
+  it("counts each state", () => {
+    expect(serviceCounts(list)).toEqual({ up: 1, down: 1, pending: 1, unchecked: 1 });
+  });
+});
+
+describe("ServiceCard", () => {
+  const long = "https://a-very-long-host-name.example.test/with/a/very/long/path/that/never/fits/on/a/phone";
+  it("links the title out, truncates the URL, and shows the state", () => {
+    const { container } = render(
+      <TooltipProvider>
+        <ul>
+          <ServiceCard
+            service={service({ url: long, check: at({ state: "down", reason: { kind: "http_status", detail: 502 } }) })}
+            now={NOW}
+          />
+        </ul>
+      </TooltipProvider>,
+    );
+    const link = screen.getByRole("link", { name: /Grafana/ });
+    expect(link.getAttribute("href")).toBe(long);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+    const url = screen.getByText(long);
+    expect(url.className).toContain("truncate");
+    expect(url.getAttribute("title")).toBe(long);
+    expect(screen.getByText("Down: HTTP 502")).toBeTruthy();
+    expect(screen.getByText("down since 2h")).toBeTruthy();
+    const card = container.querySelector("[data-tone]")!;
+    expect(card.getAttribute("data-tone")).toBe("bad");
+    expect(card.className).toContain("min-w-0");
+  });
+  it("draws a known brand, a Lodestar icon, or the first letter", () => {
+    render(
+      <TooltipProvider>
+        <ul>
+          <ServiceCard service={service({ id: "j", title: "Jellyfin", icon: "jellyfin" })} now={NOW} />
+          <ServiceCard service={service({ id: "m", title: "Box", icon: "Machines" })} now={NOW} />
+          <ServiceCard service={service({ id: "r", title: "restic", icon: "restic" })} now={NOW} />
+        </ul>
+      </TooltipProvider>,
+    );
+    expect(document.querySelector('[data-brand="jellyfin"]')).toBeTruthy();
+    expect(document.querySelector(".lucide-monitor")).toBeTruthy();
+    expect(screen.getByText("r")).toBeTruthy();
+  });
+});
+
+function WithSnap({ snap, children }: { snap: Snapshot | null; children: ComponentChildren }) {
+  const state = useMemo(() => ({ snapshot: snap, feed: { kind: "live" } as never, openLog: null, audit: null }), [snap]);
+  return (
+    <StateContext.Provider value={state}>
+      <TooltipProvider>{children}</TooltipProvider>
+    </StateContext.Provider>
+  );
+}
+
+describe("ServicesPage", () => {
+  it("shows the empty state without services", () => {
+    render(
+      <WithSnap snap={snapshot()}>
+        <ServicesPage />
+      </WithSnap>,
+    );
+    expect(screen.getByText("No services declared")).toBeTruthy();
+  });
+  it("shows one section per group, in order", () => {
+    render(
+      <WithSnap
+        snap={snapshot({
+          services: [service({ id: "b", group: "Monitoring" }), service({ id: "a", title: "Jellyfin", group: "Media" })],
+        })}
+      >
+        <ServicesPage />
+      </WithSnap>,
+    );
+    const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent ?? "");
+    expect(headings).toHaveLength(2);
+    expect(headings[0]).toMatch(/^Media/);
+    expect(headings[1]).toMatch(/^Monitoring/);
+  });
+});
+
+describe("NavTabs", () => {
+  it("marks the current tab and shows the down count", () => {
+    render(<NavTabs route="services" downCount={3} />);
+    const services = screen.getByRole("link", { name: /Services/ });
+    const fleet = screen.getByRole("link", { name: /Fleet/ });
+    expect(services.getAttribute("href")).toBe("#/services");
+    expect(fleet.getAttribute("href")).toBe("#/");
+    expect(services.getAttribute("aria-current")).toBe("page");
+    expect(fleet.getAttribute("aria-current")).toBeNull();
+    expect(services.textContent).toContain("3");
+  });
+  it("has no count badge when nothing is down", () => {
+    render(<NavTabs route="fleet" downCount={0} />);
+    expect(screen.getByRole("link", { name: /Fleet/ }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("link", { name: /Services/ }).textContent).not.toMatch(/\d/);
   });
 });

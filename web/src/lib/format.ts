@@ -3,8 +3,10 @@ import type { ActivationEvent } from "@/bindings/ActivationEvent";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { AuditEvent } from "@/bindings/AuditEvent";
 import type { CheckoutStatus } from "@/bindings/CheckoutStatus";
+import type { DownReason } from "@/bindings/DownReason";
 import type { PromoteChannels } from "@/bindings/PromoteChannels";
 import type { HostView } from "@/bindings/HostView";
+import type { ServiceView } from "@/bindings/ServiceView";
 import type { SkipReason } from "@/bindings/SkipReason";
 import type { AgentStatus } from "@/lib/apiTypes";
 import { ago } from "@/lib/time";
@@ -245,4 +247,65 @@ export function activationText(e: ActivationEvent, now: number): string {
   return [ago(e.time, now), shortRev(e.revision), triggerLabel(e), e.generation !== null ? `gen ${e.generation}` : null]
     .filter((x): x is string => x !== null)
     .join(" · ");
+}
+
+/** Why a service check failed, as a phrase that follows "Down: ". */
+export function downReasonLabel(r: DownReason): string {
+  switch (r.kind) {
+    case "http_status":
+      return `HTTP ${r.detail}`;
+    case "timeout":
+      return "timed out";
+    case "connection_refused":
+      return "connection refused";
+    case "unreachable":
+      return "unreachable";
+    case "tls":
+      return "TLS error";
+    case "other":
+      return r.detail;
+  }
+}
+
+/**
+ * A service's status badge: "Up · 84 ms", "Down: HTTP 502", "Checking…", "Not checked". A
+ * down service whose machine is off or whose agent does not answer names that as the cause.
+ */
+export function serviceLabel(s: ServiceView): string {
+  const c = s.check;
+  switch (c.state) {
+    case "up":
+      return c.latency_ms === null ? "Up" : `Up · ${c.latency_ms} ms`;
+    case "down":
+      if (s.host_online === "off") return "Down · host off";
+      if (s.host_online === "agent_unreachable") return "Down · agent not answering";
+      return c.reason === null ? "Down" : `Down: ${downReasonLabel(c.reason)}`;
+    case "pending":
+      return "Checking…";
+    case "unchecked":
+      return "Not checked";
+  }
+}
+
+/** "down since 2h" for a down service, else "checked 5m ago"; null before the first check. */
+export function serviceSubLine(s: ServiceView, now: number): string | null {
+  const c = s.check;
+  if (c.state === "down" && c.since !== null) return `down since ${ago(c.since, now).replace(/ ago$/, "")}`;
+  return c.checked_at === null ? null : `checked ${ago(c.checked_at, now)}`;
+}
+
+/** How many services are in each check state (the Services summary tiles). */
+export function serviceCounts(list: ServiceView[]): { up: number; down: number; pending: number; unchecked: number } {
+  const c = { up: 0, down: 0, pending: 0, unchecked: 0 };
+  for (const s of list) c[s.check.state] += 1;
+  return c;
+}
+
+/** Services by group, groups sorted by name and each group's cards by title. */
+export function groupServices(list: ServiceView[]): [string, ServiceView[]][] {
+  const groups = new Map<string, ServiceView[]>();
+  for (const s of list) groups.set(s.group, [...(groups.get(s.group) ?? []), s]);
+  return [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([g, xs]) => [g, [...xs].sort((a, b) => a.title.localeCompare(b.title))]);
 }

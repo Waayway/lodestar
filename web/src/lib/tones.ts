@@ -2,6 +2,7 @@
 // state up here instead of keeping their own maps; docs/style-guide.md ("State system")
 // describes the same table.
 import type { OnlineState } from "@/bindings/OnlineState";
+import type { ServiceView } from "@/bindings/ServiceView";
 import {
   Activation,
   Applied,
@@ -9,6 +10,7 @@ import {
   Audit,
   Building,
   Disconnected,
+  Down,
   Failed,
   Forbidden,
   type Icon,
@@ -17,6 +19,7 @@ import {
   Promote,
   Skipped,
   Unreachable,
+  Up,
 } from "@/icons";
 import type { ApplyTone, AuditLine, HostTone } from "@/lib/format";
 
@@ -118,3 +121,26 @@ export const auditIcon: Record<AuditLine["icon"], Icon> = {
   promote: Promote,
   other: Audit,
 };
+
+/** A check slower than this is up but drawn in `warn`. */
+export const SLOW_MS = 1000;
+
+/**
+ * A service's state (ServiceCard). A down service on a machine that is off or whose agent does
+ * not answer is `warn` with the machine's icon: the machine is the cause, not the service.
+ */
+export function serviceStyle(s: ServiceView): StateStyle & { icon: Icon } {
+  const c = s.check;
+  switch (c.state) {
+    case "up":
+      return { tone: c.latency_ms !== null && c.latency_ms >= SLOW_MS ? "warn" : "ok", icon: Up };
+    case "down":
+      if (s.host_online === "off") return { tone: "warn", icon: Off };
+      if (s.host_online === "agent_unreachable") return { tone: "warn", icon: Unreachable };
+      return { tone: "bad", icon: Down };
+    case "pending":
+      return { tone: "info", icon: Building, spin: true };
+    case "unchecked":
+      return { tone: "neutral", icon: Idle };
+  }
+}

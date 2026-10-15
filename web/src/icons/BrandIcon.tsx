@@ -1,18 +1,31 @@
 // OS / brand marks from Simple Icons. Only the named exports are imported, so the bundle
-// carries these two paths and not the whole set.
-import { siApple, siNixos } from "simple-icons";
+// carries these paths and not the whole set.
+import { siApple, siImmich, siJellyfin, siNextcloud, siNixos, siProxmox, siTraefikproxy, siTruenas } from "simple-icons";
 import { cn } from "@/lib/cn";
 
 const brands = {
   nixos: { icon: siNixos, label: "NixOS", className: "text-nix" },
   apple: { icon: siApple, label: "macOS", className: "" },
+  // Service icons (the Services tab), all in the current text colour.
+  jellyfin: { icon: siJellyfin, label: "Jellyfin", className: "" },
+  nextcloud: { icon: siNextcloud, label: "Nextcloud", className: "" },
+  proxmox: { icon: siProxmox, label: "Proxmox", className: "" },
+  truenas: { icon: siTruenas, label: "TrueNAS", className: "" },
+  traefikproxy: { icon: siTraefikproxy, label: "Traefik Proxy", className: "" },
+  immich: { icon: siImmich, label: "Immich", className: "" },
 } as const;
 
 export type Brand = keyof typeof brands;
 
+/** Whether a slug (a link's `icon`) is one of the brand marks above. */
+export function isBrand(slug: string): slug is Brand {
+  return Object.hasOwn(brands, slug);
+}
+
 /**
  * A brand mark at icon size (16 px unless `className` sets a size). NixOS is drawn in
- * `--nix`, Apple in the current text colour. Labelled for screen readers unless `decorative`.
+ * `--nix`, the others in the current text colour. Labelled for screen readers unless
+ * `decorative`.
  */
 export function BrandIcon({
   brand,

@@ -142,11 +142,14 @@ describe("serviceLabel and downReasonLabel", () => {
     expect(downReasonLabel({ kind: "http_status", detail: 502 })).toBe("HTTP 502");
     expect(downReasonLabel({ kind: "other", detail: "dns failed" })).toBe("dns failed");
   });
-  it("says when it was checked, or how long it has been down", () => {
-    expect(serviceSubLine(service({ check: at({}) }), NOW)).toBe("checked just now");
-    expect(serviceSubLine(service({ check: at({ checked_at: NOW - 300 }) }), NOW)).toBe("checked 5m ago");
+  it("says how long the service has been in its state", () => {
+    expect(serviceSubLine(service({ check: at({}) }), NOW)).toBe("up since 2h");
+    expect(serviceSubLine(service({ check: at({ since: NOW - 300 }) }), NOW)).toBe("up since 5m");
+    expect(serviceSubLine(service({ check: at({ since: NOW - 10 }) }), NOW)).toBe("up just now");
     expect(serviceSubLine(service({ check: at({ state: "down" }) }), NOW)).toBe("down since 2h");
+    expect(serviceSubLine(service({ check: at({ state: "down", since: NOW - 5 }) }), NOW)).toBe("down just now");
     expect(serviceSubLine(service({ check: at({ state: "pending", checked_at: null }) }), NOW)).toBeNull();
+    expect(serviceSubLine(service({ check: at({ state: "unchecked", since: null }) }), NOW)).toBeNull();
   });
 });
 

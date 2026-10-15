@@ -287,11 +287,17 @@ export function serviceLabel(s: ServiceView): string {
   }
 }
 
-/** "down since 2h" for a down service, else "checked 5m ago"; null before the first check. */
+/**
+ * "up since 3h" / "down since 2h": how long the service has been in its current state. The
+ * server only pushes a change when the state or reason changes, so a "checked N ago" line
+ * would read as a stalled checker. Under a minute it is "up just now"; null while pending
+ * or unchecked.
+ */
 export function serviceSubLine(s: ServiceView, now: number): string | null {
   const c = s.check;
-  if (c.state === "down" && c.since !== null) return `down since ${ago(c.since, now).replace(/ ago$/, "")}`;
-  return c.checked_at === null ? null : `checked ${ago(c.checked_at, now)}`;
+  if ((c.state !== "up" && c.state !== "down") || c.since === null) return null;
+  const duration = ago(c.since, now);
+  return duration === "just now" ? `${c.state} just now` : `${c.state} since ${duration.replace(/ ago$/, "")}`;
 }
 
 /** How many services are in each check state (the Services summary tiles). */

@@ -166,7 +166,7 @@ instant.
   `Checking…`, `Not checked`; "on media" with an `OnlineState` dot for fleet hosts, plain
   text otherwise. When the host is off or its agent is not answering, the host state is
   the stated cause: `Down · host off`.
-- "checked 30 s ago" / "down since 2 h" in the sub line.
+- "up since 3 h" / "down since 2 h" (or "up just now") in the sub line, counted from the last state change.
 
 ### Tones and words
 

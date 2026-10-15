@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use lodestar_proto::WsMessage;
+use lodestar_proto::{ServiceCheck, WsMessage};
 use sea_orm::DatabaseConnection;
 use tokio::sync::broadcast;
 
@@ -21,6 +21,8 @@ pub struct AppState {
     pub hosts: Vec<ManagedHost>,
     /// Service links declared in Nix.
     pub links: Arc<Vec<Link>>,
+    /// Latest check result per link id.
+    pub checks: Arc<Mutex<HashMap<String, ServiceCheck>>>,
     /// Sender of the dashboard broadcast (WebSocket clients subscribe to it).
     pub tx: broadcast::Sender<WsMessage>,
     pub config: Arc<ServerConfig>,
@@ -54,6 +56,7 @@ impl AppState {
             client: AgentClient::new()?,
             hosts,
             links: Arc::default(),
+            checks: Arc::default(),
             tx: sender,
             config,
             reachable: Arc::default(),

@@ -5,6 +5,7 @@ use lodestar_proto::{ChannelView, Snapshot};
 
 use super::AppState;
 use super::host_view::host_view_with;
+use super::service_view::service_views;
 
 /// One view per channel used by a managed host, sorted by name.
 pub async fn channels(state: &AppState) -> Vec<ChannelView> {
@@ -37,6 +38,7 @@ pub async fn snapshot(state: &AppState, viewer: String) -> Snapshot {
             .map(|host| host_view_with(state, host, &peers)),
     )
     .await;
+    let services = service_views(state, &peers);
     Snapshot {
         hosts,
         channels: channels(state).await,
@@ -44,6 +46,6 @@ pub async fn snapshot(state: &AppState, viewer: String) -> Snapshot {
         promote: state.mirror.promote_channels().cloned(),
         viewer,
         demo: state.demo,
-        services: vec![],
+        services,
     }
 }

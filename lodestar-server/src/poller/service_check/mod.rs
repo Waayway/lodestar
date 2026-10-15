@@ -1,10 +1,12 @@
 //! One HTTP probe of a service link and the classification of its failures.
 
+mod check_round;
 mod probe_outcome;
 mod probers;
 
 use std::time::Duration;
 
+pub use check_round::check_round;
 pub use probe_outcome::ProbeOutcome;
 pub use probers::{Probers, classify_error, probe};
 

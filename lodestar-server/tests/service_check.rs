@@ -1,18 +1,49 @@
 //! HTTP probe of service links against an in-process axum app on 127.0.0.1:0.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::http::{StatusCode, header};
 use axum::routing::get;
-use lodestar_proto::{DownReason, ServiceState};
-use lodestar_server::config::{Link, LinkCheck};
-use lodestar_server::poller::service_check::{Probers, probe};
+use lodestar_proto::{DownReason, ServiceState, WsMessage};
+use lodestar_server::config::{
+    AccessConfig, Link, LinkCheck, ManagedHost, OnlineSource, ServerConfig,
+};
+use lodestar_server::db;
+use lodestar_server::mirror::Mirror;
+use lodestar_server::poller::service_check::{CHECK_TIMEOUT, Probers, check_round, probe};
+use lodestar_server::state::{AppState, snapshot};
+use lodestar_server::tailscale::StaticOnline;
+
+static HITS: AtomicUsize = AtomicUsize::new(0);
+static FLIP: AtomicUsize = AtomicUsize::new(0);
 
 async fn serve() -> SocketAddr {
     let app = Router::new()
         .route("/ok", get(|| async { "fine" }))
+        .route(
+            "/counted",
+            get(|| async {
+                HITS.fetch_add(1, Ordering::SeqCst);
+                "counted"
+            }),
+        )
+        .route(
+            "/flip",
+            get(|| async {
+                if FLIP.fetch_add(1, Ordering::SeqCst) < 2 {
+                    StatusCode::OK
+                } else {
+                    StatusCode::BAD_GATEWAY
+                }
+            }),
+        )
         .route("/login", get(|| async { StatusCode::UNAUTHORIZED }))
         .route("/bad", get(|| async { StatusCode::BAD_GATEWAY }))
         .route(
@@ -145,4 +176,143 @@ async fn check_url_overrides_url() {
     l.check.url = Some(format!("http://{addr}/ok"));
     let out = probe(&Probers::new().unwrap(), &l).await;
     assert_eq!(out.state, ServiceState::Up);
+}
+
+fn empty_origin(dir: &Path) -> PathBuf {
+    let bare = dir.join("origin.git");
+    let output = Command::new("git")
+        .args(["init", "--bare", "--quiet", bare.to_str().unwrap()])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    bare
+}
+
+async fn state_with(links: Vec<Link>) -> (AppState, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = empty_origin(dir.path());
+    let addresses = HashMap::from([("alpha".to_string(), "127.0.0.1:1".to_string())]);
+    let config = ServerConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        agent_port: 7461,
+        hosts_file: dir.path().join("hosts.json"),
+        links_file: None,
+        repo_url: origin.to_str().unwrap().into(),
+        push_url: origin.to_str().unwrap().into(),
+        deploy_key_file: None,
+        state_dir: dir.path().join("state"),
+        access: AccessConfig::Disabled,
+        online: OnlineSource::Static {
+            addresses: addresses.clone(),
+        },
+        mirror_fetch_secs: 300,
+        poll_secs: 60,
+        tailscale_bin: PathBuf::from("tailscale"),
+        promote: Some(lodestar_proto::PromoteChannels::default()),
+    };
+    let connection = db::connect(&config.state_dir).await.unwrap();
+    let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());
+    let online = Arc::new(StaticOnline::new(&addresses).unwrap());
+    let host = ManagedHost {
+        name: "alpha".into(),
+        system: "x86_64-linux".into(),
+        user: "u".into(),
+        channel: "stable".into(),
+        os: "nixos".into(),
+    };
+    let mut state =
+        AppState::new(Arc::new(config), connection, mirror, online, vec![host]).unwrap();
+    state.links = Arc::new(links);
+    (state, dir)
+}
+
+fn named(id: &str, group: &str, url: String) -> Link {
+    let mut l = link(url);
+    l.id = id.into();
+    l.title = id.into();
+    l.group = group.into();
+    l
+}
+
+#[tokio::test]
+async fn round_records_and_broadcasts_once() {
+    let addr = serve().await;
+    let (state, _dir) = state_with(vec![named("a", "G", format!("http://{addr}/ok"))]).await;
+    let probers = Probers::new().unwrap();
+    let mut rx = state.tx.subscribe();
+    assert!(check_round(&state, &probers).await);
+    match rx.try_recv().unwrap() {
+        WsMessage::ServicesUpdated(views) => {
+            assert_eq!(views.len(), 1);
+            assert_eq!(views[0].check.state, ServiceState::Up);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    assert!(!check_round(&state, &probers).await);
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn since_moves_only_on_change() {
+    let addr = serve().await;
+    FLIP.store(0, Ordering::SeqCst);
+    // /flip answers 200 on the first two calls, then 502.
+    let (state, _dir) = state_with(vec![named("a", "G", format!("http://{addr}/flip"))]).await;
+    let probers = Probers::new().unwrap();
+    check_round(&state, &probers).await;
+    let first = state.checks.lock().unwrap()["a"].clone();
+    assert_eq!(first.state, ServiceState::Up);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    check_round(&state, &probers).await;
+    let second = state.checks.lock().unwrap()["a"].clone();
+    assert_eq!(second.state, ServiceState::Up);
+    assert_eq!(second.since, first.since);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(check_round(&state, &probers).await);
+    let third = state.checks.lock().unwrap()["a"].clone();
+    assert_eq!(third.state, ServiceState::Down);
+    assert_ne!(third.since, first.since);
+}
+
+#[tokio::test]
+async fn disabled_link_is_unchecked_and_not_probed() {
+    let addr = serve().await;
+    HITS.store(0, Ordering::SeqCst);
+    let mut l = named("a", "G", format!("http://{addr}/counted"));
+    l.check.enable = false;
+    let (state, _dir) = state_with(vec![l]).await;
+    assert!(!check_round(&state, &Probers::new().unwrap()).await);
+    assert_eq!(HITS.load(Ordering::SeqCst), 0);
+    let snap = snapshot(&state, "v".into()).await;
+    assert_eq!(snap.services[0].check.state, ServiceState::Unchecked);
+}
+
+#[tokio::test]
+async fn snapshot_lists_services_sorted() {
+    let (state, _dir) = state_with(vec![named("b1", "B", "http://127.0.0.1:1/".into()), {
+        let mut l = named("a1", "A", "http://127.0.0.1:1/".into());
+        l.host = "nowhere".into();
+        l
+    }])
+    .await;
+    let snap = snapshot(&state, "v".into()).await;
+    let ids: Vec<_> = snap.services.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, ["a1", "b1"]);
+    assert_eq!(snap.services[0].host_online, None);
+    assert!(snap.services[1].host_online.is_some());
+    assert_eq!(snap.services[1].check.state, ServiceState::Pending);
+}
+
+#[tokio::test]
+async fn round_with_hanging_links_is_bounded() {
+    let addr = serve().await;
+    let links = (0..9)
+        .map(|i| named(&format!("h{i}"), "G", format!("http://{addr}/hang")))
+        .collect();
+    let (state, _dir) = state_with(links).await;
+    let started = Instant::now();
+    check_round(&state, &Probers::new().unwrap()).await;
+    assert!(started.elapsed() < 2 * CHECK_TIMEOUT + Duration::from_secs(1));
 }

@@ -19,17 +19,7 @@ pub(crate) async fn host_view_with(
     peers: &HashMap<String, PeerInfo>,
 ) -> HostView {
     let peer = peers.get(&host.name.to_lowercase());
-    let online = match peer {
-        Some(peer) if peer.online => {
-            let reachable = state.reachable.lock().unwrap().get(&host.name).copied();
-            if reachable == Some(true) {
-                OnlineState::On
-            } else {
-                OnlineState::AgentUnreachable
-            }
-        }
-        _ => OnlineState::Off,
-    };
+    let online = online_state(state, &host.name, peers);
     let stored = db::load_status(&state.db, &host.name)
         .await
         .unwrap_or_else(|error| {
@@ -77,5 +67,24 @@ pub(crate) async fn host_view_with(
         last_apply: status.and_then(|status| status.apply),
         desired_apply_id,
         last_activation,
+    }
+}
+
+/// Whether host `name` is on, off, or online with an unreachable agent.
+pub(crate) fn online_state(
+    state: &AppState,
+    name: &str,
+    peers: &HashMap<String, PeerInfo>,
+) -> OnlineState {
+    match peers.get(&name.to_lowercase()) {
+        Some(peer) if peer.online => {
+            let reachable = state.reachable.lock().unwrap().get(name).copied();
+            if reachable == Some(true) {
+                OnlineState::On
+            } else {
+                OnlineState::AgentUnreachable
+            }
+        }
+        _ => OnlineState::Off,
     }
 }

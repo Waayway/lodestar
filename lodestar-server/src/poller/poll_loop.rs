@@ -4,10 +4,11 @@ use lodestar_proto::WsMessage;
 use tokio::time::MissedTickBehavior;
 
 use super::host_poll::poll_once;
+use super::service_check::{CHECK_INTERVAL, Probers, check_round};
 use crate::state::{AppState, channels};
 
 /// Background loops: mirror fetch every `mirror_fetch_secs` (then `ChannelsUpdated`) and
-/// agent polling every `poll_secs`. Both run once immediately. Returns both tasks.
+/// agent polling every `poll_secs`. plus link checks every `CHECK_INTERVAL`. All run once immediately.
 pub fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
     let mirror_state = state.clone();
     let mirror = tokio::spawn(async move {
@@ -23,6 +24,21 @@ pub fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
             mirror_state.broadcast(WsMessage::ChannelsUpdated(channels(&mirror_state).await));
         }
     });
+    let mut tasks = vec![mirror];
+    match Probers::new() {
+        Ok(probers) => {
+            let check_state = state.clone();
+            tasks.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(CHECK_INTERVAL);
+                tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    check_round(&check_state, &probers).await;
+                }
+            }));
+        }
+        Err(error) => eprintln!("lodestar-server: service checks disabled: {error:#}"),
+    }
     let agents = tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(state.config.poll_secs.max(1)));
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -31,5 +47,6 @@ pub fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
             poll_once(&state).await;
         }
     });
-    vec![mirror, agents]
+    tasks.push(agents);
+    tasks
 }

@@ -14,6 +14,8 @@ let
   configPath = "/etc/lodestar-server/config.json";
   stateDir = "/var/lib/lodestar-server";
 
+  linkType = import ../lib/linkType.nix { inherit lib; } { hostType = types.str; };
+
   hostType = types.submodule {
     options = {
       channel = mkOption {
@@ -59,6 +61,18 @@ in
       description = ''
         The managed hosts, by host name (the agent's `hostName`). Usually computed with
         `lodestar.lib.hostsFrom` from every configuration that enables the agent.
+      '';
+    };
+
+    links = mkOption {
+      type = types.attrsOf linkType;
+      default = { };
+      example = lib.literalExpression ''
+        lodestar.lib.linksFrom { inherit (self) nixosConfigurations darwinConfigurations; }
+      '';
+      description = ''
+        Service links shown in the Services tab, by id. Usually computed with
+        `lodestar.lib.linksFrom` from every configuration's `lodestar.links`.
       '';
     };
 
@@ -201,11 +215,30 @@ in
           ;
       }) cfg.hosts
     );
+    environment.etc."lodestar-server/links.json".text = builtins.toJSON (
+      lib.mapAttrsToList (id: l: {
+        inherit id;
+        inherit (l)
+          title
+          url
+          group
+          description
+          icon
+          host
+          ;
+        check = {
+          inherit (l.check) enable url;
+          expect_status = l.check.expectStatus;
+          insecure_tls = l.check.insecureTls;
+        };
+      }) cfg.links
+    );
     environment.etc."lodestar-server/config.json".text = builtins.toJSON (
       {
         listen = "${cfg.listenAddress}:${toString cfg.listenPort}";
         agent_port = cfg.agentPort;
         hosts_file = "/etc/lodestar-server/hosts.json";
+        links_file = "/etc/lodestar-server/links.json";
         repo_url = cfg.repoUrl;
         # Only used by promote; without it nothing is ever pushed.
         push_url = if cfg.pushUrl != null then cfg.pushUrl else cfg.repoUrl;
@@ -251,6 +284,7 @@ in
       restartTriggers = [
         config.environment.etc."lodestar-server/config.json".source
         config.environment.etc."lodestar-server/hosts.json".source
+        config.environment.etc."lodestar-server/links.json".source
       ];
       serviceConfig = {
         ExecStart = "${lib.getExe cfg.package} serve --config ${configPath}";

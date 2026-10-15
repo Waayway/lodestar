@@ -42,6 +42,7 @@
       agentNixos = import ./nix/modules/agent/nixos.nix { inherit packagesFor; };
       agentDarwin = import ./nix/modules/agent/darwin.nix { inherit packagesFor; };
       server = import ./nix/modules/server.nix { inherit packagesFor; };
+      links = import ./nix/modules/links.nix { inherit lib; };
 
       linuxPkgs = nixpkgs.legacyPackages.x86_64-linux;
 
@@ -134,21 +135,29 @@
 
       nixosModules = {
         agent = agentNixos;
-        inherit server;
+        inherit server links;
         default = {
           imports = [
             agentNixos
             server
+            links
           ];
         };
       };
 
       darwinModules = {
         agent = agentDarwin;
-        default = agentDarwin;
+        inherit links;
+        default = {
+          imports = [
+            agentDarwin
+            links
+          ];
+        };
       };
 
       lib.hostsFrom = import ./nix/lib/hostsFrom.nix { inherit lib; };
+      lib.linksFrom = import ./nix/lib/linksFrom.nix { inherit lib; };
 
       checks =
         lib.recursiveUpdate
@@ -160,6 +169,10 @@
               agent-module = import ./nix/tests/agent-module.nix {
                 inherit pkgs lib;
                 darwinModule = agentDarwin;
+              };
+              links-from = import ./nix/tests/links-from.nix {
+                inherit pkgs lib;
+                linksFrom = self.lib.linksFrom;
               };
             }
           ))

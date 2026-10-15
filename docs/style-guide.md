@@ -136,8 +136,9 @@ tone: `ok` green, building `info`, skipped and agent not answering `warn`, faile
 left edge shows which machines need a look.
 
 A service card has the same 3 px stripe in the `serviceStyle` tone. Its words come from
-`serviceLabel` and `downReasonLabel`; the sub line ("checked 30s ago", "down since 2h")
-from `serviceSubLine`.
+`serviceLabel` and `downReasonLabel`; the sub line ("up since 3h", "down since 2h", "up just now",
+none while checking) from `serviceSubLine`. It counts from `check.since`, because the server
+only pushes a result when the state changes; a "checked N ago" line would look stalled.
 
 Channel pills are not states: their `stable` / `unstable` colours live in `ChannelPill`.
 
@@ -151,15 +152,16 @@ under Lodestar names, 16 px (22 px in tiles and the promote card), `aria-hidden`
 `Off` (power), `Unreachable` (wifi-off), `Attention` (triangle-alert), `Machines` (monitor),
 `Channel` (git-branch), `Activation` (terminal), `Audit` (history), `Viewer` (user-round),
 `Queued` (clock), `Services` (layout-grid), `Up` (circle-check), `Down` (circle-x),
-`External` (external-link), `Close` (x), `ThemeSystem` / `ThemeLight` / `ThemeDark` (sun-moon / sun /
-moon), `Forbidden` (shield-off), `Disconnected` (cloud-off), and the toast icons
+`External` (external-link), `Close` (x), `ThemeSystem` / `ThemeLight` / `ThemeDark`
+(sun-moon / sun / moon), `Forbidden` (shield-off), `Disconnected` (cloud-off), and the toast icons
 `ToastSuccess` / `ToastInfo` / `ToastWarning` / `ToastError`. `Icon` is their type.
 
 Brand marks come from Simple Icons through `<BrandIcon brand="nixos" | "apple">`
 (`icons/BrandIcon.tsx`, named imports so only these paths are bundled): NixOS in `--nix`,
-Apple in `currentColor`. Service marks are Simple Icons too, from the small map in
-`ServiceIcon` (`jellyfin`, `nextcloud`, `proxmox`, `truenas`, `traefikproxy`, `immich`). They carry `role="img"` and an `aria-label` ("NixOS", "macOS")
-unless `decorative`. The logo's four-point star is `StarMark`. No emoji.
+Apple in `currentColor`. They carry `role="img"` and an `aria-label` ("NixOS", "macOS")
+unless `decorative`. Service marks are Simple Icons too, from the small map in
+`ServiceIcon` (`jellyfin`, `nextcloud`, `proxmox`, `truenas`, `traefikproxy`, `immich`).
+The logo's four-point star is `StarMark`. No emoji.
 
 ## Components
 
@@ -263,8 +265,9 @@ Components take typed props (types from `bindings/`); data and actions come only
 
 ## Layout
 
-- Order: header, fleet summary, Channels, Machines, Audit. The apply log opens as a sheet
-  from the right.
+- Order on the Fleet page: header, fleet summary, Channels, Machines, Audit. The apply log
+  opens as a sheet from the right. A tab bar (Fleet, Services) sits under the header on
+  every page.
 - Summary tiles: four columns, two below 900 px.
 - Channels: `from` card, promote card, `to` card in one row (`1fr auto 1fr`); other
   channels flow in a grid. Cards stack below 900 px.

@@ -77,6 +77,7 @@ lodestar.links.jellyfin = {
   icon = "jellyfin";                        # Simple Icons slug or a Lodestar/Lucide icon name
   check.url = "http://localhost:8096/";     # probe this instead of `url` (hairpin NAT)
   check.insecureTls = true;                 # accept a self-signed certificate (PVE, TrueNAS)
+  check.expectStatus = [ 200 404 ];         # statuses that count as up (here: 404 too)
 };
 ```
 
@@ -103,11 +104,14 @@ The server probes every link with `check.enable` every 60 s (at most 8 at a time
 **up** when the status is in `check.expectStatus` (default 200 204 301 302 303 307 308 401
 403, so a login page counts as up); otherwise it is **down**, with the reason: HTTP status,
 timed out, connection refused, unreachable, TLS error. Before the first probe a link is
-"checking"; with `check.enable = false` it is "not checked". If the host is off or its agent
-does not answer, a down link says so as the cause. Results live in server memory only (no
-history) and are sent to the dashboard when a state changes; after a server restart all
-links show "checking" until the first round. If the probe clients cannot be built, checks are disabled
-with a log line.
+"checking"; with `check.enable = false` it is "not checked". If the host is off or its
+agent does not answer, a down link says so as the cause. If the probe clients cannot be
+built, checks are disabled with a log line.
+
+Results live in server memory only (no history) and are sent to the dashboard when a state
+changes. The sub line counts from the last state change ("up since 3h", "down since 2h").
+After a server restart all links show "checking" until the first round, "down since" counts
+from the restart, and the latency shown is from the last state change, not the last probe.
 
 ## Where things are
 

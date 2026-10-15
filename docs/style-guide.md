@@ -97,7 +97,7 @@ Bundled with `@fontsource` (no font CDN): IBM Plex Sans 400/500/600, IBM Plex Se
 
 Every state has a colour, an icon and words. The words come from `lib/format.ts`; the
 colour and icon come from one table, `lib/tones.ts` (`applyStyle`, `onlineStyle`,
-`hostStyle`, `feedStyle`, `behindTone`, `auditIcon`, and the class maps `toneText`,
+`hostStyle`, `serviceStyle`, `feedStyle`, `behindTone`, `auditIcon`, and the class maps `toneText`,
 `toneSoft`, `toneFill`, `toneStripe`, `toneChip`). Components never keep their own
 state-to-colour maps. The tones are `ok`, `info`, `warn`, `bad`, `accent` and `neutral`
 (muted text on a chip).
@@ -115,6 +115,11 @@ state-to-colour maps. The tones are `ok`, `info`, `warn`, `bad`, `accent` and `n
 | Behind | `warn` (`ok` at zero, `muted` unknown) | none | "3 behind", "up to date", "unknown" |
 | Dirty | `warn` on `warn-soft`, small pill | none | "dirty"; checkout line: "local changes", "1 ahead", "checkout is not the running system" |
 | Queued | `info` | `Queued` (clock) | "Queued: sent when atlas comes online" |
+| Service up | `ok` on `ok-soft` (`warn` at 1000 ms or slower) | `Up` (circle-check) | "Up · 84 ms" |
+| Service down | `bad` on `bad-soft` | `Down` (circle-x) | "Down: HTTP 502", "Down: timed out", "Down: connection refused" |
+| Service down, machine off / agent not answering | `warn` on `warn-soft` (the machine is the cause) | `Off` / `Unreachable` | "Down · host off", "Down · agent not answering" |
+| Service checking | `info` on `info-soft` | `Building` (spins) | "Checking…" |
+| Service not checked | `neutral` | `Idle` | "Not checked" |
 
 A machine as a whole has one state, `hostTone`: a running, failed or skipped last apply
 wins (also on a machine that is off now), then an agent not answering (`warn`), then off,
@@ -130,6 +135,10 @@ tone: `ok` green, building `info`, skipped and agent not answering `warn`, faile
 `neutral` (muted); an idle machine (behind, nothing wrong) has none. One glance down the
 left edge shows which machines need a look.
 
+A service card has the same 3 px stripe in the `serviceStyle` tone. Its words come from
+`serviceLabel` and `downReasonLabel`; the sub line ("checked 30s ago", "down since 2h")
+from `serviceSubLine`.
+
 Channel pills are not states: their `stable` / `unstable` colours live in `ChannelPill`.
 
 ## Icons
@@ -141,13 +150,15 @@ under Lodestar names, 16 px (22 px in tiles and the promote card), `aria-hidden`
 `Building` (rotate-cw), `Skipped` (pen-line), `Failed` (circle-x), `Idle` (circle-dashed),
 `Off` (power), `Unreachable` (wifi-off), `Attention` (triangle-alert), `Machines` (monitor),
 `Channel` (git-branch), `Activation` (terminal), `Audit` (history), `Viewer` (user-round),
-`Queued` (clock), `Close` (x), `ThemeSystem` / `ThemeLight` / `ThemeDark` (sun-moon / sun /
+`Queued` (clock), `Services` (layout-grid), `Up` (circle-check), `Down` (circle-x),
+`External` (external-link), `Close` (x), `ThemeSystem` / `ThemeLight` / `ThemeDark` (sun-moon / sun /
 moon), `Forbidden` (shield-off), `Disconnected` (cloud-off), and the toast icons
 `ToastSuccess` / `ToastInfo` / `ToastWarning` / `ToastError`. `Icon` is their type.
 
 Brand marks come from Simple Icons through `<BrandIcon brand="nixos" | "apple">`
 (`icons/BrandIcon.tsx`, named imports so only these paths are bundled): NixOS in `--nix`,
-Apple in `currentColor`. They carry `role="img"` and an `aria-label` ("NixOS", "macOS")
+Apple in `currentColor`. Service marks are Simple Icons too, from the small map in
+`ServiceIcon` (`jellyfin`, `nextcloud`, `proxmox`, `truenas`, `traefikproxy`, `immich`). They carry `role="img"` and an `aria-label` ("NixOS", "macOS")
 unless `decorative`. The logo's four-point star is `StarMark`. No emoji.
 
 ## Components
@@ -219,10 +230,31 @@ Components take typed props (types from `bindings/`); data and actions come only
   The visible countdown is `aria-hidden`; a `role="status"` line says only the state
   ("Disconnected, retrying"), so screen readers hear changes, not every second.
 
+### `services/`
+
+- **ServiceCard** `{ service: ServiceView, now }`: one `li` with the state stripe on its left
+  edge (`data-tone`). Icon tile and the title as an external link (`External` icon,
+  `target="_blank" rel="noopener noreferrer"`) over the URL in mono, truncated with the
+  full URL in `title`; the description; a `Badge` with the `serviceLabel`; "on <host>" with
+  an `OnlineState` dot for fleet hosts; the sub line.
+- **ServiceIcon** `{ icon, title }`: the OS-tile chip. A known Simple Icons slug renders the
+  brand mark in `currentColor`; otherwise a Lodestar icon of that name; otherwise the
+  title's first letter in the serif.
+
 ### `layout/`
 
 - **PageHeader** `{ feed, viewer, hostCount }`: logo left; live pill, viewer and theme
   toggle right. **DemoBanner** above everything in demo mode.
+- **NavTabs** `{ route, downCount }`: the Fleet and Services tabs under the header
+  (`aria-current="page"` on the current one, `#/` and `#/services`); Services carries a
+  `bad` chip with the number of down services (and "down" for screen readers).
+- **PageShell** `{ route, loading, children }`: the frame both pages share (demo banner,
+  header, tabs, the no-access / unreachable / loading states, then the page's content), so
+  the two pages cannot drift apart.
+- **ServicesPage** (`pages/ServicesPage.tsx`): summary tiles (up, down, checking, and "not
+  checked" when non-zero), then one `Section` per group (sorted by name, with a count) of
+  `ServiceCard`s in `repeat(auto-fill, minmax(280px, 1fr))` with 12 px gaps (one column on
+  phones); an `EmptyState` "No services declared" when there are none.
 - **Section** `{ title, icon?, label?, children }`: heading with a rule to the right edge.
   **SectionHeading** for a heading inside a card.
 - **EmptyState** `{ title, children? }`: dashed box, muted text.

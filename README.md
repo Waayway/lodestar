@@ -35,6 +35,8 @@ nix run github:Waayway/lodestar#lodestar-demo   # dashboard against simulated ho
   SQLite database of applies and audit events, and a poller that asks every
   agent for its status and re-sends applies to hosts that were offline.
 - **lodestar** is the CLI for the same API.
+- **Services tab**: links to the web applications your hosts run, declared in Nix
+  (`lodestar.links`), each with a live HTTP check and the state of its machine.
 - Nothing changes on a host until someone presses apply (or runs
   `lodestar rebuild`). Every activation, including manual `nixos-rebuild` /
   `darwin-rebuild` runs and boots, lands in the audit log.

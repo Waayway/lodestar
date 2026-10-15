@@ -61,6 +61,54 @@ own host and restarted it).
 State-changing API calls need the header `X-Lodestar: 1` (CSRF guard), e.g.
 `curl -X POST -H 'X-Lodestar: 1' http://manager:8080/api/hosts/desktop/apply`.
 
+## Service links
+
+The **Services** tab lists the web applications the fleet hosts, with a link to each and a
+live state. Links are declared in Nix, next to the service that runs, and follow git like
+everything else.
+
+```nix
+# in any host's configuration (NixOS or nix-darwin)
+lodestar.links.jellyfin = {
+  title = "Jellyfin";                       # default: the attribute name
+  url = "https://jellyfin.example.com";
+  group = "Media";                          # default: "Services"
+  description = "Films and series";
+  icon = "jellyfin";                        # Simple Icons slug or a Lodestar/Lucide icon name
+  check.url = "http://localhost:8096/";     # probe this instead of `url` (hairpin NAT)
+  check.insecureTls = true;                 # accept a self-signed certificate (PVE, TrueNAS)
+};
+```
+
+`host` defaults to the declaring configuration's `services.lodestar-agent.hostName`; set it
+for services that run elsewhere. `check.enable = false` shows the link without probing it.
+Known brand icons are `jellyfin`, `nextcloud`, `proxmox`, `truenas`, `traefikproxy` and
+`immich`; any other name falls back to a Lodestar icon of that name, then to the title's
+first letter.
+
+On the server host, collect them from the flake like the host list (a duplicate id fails
+evaluation); links for machines Nix does not manage can be added by hand with the same
+options:
+
+```nix
+services.lodestar-server.links =
+  lodestar.lib.linksFrom { inherit (self) nixosConfigurations darwinConfigurations; };
+```
+
+This writes `/etc/lodestar-server/links.json`; a change restarts the server on switch, and
+reaches it through the normal apply of the server host.
+
+The server probes every link with `check.enable` every 60 s (at most 8 at a time) with a
+`GET` and a 5 s timeout. Redirects are not followed and the body is not read. A link is
+**up** when the status is in `check.expectStatus` (default 200 204 301 302 303 307 308 401
+403, so a login page counts as up); otherwise it is **down**, with the reason: HTTP status,
+timed out, connection refused, unreachable, TLS error. Before the first probe a link is
+"checking"; with `check.enable = false` it is "not checked". If the host is off or its agent
+does not answer, a down link says so as the cause. Results live in server memory only (no
+history) and are sent to the dashboard when a state changes; after a server restart all
+links show "checking" until the first round. If the probe clients cannot be built, checks are disabled
+with a log line.
+
 ## Where things are
 
 Agent (every enrolled host):
@@ -81,7 +129,8 @@ Agent (every enrolled host):
 
 Server:
 
-- config: `/etc/lodestar-server/config.json`, hosts: `/etc/lodestar-server/hosts.json`
+- config: `/etc/lodestar-server/config.json`, hosts: `/etc/lodestar-server/hosts.json`,
+  service links: `/etc/lodestar-server/links.json`
 - state: `/var/lib/lodestar-server/` (`lodestar.db`, `mirror.git`, ssh `known_hosts`)
 - `systemctl status lodestar-server`, runs as user `lodestar-server`
 

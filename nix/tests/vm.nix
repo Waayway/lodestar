@@ -73,6 +73,22 @@ pkgs.testers.runNixOSTest {
             os = "linux";
           });
           pushUrl = repoUrl;
+          links = {
+            # The agent answers on 7461 (its / is not a route: 404 counts as up here).
+            agent = {
+              url = "http://laptop1:7461/";
+              host = "laptop1";
+              group = "Fleet";
+              check.expectStatus = [
+                200
+                404
+              ];
+            };
+            closed = {
+              url = "http://localhost:1/";
+              host = "manager";
+            };
+          };
           listenAddress = "0.0.0.0";
           testing = {
             disableAccess = true;
@@ -143,6 +159,20 @@ pkgs.testers.runNixOSTest {
     # The manager's own agent is reachable through the server.
     manager.wait_until_succeeds(
         "curl -sf localhost:8080/api/snapshot | jq -e '.hosts[] | select(.name==\"manager\") | .online == \"on\" and .checkout != null'"
+    )
+
+    # Service links: the file is written, the checker finds the agent up (and its host on)
+    # and the closed port down with a refused connection.
+    manager.succeed("test -f /etc/lodestar-server/links.json")
+    manager.wait_until_succeeds(
+        "curl -sf localhost:8080/api/snapshot | jq -e '"
+        ".services[] | select(.id==\"agent\") | .check.state == \"up\" and .host_online == \"on\"'",
+        timeout=60,
+    )
+    manager.wait_until_succeeds(
+        "curl -sf localhost:8080/api/snapshot | jq -e '"
+        ".services[] | select(.id==\"closed\") | .check.state == \"down\" and .check.reason.kind == \"connection_refused\"'",
+        timeout=60,
     )
 
     # 2-3. Apply laptop1: accepted, then it runs the head.

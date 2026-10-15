@@ -158,7 +158,7 @@ instant.
   otherwise the Lodestar icon of that name, otherwise the title's first letter in the serif.
   Brand icons in `currentColor`. Simple Icons stay tree-shaken: `BrandIcon` gets a small
   explicit map of the slugs we use (`jellyfin`, `nextcloud`, `proxmox`, `truenas`,
-  `traefikproxy`, `restic`, `immich`, …), not the whole set.
+  `traefikproxy`, `immich`; there is no restic mark), not the whole set.
 - Title as a link (`target="_blank" rel="noopener"`), with the `External` icon; the URL
   under it in mono, truncated with the full URL in a tooltip.
 - Description (muted, 12 px).

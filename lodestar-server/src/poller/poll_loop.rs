@@ -8,7 +8,8 @@ use super::service_check::{CHECK_INTERVAL, Probers, check_round};
 use crate::state::{AppState, channels};
 
 /// Background loops: mirror fetch every `mirror_fetch_secs` (then `ChannelsUpdated`) and
-/// agent polling every `poll_secs`. plus link checks every `CHECK_INTERVAL`. All run once immediately.
+/// agent polling every `poll_secs`, and service link checks every `CHECK_INTERVAL`. All run
+/// once immediately; the checks never wait for the host poller.
 pub fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
     let mirror_state = state.clone();
     let mirror = tokio::spawn(async move {

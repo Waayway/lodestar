@@ -1,31 +1,33 @@
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use lodestar_proto::{ServiceCheck, WsMessage};
 
 use super::{CHECK_CONCURRENCY, ProbeOutcome, Probers, probe};
-use tokio::sync::Semaphore;
-
 use crate::clock;
 use crate::config::Link;
 use crate::state::{AppState, service_views};
 
-/// Probes one link once a concurrency permit is free.
-async fn probe_link(permits: &Semaphore, probers: &Probers, link: &Link) -> (String, ProbeOutcome) {
-    let _permit = permits.acquire().await.expect("semaphore is never closed");
-    (link.id.clone(), probe(probers, link).await)
+/// Probes one link, keyed by its id.
+async fn probe_link(probers: &Probers, link: Link) -> (String, ProbeOutcome) {
+    let outcome = probe(probers, &link).await;
+    (link.id, outcome)
 }
 
 /// Probes every enabled link, records the results and broadcasts the services when a state
 /// or reason changed. Returns whether it did.
 pub async fn check_round(state: &AppState, probers: &Probers) -> bool {
-    let permits = Semaphore::new(CHECK_CONCURRENCY);
-    let results = join_all(
-        state
-            .links
-            .iter()
-            .filter(|link| link.check.enable)
-            .map(|link| probe_link(&permits, probers, link)),
-    )
-    .await;
+    // Owned links: a stream of borrowed `&Link` makes the round's future not `Send` for
+    // `tokio::spawn` (rust-lang/rust#102211). Cloning a few links once a minute is cheap.
+    let enabled: Vec<Link> = state
+        .links
+        .iter()
+        .filter(|link| link.check.enable)
+        .cloned()
+        .collect();
+    let results: Vec<(String, ProbeOutcome)> = stream::iter(enabled)
+        .map(|link| probe_link(probers, link))
+        .buffer_unordered(CHECK_CONCURRENCY)
+        .collect()
+        .await;
     let now = clock::now();
     let mut changed = false;
     {

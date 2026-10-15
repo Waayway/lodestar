@@ -229,11 +229,11 @@ async fn state_with(links: Vec<Link>) -> (AppState, tempfile::TempDir) {
 }
 
 fn named(id: &str, group: &str, url: String) -> Link {
-    let mut l = link(url);
-    l.id = id.into();
-    l.title = id.into();
-    l.group = group.into();
-    l
+    let mut named_link = link(url);
+    named_link.id = id.into();
+    named_link.title = id.into();
+    named_link.group = group.into();
+    named_link
 }
 
 #[tokio::test]
@@ -280,9 +280,9 @@ async fn since_moves_only_on_change() {
 async fn disabled_link_is_unchecked_and_not_probed() {
     let addr = serve().await;
     HITS.store(0, Ordering::SeqCst);
-    let mut l = named("a", "G", format!("http://{addr}/counted"));
-    l.check.enable = false;
-    let (state, _dir) = state_with(vec![l]).await;
+    let mut disabled = named("a", "G", format!("http://{addr}/counted"));
+    disabled.check.enable = false;
+    let (state, _dir) = state_with(vec![disabled]).await;
     assert!(!check_round(&state, &Probers::new().unwrap()).await);
     assert_eq!(HITS.load(Ordering::SeqCst), 0);
     let snap = snapshot(&state, "v".into()).await;
@@ -292,9 +292,9 @@ async fn disabled_link_is_unchecked_and_not_probed() {
 #[tokio::test]
 async fn snapshot_lists_services_sorted() {
     let (state, _dir) = state_with(vec![named("b1", "B", "http://127.0.0.1:1/".into()), {
-        let mut l = named("a1", "A", "http://127.0.0.1:1/".into());
-        l.host = "nowhere".into();
-        l
+        let mut unknown_host = named("a1", "A", "http://127.0.0.1:1/".into());
+        unknown_host.host = "nowhere".into();
+        unknown_host
     }])
     .await;
     let snap = snapshot(&state, "v".into()).await;

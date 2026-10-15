@@ -96,45 +96,45 @@ async fn closed_port_url() -> String {
 #[tokio::test]
 async fn ok_is_up() {
     let addr = serve().await;
-    let out = probe(&Probers::new().unwrap(), &link(format!("http://{addr}/ok"))).await;
-    assert_eq!(out.state, ServiceState::Up);
-    assert!(out.latency_ms.is_some());
-    assert_eq!(out.reason, None);
+    let outcome = probe(&Probers::new().unwrap(), &link(format!("http://{addr}/ok"))).await;
+    assert_eq!(outcome.state, ServiceState::Up);
+    assert!(outcome.latency_ms.is_some());
+    assert_eq!(outcome.reason, None);
 }
 
 #[tokio::test]
 async fn unauthorized_counts_as_up() {
     let addr = serve().await;
-    let out = probe(
+    let outcome = probe(
         &Probers::new().unwrap(),
         &link(format!("http://{addr}/login")),
     )
     .await;
-    assert_eq!(out.state, ServiceState::Up);
+    assert_eq!(outcome.state, ServiceState::Up);
 }
 
 #[tokio::test]
 async fn bad_gateway_is_down() {
     let addr = serve().await;
-    let out = probe(
+    let outcome = probe(
         &Probers::new().unwrap(),
         &link(format!("http://{addr}/bad")),
     )
     .await;
-    assert_eq!(out.state, ServiceState::Down);
-    assert_eq!(out.reason, Some(DownReason::HttpStatus(502)));
+    assert_eq!(outcome.state, ServiceState::Down);
+    assert_eq!(outcome.reason, Some(DownReason::HttpStatus(502)));
 }
 
 #[tokio::test]
 async fn redirect_is_not_followed() {
     let addr = serve().await;
     let started = Instant::now();
-    let out = probe(
+    let outcome = probe(
         &Probers::new().unwrap(),
         &link(format!("http://{addr}/redir")),
     )
     .await;
-    assert_eq!(out.state, ServiceState::Up);
+    assert_eq!(outcome.state, ServiceState::Up);
     assert!(started.elapsed() < Duration::from_secs(1));
 }
 
@@ -142,40 +142,40 @@ async fn redirect_is_not_followed() {
 async fn hang_times_out() {
     let addr = serve().await;
     let started = Instant::now();
-    let out = probe(
+    let outcome = probe(
         &Probers::new().unwrap(),
         &link(format!("http://{addr}/hang")),
     )
     .await;
-    assert_eq!(out.state, ServiceState::Down);
-    assert_eq!(out.reason, Some(DownReason::Timeout));
+    assert_eq!(outcome.state, ServiceState::Down);
+    assert_eq!(outcome.reason, Some(DownReason::Timeout));
     assert!(started.elapsed() < Duration::from_secs(6));
 }
 
 #[tokio::test]
 async fn closed_port_is_refused() {
-    let out = probe(&Probers::new().unwrap(), &link(closed_port_url().await)).await;
-    assert_eq!(out.state, ServiceState::Down);
-    assert_eq!(out.reason, Some(DownReason::ConnectionRefused));
+    let outcome = probe(&Probers::new().unwrap(), &link(closed_port_url().await)).await;
+    assert_eq!(outcome.state, ServiceState::Down);
+    assert_eq!(outcome.reason, Some(DownReason::ConnectionRefused));
 }
 
 #[tokio::test]
 async fn status_outside_expect_is_down() {
     let addr = serve().await;
-    let mut l = link(format!("http://{addr}/ok"));
-    l.check.expect_status = vec![204];
-    let out = probe(&Probers::new().unwrap(), &l).await;
-    assert_eq!(out.state, ServiceState::Down);
-    assert_eq!(out.reason, Some(DownReason::HttpStatus(200)));
+    let mut service_link = link(format!("http://{addr}/ok"));
+    service_link.check.expect_status = vec![204];
+    let outcome = probe(&Probers::new().unwrap(), &service_link).await;
+    assert_eq!(outcome.state, ServiceState::Down);
+    assert_eq!(outcome.reason, Some(DownReason::HttpStatus(200)));
 }
 
 #[tokio::test]
 async fn check_url_overrides_url() {
     let addr = serve().await;
-    let mut l = link(closed_port_url().await);
-    l.check.url = Some(format!("http://{addr}/ok"));
-    let out = probe(&Probers::new().unwrap(), &l).await;
-    assert_eq!(out.state, ServiceState::Up);
+    let mut service_link = link(closed_port_url().await);
+    service_link.check.url = Some(format!("http://{addr}/ok"));
+    let outcome = probe(&Probers::new().unwrap(), &service_link).await;
+    assert_eq!(outcome.state, ServiceState::Up);
 }
 
 fn empty_origin(dir: &Path) -> PathBuf {
@@ -298,7 +298,11 @@ async fn snapshot_lists_services_sorted() {
     }])
     .await;
     let snap = snapshot(&state, "v".into()).await;
-    let ids: Vec<_> = snap.services.iter().map(|s| s.id.as_str()).collect();
+    let ids: Vec<_> = snap
+        .services
+        .iter()
+        .map(|service| service.id.as_str())
+        .collect();
     assert_eq!(ids, ["a1", "b1"]);
     assert_eq!(snap.services[0].host_online, None);
     assert!(snap.services[1].host_online.is_some());
@@ -309,10 +313,27 @@ async fn snapshot_lists_services_sorted() {
 async fn round_with_hanging_links_is_bounded() {
     let addr = serve().await;
     let links = (0..9)
-        .map(|i| named(&format!("h{i}"), "G", format!("http://{addr}/hang")))
+        .map(|index| named(&format!("h{index}"), "G", format!("http://{addr}/hang")))
         .collect();
     let (state, _dir) = state_with(links).await;
     let started = Instant::now();
     check_round(&state, &Probers::new().unwrap()).await;
     assert!(started.elapsed() < 2 * CHECK_TIMEOUT + Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn other_reason_does_not_leak_the_url() {
+    let outcome = probe(
+        &Probers::new().unwrap(),
+        &link("ftp://example.invalid/secret?token=hunter2".to_string()),
+    )
+    .await;
+    assert_eq!(outcome.state, ServiceState::Down);
+    let Some(DownReason::Other(message)) = outcome.reason else {
+        panic!("expected Other, got {:?}", outcome.reason);
+    };
+    assert!(
+        !message.contains("hunter2") && !message.contains("secret"),
+        "{message}"
+    );
 }

@@ -49,7 +49,7 @@ mod tests {
         let (dir, path) = temp_file(
             "load",
             r#"[{"id":"grafana","title":"Grafana","url":"https://g.example","group":"Monitoring",
-            "description":null,"icon":"chart","host":"nixos-manager",
+            "description":null,"icon":"chart","host":"media-vm",
             "check":{"enable":true,"url":null,"expect_status":[200,302],"insecure_tls":false}}]"#,
         );
         let links = load_links(&path).unwrap();
@@ -62,7 +62,7 @@ mod tests {
                 group: "Monitoring".into(),
                 description: None,
                 icon: Some("chart".into()),
-                host: "nixos-manager".into(),
+                host: "media-vm".into(),
                 check: LinkCheck {
                     enable: true,
                     url: None,

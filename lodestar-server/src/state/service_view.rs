@@ -41,6 +41,6 @@ pub fn service_views(state: &AppState, peers: &HashMap<String, PeerInfo>) -> Vec
             }
         })
         .collect();
-    views.sort_by(|a, b| (&a.group, &a.title).cmp(&(&b.group, &b.title)));
+    views.sort_by(|left, right| (&left.group, &left.title).cmp(&(&right.group, &right.title)));
     views
 }

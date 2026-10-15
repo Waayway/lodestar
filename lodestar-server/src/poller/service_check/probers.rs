@@ -58,14 +58,15 @@ pub async fn probe(probers: &Probers, link: &Link) -> ProbeOutcome {
         }
         Err(error) => ProbeOutcome {
             state: ServiceState::Down,
-            reason: Some(classify_error(&error)),
+            reason: Some(classify_error(error)),
             latency_ms: None,
         },
     }
 }
 
-/// Map a failed request to the reason shown on the dashboard.
-pub fn classify_error(error: &reqwest::Error) -> DownReason {
+/// Map a failed request to the reason shown on the dashboard. `Other` carries the error
+/// message without the probed URL (it may hold credentials or tokens).
+pub fn classify_error(error: reqwest::Error) -> DownReason {
     if error.is_timeout() {
         return DownReason::Timeout;
     }
@@ -86,7 +87,7 @@ pub fn classify_error(error: &reqwest::Error) -> DownReason {
     } else if error.is_connect() {
         DownReason::Unreachable
     } else {
-        DownReason::Other(error.to_string())
+        DownReason::Other(error.without_url().to_string())
     }
 }
 

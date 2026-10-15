@@ -1,4 +1,4 @@
-//! Server configuration (JSON file) and the managed host list (`hosts.json`).
+//! Server configuration (JSON file), the managed host list (`hosts.json`) and the service links (`links.json`).
 
 mod access_config;
 mod link;

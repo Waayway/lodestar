@@ -255,8 +255,11 @@ Components take typed props (types from `bindings/`); data and actions come only
   the two pages cannot drift apart.
 - **ServicesPage** (`pages/ServicesPage.tsx`): summary tiles (up, down, checking, and "not
   checked" when non-zero), then one `Section` per group (sorted by name, with a count) of
-  `ServiceCard`s in `repeat(auto-fill, minmax(280px, 1fr))` with 12 px gaps (one column on
-  phones); an `EmptyState` "No services declared" when there are none.
+  `ServiceCard`s. The groups share one grid of card columns (1, 2, 3, 4 from 0, 640, 900,
+  1200 px; 12 px gaps, 22 px between rows) packed densely: a group spans one column per card
+  (`groupColumns`), so small groups sit side by side and a later small group fills a gap;
+  its cards use as many equal columns, so they line up across groups. An `EmptyState`
+  "No services declared" when there are none.
 - **Section** `{ title, icon?, label?, children }`: heading with a rule to the right edge.
   **SectionHeading** for a heading inside a card.
 - **EmptyState** `{ title, children? }`: dashed box, muted text.

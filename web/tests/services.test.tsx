@@ -15,7 +15,7 @@ import { Building, Down, Idle, Off, Unreachable, Up } from "@/icons";
 import { downReasonLabel, groupServices, serviceCounts, serviceLabel, serviceSubLine } from "@/lib/format";
 import { parseRoute } from "@/lib/route";
 import { serviceStyle } from "@/lib/tones";
-import { ServicesPage } from "@/pages/ServicesPage";
+import { groupColumns, ServicesPage } from "@/pages/ServicesPage";
 import { host, NOW, service } from "./helpers";
 
 afterEach(cleanup);
@@ -246,6 +246,49 @@ describe("ServicesPage", () => {
     expect(headings).toHaveLength(2);
     expect(headings[0]).toMatch(/^Media/);
     expect(headings[1]).toMatch(/^Monitoring/);
+  });
+  it("packs groups densely, each spanning as many columns as it has cards", () => {
+    render(
+      <WithSnap
+        snap={snapshot({
+          services: [
+            service({ id: "a", group: "Apps" }),
+            ...["p", "q", "r", "s", "t"].map((id) => service({ id, title: id, group: "Infrastructure" })),
+          ],
+        })}
+      >
+        <ServicesPage />
+      </WithSnap>,
+    );
+    const apps = screen.getByRole("region", { name: "Apps" });
+    const infrastructure = screen.getByRole("region", { name: "Infrastructure" });
+    expect(apps.parentElement?.className).toContain("grid-flow-row-dense");
+    expect(apps.className).toContain(groupColumns(1).section);
+    expect(infrastructure.className).toContain(groupColumns(5).section);
+    expect(infrastructure.querySelector("ul")?.className).toContain(groupColumns(5).list);
+  });
+});
+
+describe("groupColumns", () => {
+  it("spans one column per card, capped at the columns of each breakpoint", () => {
+    expect(groupColumns(1).section.split(" ")).toEqual([
+      "col-span-1",
+      "min-[640px]:col-span-1",
+      "min-[900px]:col-span-1",
+      "min-[1200px]:col-span-1",
+    ]);
+    expect(groupColumns(3).section.split(" ")).toEqual([
+      "col-span-1",
+      "min-[640px]:col-span-2",
+      "min-[900px]:col-span-3",
+      "min-[1200px]:col-span-3",
+    ]);
+    expect(groupColumns(9).list.split(" ")).toEqual([
+      "grid-cols-1",
+      "min-[640px]:grid-cols-2",
+      "min-[900px]:grid-cols-3",
+      "min-[1200px]:grid-cols-4",
+    ]);
   });
 });
 

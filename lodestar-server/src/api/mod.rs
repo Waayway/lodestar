@@ -10,7 +10,9 @@ mod channels;
 mod csrf;
 mod error;
 mod hosts;
+mod me;
 mod promote;
+mod public_services;
 mod snapshot;
 
 pub use app::app;

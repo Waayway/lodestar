@@ -12,8 +12,12 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::StreamExt;
-use lodestar_proto::{ApplyRequest, AuditEvent, LogChunk, WsMessage};
-use lodestar_server::config::{AccessConfig, ManagedHost, OnlineSource, ServerConfig};
+use lodestar_proto::{
+    ApplyRequest, AuditEvent, LogChunk, Me, Role, ServiceCheck, ServiceState, WsMessage,
+};
+use lodestar_server::config::{
+    AccessConfig, Link, LinkCheck, ManagedHost, OnlineSource, ServerConfig,
+};
 use lodestar_server::db;
 use lodestar_server::db::entities::applies;
 use lodestar_server::mirror::Mirror;
@@ -163,6 +167,17 @@ async fn env_with_access(
     hosts: Vec<ManagedHost>,
     access: AccessConfig,
 ) -> Env {
+    env_with_links(dir, repository_url, agent, hosts, access, Vec::new()).await
+}
+
+async fn env_with_links(
+    dir: tempfile::TempDir,
+    repository_url: &str,
+    agent: SocketAddr,
+    hosts: Vec<ManagedHost>,
+    access: AccessConfig,
+    links: Vec<Link>,
+) -> Env {
     let addresses: HashMap<String, String> = hosts
         .iter()
         .map(|managed_host| (managed_host.name.to_lowercase(), agent.to_string()))
@@ -189,7 +204,8 @@ async fn env_with_access(
     let connection = db::connect(&config.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());
     let online = Arc::new(StaticOnline::new(&addresses).unwrap());
-    let state = AppState::new(Arc::new(config), connection, mirror, online, hosts).unwrap();
+    let mut state = AppState::new(Arc::new(config), connection, mirror, online, hosts).unwrap();
+    state.links = Arc::new(links);
     let app = lodestar_server::api::app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -731,4 +747,88 @@ async fn concurrent_applies_all_accepted() {
         assert_eq!(desired.commit, head, "{name}");
     }
     assert_eq!(fake.lock().unwrap().applied.len(), names.len());
+}
+
+#[tokio::test]
+async fn me_on_tailnet_entrance_is_admin() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    origin.commit("one", "main");
+    let agent = fake_agent(Shared::default()).await;
+    let environment = env(dir, origin.bare.to_str().unwrap(), agent, vec![]).await;
+
+    let me: Me = dashboard_client()
+        .get(format!("{}/api/me", environment.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(me.viewer.as_deref(), Some("dev"));
+    assert_eq!(me.role, Role::Admin);
+    assert!(me.can_act);
+    assert!(!me.session);
+    assert_eq!(me.reason, None);
+}
+
+#[tokio::test]
+async fn public_services_has_only_public_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    origin.commit("one", "main");
+    let agent = fake_agent(Shared::default()).await;
+    let link = Link {
+        id: "grafana".into(),
+        title: "Grafana".into(),
+        url: "https://g.example.com".into(),
+        group: "Monitoring".into(),
+        description: Some("Dashboards".into()),
+        icon: Some("chart".into()),
+        host: "media-vm".into(),
+        check: LinkCheck {
+            enable: true,
+            url: None,
+            expect_status: vec![200],
+            insecure_tls: false,
+        },
+    };
+    let environment = env_with_links(
+        dir,
+        origin.bare.to_str().unwrap(),
+        agent,
+        vec![],
+        AccessConfig::Disabled,
+        vec![link],
+    )
+    .await;
+    environment.state.checks.lock().unwrap().insert(
+        "grafana".into(),
+        ServiceCheck {
+            state: ServiceState::Down,
+            reason: None,
+            latency_ms: Some(12),
+            checked_at: Some(1_700_000_100),
+            since: Some(1_700_000_000),
+        },
+    );
+
+    let services: Vec<Value> = dashboard_client()
+        .get(format!("{}/api/public/services", environment.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(services.len(), 1);
+    let service = services[0].as_object().unwrap();
+    let mut keys: Vec<&str> = service.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["description", "group", "icon", "since", "state", "title"]
+    );
+    assert_eq!(service["state"], "down");
+    assert_eq!(service["since"], 1_700_000_000);
 }

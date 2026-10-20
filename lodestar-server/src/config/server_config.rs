@@ -5,7 +5,7 @@ use anyhow::Context;
 use lodestar_proto::PromoteChannels;
 use serde::{Deserialize, Serialize};
 
-use super::{AccessConfig, OnlineSource};
+use super::{AccessConfig, OnlineSource, ProxyConfig};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ServerConfig {
@@ -31,6 +31,9 @@ pub struct ServerConfig {
     /// Promote pair; absent means `unstable` -> `stable`, `null` disables promote.
     #[serde(default = "default_promote")]
     pub promote: Option<PromoteChannels>,
+    /// The router entrance; absent or `null` means only the tailnet listener.
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
 }
 
 fn default_mirror_fetch_secs() -> u64 {
@@ -57,6 +60,7 @@ impl ServerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::OidcConfig;
 
     #[test]
     fn config_defaults_and_tags() {
@@ -72,6 +76,7 @@ mod tests {
         assert_eq!(config.deploy_key_file, None);
         assert_eq!(config.links_file, None);
         assert_eq!(config.promote, Some(PromoteChannels::default()));
+        assert_eq!(config.proxy, None);
         assert!(matches!(config.access, AccessConfig::Tailscale { .. }));
         let disabled: AccessConfig = serde_json::from_str(r#"{"kind":"disabled"}"#).unwrap();
         assert_eq!(disabled, AccessConfig::Disabled);
@@ -94,6 +99,36 @@ mod tests {
             Some(PromoteChannels {
                 from: "main".into(),
                 to: "release".into()
+            })
+        );
+    }
+
+    #[test]
+    fn proxy_parses() {
+        let config: ServerConfig = serde_json::from_str(
+            r#"{"listen":"127.0.0.1:8080","agent_port":7461,"hosts_file":"/h.json",
+            "repo_url":"u","push_url":"p","state_dir":"/s","access":{"kind":"disabled"},
+            "online":{"kind":"tailscale"},
+            "proxy":{"listen":"10.0.10.170:8081","trusted_proxies":["10.0.10.110"],
+            "public_url":"https://lodestar.example.com",
+            "oidc":{"issuer":"https://id.example.com/oauth2/openid/lodestar",
+            "client_id":"lodestar","client_secret_file":"/secret",
+            "reader_group":"lodestar-users@example.com","admin_group":"admins@example.com"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.proxy,
+            Some(ProxyConfig {
+                listen: "10.0.10.170:8081".parse().unwrap(),
+                trusted_proxies: vec!["10.0.10.110".parse().unwrap()],
+                public_url: "https://lodestar.example.com".into(),
+                oidc: OidcConfig {
+                    issuer: "https://id.example.com/oauth2/openid/lodestar".into(),
+                    client_id: "lodestar".into(),
+                    client_secret_file: PathBuf::from("/secret"),
+                    reader_group: "lodestar-users@example.com".into(),
+                    admin_group: "admins@example.com".into(),
+                },
             })
         );
     }

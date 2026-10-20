@@ -82,6 +82,7 @@ fn config(state_dir: &Path, repository_url: &str) -> ServerConfig {
         poll_secs: 60,
         tailscale_bin: PathBuf::from("tailscale"),
         promote: Some(lodestar_proto::PromoteChannels::default()),
+        proxy: None,
     }
 }
 

@@ -71,6 +71,7 @@ pub async fn start(
     demo: bool,
 ) -> anyhow::Result<ServerHandle> {
     config.check_listen()?;
+    config.check_proxy()?;
     let connection = db::connect(&config.state_dir).await?;
     let mirror = Arc::new(Mirror::open_or_init(&config).await?);
     let listen = config.listen;

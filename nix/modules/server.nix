@@ -14,6 +14,18 @@ let
   configPath = "/etc/lodestar-server/config.json";
   stateDir = "/var/lib/lodestar-server";
 
+  proxyEnabled = cfg.proxyListen.address != null;
+  isIpv6 = lib.hasInfix ":";
+  ipv4Proxies = lib.filter (a: !isIpv6 a) cfg.trustedProxies;
+  ipv6Proxies = lib.filter isIpv6 cfg.trustedProxies;
+  proxyPort = toString cfg.proxyListen.port;
+  # Socket address: IPv6 needs brackets.
+  proxySocket =
+    if isIpv6 cfg.proxyListen.address then
+      "[${cfg.proxyListen.address}]:${proxyPort}"
+    else
+      "${cfg.proxyListen.address}:${proxyPort}";
+
   linkType = import ../lib/linkType.nix { inherit lib; } { hostType = types.str; };
 
   hostType = types.submodule {
@@ -131,6 +143,79 @@ in
       description = "Tailscale node tags allowed to use the dashboard and API.";
     };
 
+    proxyListen = {
+      address = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "10.0.10.170";
+        description = ''
+          LAN address of the router entrance: a second listener that only the
+          `trustedProxies` may reach, for the public URL. Null (default) turns it off and
+          leaves the dashboard on the tailnet only.
+        '';
+      };
+      port = mkOption {
+        type = types.port;
+        default = 8081;
+        description = "TCP port of the router entrance.";
+      };
+    };
+
+    trustedProxies = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "10.0.10.110" ];
+      description = ''
+        Addresses of the reverse proxies allowed to reach the router entrance; the firewall
+        opens `proxyListen.port` for these sources only, and the server refuses every other
+        peer. Required when `proxyListen.address` is set.
+      '';
+    };
+
+    publicUrl = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "https://lodestar.example.com";
+      description = "Public URL of the dashboard (the OIDC redirect is `<publicUrl>/auth/callback`).";
+    };
+
+    oidc = {
+      issuer = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "https://id.example.com/oauth2/openid/lodestar";
+        description = "OpenID Connect issuer URL used for login on the router entrance.";
+      };
+      clientId = mkOption {
+        type = types.str;
+        default = "lodestar";
+        description = "OAuth2 client id.";
+      };
+      clientSecretFile = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = ''
+          File with the OAuth2 client secret, outside the Nix store and readable by the
+          `lodestar-server` user, from a secrets module such as opnix
+          (`services.onepassword-secrets.secrets.<name> = { reference = "op://…";
+          owner = "lodestar-server"; mode = "0400"; };` and
+          `clientSecretFile = config.services.onepassword-secrets.secretPaths.<name>;`).
+        '';
+      };
+      readerGroup = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "lodestar-users@example.com";
+        description = "Group (exact `groups` claim value) whose members may read the dashboard.";
+      };
+      adminGroup = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "admins@example.com";
+        description = "Group (exact `groups` claim value) whose members may act; wins over `readerGroup`.";
+      };
+    };
+
     agentPort = mkOption {
       type = types.port;
       default = config.services.lodestar-agent.port or 7461;
@@ -188,6 +273,22 @@ in
         assertion = cfg.promote == null || cfg.pushUrl != null;
         message = "services.lodestar-server.pushUrl must be set while promote is enabled (or set promote = null).";
       }
+      {
+        assertion = !proxyEnabled || cfg.trustedProxies != [ ];
+        message = "services.lodestar-server.trustedProxies must not be empty while proxyListen.address is set.";
+      }
+      {
+        assertion =
+          !proxyEnabled
+          || (
+            cfg.publicUrl != null
+            && cfg.oidc.issuer != null
+            && cfg.oidc.clientSecretFile != null
+            && cfg.oidc.readerGroup != null
+            && cfg.oidc.adminGroup != null
+          );
+        message = "services.lodestar-server: publicUrl, oidc.issuer, oidc.clientSecretFile, oidc.readerGroup and oidc.adminGroup must be set while proxyListen.address is set.";
+      }
     ];
 
     users.users.lodestar-server = {
@@ -203,6 +304,26 @@ in
 
     # The dashboard is reached over the tailnet only.
     networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ cfg.listenPort ];
+
+    # The router entrance is open to the trusted proxies only, never to every source.
+    networking.firewall.extraInputRules = lib.mkIf (proxyEnabled && config.networking.nftables.enable) (
+      lib.concatStringsSep "\n" (
+        lib.optional (
+          ipv4Proxies != [ ]
+        ) "ip saddr { ${lib.concatStringsSep ", " ipv4Proxies} } tcp dport ${proxyPort} accept"
+        ++ lib.optional (
+          ipv6Proxies != [ ]
+        ) "ip6 saddr { ${lib.concatStringsSep ", " ipv6Proxies} } tcp dport ${proxyPort} accept"
+      )
+    );
+    networking.firewall.extraCommands = lib.mkIf (proxyEnabled && !config.networking.nftables.enable) (
+      lib.concatStringsSep "\n" (
+        map (a: "iptables -A nixos-fw -p tcp -s ${a} --dport ${proxyPort} -j nixos-fw-accept") ipv4Proxies
+        ++ map (
+          a: "ip6tables -A nixos-fw -p tcp -s ${a} --dport ${proxyPort} -j nixos-fw-accept"
+        ) ipv6Proxies
+      )
+    );
 
     environment.etc."lodestar-server/hosts.json".text = builtins.toJSON (
       lib.mapAttrsToList (name: h: {
@@ -265,6 +386,20 @@ in
         tailscale_bin = lib.getExe' config.services.tailscale.package "tailscale";
       }
       // lib.optionalAttrs (cfg.testing.pollSecs != null) { poll_secs = cfg.testing.pollSecs; }
+      // lib.optionalAttrs proxyEnabled {
+        proxy = {
+          listen = proxySocket;
+          trusted_proxies = cfg.trustedProxies;
+          public_url = cfg.publicUrl;
+          oidc = {
+            inherit (cfg.oidc) issuer;
+            client_id = cfg.oidc.clientId;
+            client_secret_file = cfg.oidc.clientSecretFile;
+            reader_group = cfg.oidc.readerGroup;
+            admin_group = cfg.oidc.adminGroup;
+          };
+        };
+      }
     );
 
     systemd.services.lodestar-server = {

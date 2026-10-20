@@ -184,6 +184,7 @@ async fn env_with_access(
         poll_secs: 60,
         tailscale_bin: PathBuf::from("tailscale"),
         promote: Some(lodestar_proto::PromoteChannels::default()),
+        proxy: None,
     };
     let connection = db::connect(&config.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());

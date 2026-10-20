@@ -51,35 +51,61 @@
       # from binaryPath.
       firewallCheck =
         let
-          system = lib.nixosSystem {
-            system = "x86_64-linux";
-            modules = [
-              self.nixosModules.default
-              {
-                system.stateVersion = "26.05";
-                boot.loader.grub.enable = false;
-                fileSystems."/" = {
-                  device = "/dev/sda1";
-                  fsType = "ext4";
-                };
-                networking.hostName = "manager";
-                users.users.alice.isNormalUser = true;
-                services.tailscale.enable = true;
-                services.lodestar-agent = {
-                  enable = true;
-                  user = "alice";
-                  managerHost = "manager";
-                  repoUrl = "https://example.com/infra.git";
-                };
-                services.lodestar-server = {
-                  enable = true;
-                  repoUrl = "https://example.com/infra.git";
-                  pushUrl = "git@example.com:infra.git";
-                  listenAddress = "100.64.0.1";
-                };
-              }
-            ];
+          mkSystem =
+            serverExtra:
+            lib.nixosSystem {
+              system = "x86_64-linux";
+              modules = [
+                self.nixosModules.default
+                {
+                  system.stateVersion = "26.05";
+                  boot.loader.grub.enable = false;
+                  fileSystems."/" = {
+                    device = "/dev/sda1";
+                    fsType = "ext4";
+                  };
+                  networking.hostName = "manager";
+                  users.users.alice.isNormalUser = true;
+                  services.tailscale.enable = true;
+                  services.lodestar-agent = {
+                    enable = true;
+                    user = "alice";
+                    managerHost = "manager";
+                    repoUrl = "https://example.com/infra.git";
+                  };
+                  services.lodestar-server = {
+                    enable = true;
+                    repoUrl = "https://example.com/infra.git";
+                    pushUrl = "git@example.com:infra.git";
+                    listenAddress = "100.64.0.1";
+                  }
+                  // serverExtra;
+                }
+              ];
+            };
+          system = mkSystem { };
+          proxyOptions = {
+            proxyListen.address = "10.0.10.170";
+            trustedProxies = [ "10.0.10.110" ];
+            publicUrl = "https://lodestar.example.com";
+            oidc = {
+              issuer = "https://id.example.com/oauth2/openid/lodestar";
+              clientSecretFile = "/run/secrets/lodestar-oidc";
+              readerGroup = "lodestar-users@example.com";
+              adminGroup = "admins@example.com";
+            };
           };
+          proxied = mkSystem proxyOptions;
+          incomplete = mkSystem { proxyListen.address = "10.0.10.170"; };
+          proxiedFirewall = proxied.config.networking.firewall;
+          proxiedConfig = builtins.fromJSON (
+            builtins.unsafeDiscardStringContext
+              proxied.config.environment.etc."lodestar-server/config.json".text
+          );
+          serverConfig = builtins.fromJSON (
+            builtins.unsafeDiscardStringContext system.config.environment.etc."lodestar-server/config.json".text
+          );
+          failedMessages = map (a: a.message) (lib.filter (a: !a.assertion) incomplete.config.assertions);
           inherit (system.config.networking.firewall) interfaces allowedTCPPorts;
           ports = interfaces.tailscale0.allowedTCPPorts;
           execStart = system.config.systemd.services.lodestar-agent.serviceConfig.ExecStart;
@@ -96,6 +122,22 @@
         assert lib.assertMsg (
           agentConfig.agent_exe == "/var/lib/lodestar-agent/bin/lodestar-agent"
         ) "agent_exe must be binaryPath";
+        assert lib.assertMsg (
+          !(builtins.elem 8081 proxiedFirewall.allowedTCPPorts)
+          && !(builtins.elem 8081 proxiedFirewall.interfaces.tailscale0.allowedTCPPorts)
+        ) "the router entrance port must not be open to every source or on tailscale0";
+        assert lib.assertMsg
+          (lib.hasInfix "-p tcp -s 10.0.10.110 --dport 8081 -j nixos-fw-accept" proxiedFirewall.extraCommands)
+          "the router entrance port must be opened for the trusted proxy only (extraCommands = ${proxiedFirewall.extraCommands})";
+        assert lib.assertMsg (
+          proxiedConfig.proxy.trusted_proxies == [ "10.0.10.110" ]
+          && proxiedConfig.proxy.oidc.client_id == "lodestar"
+        ) "config.json must carry the proxy section";
+        assert lib.assertMsg (
+          !(serverConfig ? proxy) || serverConfig.proxy == null
+        ) "config.json must have no proxy section without proxyListen.address";
+        assert lib.assertMsg (lib.any (lib.hasInfix "trustedProxies") failedMessages)
+          "proxyListen.address without trustedProxies must fail an assertion naming trustedProxies";
         linuxPkgs.runCommand "lodestar-firewall" { } "touch $out";
     in
     {

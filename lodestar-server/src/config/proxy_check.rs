@@ -11,18 +11,7 @@ impl ServerConfig {
                 "proxy.trusted_proxies is empty; the router entrance would refuse every request"
             );
         }
-        let public_url = reqwest::Url::parse(&proxy.public_url).map_err(|error| {
-            anyhow::anyhow!(
-                "proxy.public_url {:?} is not a URL: {error}",
-                proxy.public_url
-            )
-        })?;
-        if !matches!(public_url.scheme(), "http" | "https") || public_url.host().is_none() {
-            anyhow::bail!(
-                "proxy.public_url {:?} must be an http or https URL with a host",
-                proxy.public_url
-            );
-        }
+        proxy.parse_public_url()?;
         if proxy.listen == self.listen {
             anyhow::bail!(
                 "proxy.listen {} is the same as listen; the router entrance needs its own address",
@@ -93,7 +82,69 @@ mod tests {
         let proxy = config.proxy.as_mut().unwrap();
         proxy.public_url = "https://lodestar.example.com/".into();
         assert_eq!(proxy.public_origin(), "https://lodestar.example.com");
-        proxy.public_url = "http://lodestar.example.com:8443/a/b?x=1".into();
-        assert_eq!(proxy.public_origin(), "http://lodestar.example.com:8443");
+    }
+
+    #[test]
+    fn public_origin_is_normalised_like_a_browser_origin() {
+        for (url, origin) in [
+            (
+                "HTTPS://Lodestar.Example.com",
+                "https://lodestar.example.com",
+            ),
+            (
+                "https://lodestar.example.com:443",
+                "https://lodestar.example.com",
+            ),
+            (
+                "https://lodestar.example.com:8443/",
+                "https://lodestar.example.com:8443",
+            ),
+            (
+                "http://lodestar.example.com:80",
+                "http://lodestar.example.com",
+            ),
+            (
+                "http://lodestar.example.com:8080",
+                "http://lodestar.example.com:8080",
+            ),
+        ] {
+            config_ok(&config_with(url));
+            assert_eq!(
+                config_with(url).proxy.unwrap().public_origin(),
+                origin,
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_or_decorated_public_urls_refused() {
+        for url in [
+            "https://user:pw@lodestar.example.com/",
+            "https://user@lodestar.example.com",
+            "https://lodestar.example.com/sub",
+            "https://lodestar.example.com/?x=1",
+            "https://lodestar.example.com/#top",
+            "https://lodestar.example.com?",
+            "https:lodestar.example.com",
+            "https:/lodestar.example.com",
+            "https://",
+            "mailto:alice@example.com",
+            "",
+        ] {
+            let config = config_with(url);
+            assert!(config.check_proxy().is_err(), "{url:?} must be refused");
+            assert_eq!(config.proxy.unwrap().public_origin(), "", "{url:?}");
+        }
+    }
+
+    fn config_with(public_url: &str) -> ServerConfig {
+        let mut config = config("");
+        config.proxy.as_mut().unwrap().public_url = public_url.into();
+        config
+    }
+
+    fn config_ok(config: &ServerConfig) {
+        config.check_proxy().unwrap();
     }
 }

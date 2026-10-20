@@ -699,14 +699,13 @@ async fn me_on_tailnet_entrance_is_admin() {
     let agent = fake_agent(Shared::default()).await;
     let environment = env(dir, origin.bare.to_str().unwrap(), agent, vec![]).await;
 
-    let me: Me = dashboard_client()
+    let response = dashboard_client()
         .get(format!("{}/api/me", environment.base))
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let me: Me = response.json().await.unwrap();
     assert_eq!(me.viewer.as_deref(), Some("dev"));
     assert_eq!(me.role, Role::Admin);
     assert!(me.can_act);
@@ -755,14 +754,13 @@ async fn public_services_has_only_public_fields() {
         },
     );
 
-    let services: Vec<Value> = dashboard_client()
+    let response = dashboard_client()
         .get(format!("{}/api/public/services", environment.base))
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let services: Vec<Value> = response.json().await.unwrap();
     assert_eq!(services.len(), 1);
     let service = services[0].as_object().unwrap();
     let mut keys: Vec<&str> = service.keys().map(String::as_str).collect();

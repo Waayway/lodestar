@@ -2,10 +2,12 @@
 
 use axum::Extension;
 use axum::Json;
-use lodestar_proto::Me;
+use axum::http::header;
+use axum::response::IntoResponse;
 
 use crate::access::Viewer;
 
-pub(super) async fn me(Extension(viewer): Extension<Viewer>) -> Json<Me> {
-    Json(viewer.me())
+/// Who the viewer is; `no-store`, so no cache in between hands one viewer's answer to another.
+pub(super) async fn me(Extension(viewer): Extension<Viewer>) -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "no-store")], Json(viewer.me()))
 }

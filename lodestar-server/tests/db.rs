@@ -162,3 +162,89 @@ async fn status_roundtrip_json() {
         .unwrap();
     assert_eq!(db::activations_next(&connection, "h1").await.unwrap(), 7);
 }
+
+fn login_session(id_hash: &str, expires_at: i64) -> lodestar_server::auth::LoginSession {
+    lodestar_server::auth::LoginSession {
+        id_hash: id_hash.into(),
+        user: "bob".into(),
+        role: lodestar_proto::Role::Admin,
+        expires_at,
+    }
+}
+
+#[tokio::test]
+async fn session_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let connection = db::connect(dir.path()).await.unwrap();
+    let session = login_session("h1", 200);
+    db::insert_session(&connection, &session, 100)
+        .await
+        .unwrap();
+    let found = db::find_session(&connection, "h1", 199).await.unwrap();
+    assert_eq!(found, Some(session));
+    assert_eq!(
+        db::find_session(&connection, "other", 199).await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn expired_session_is_deleted_on_find() {
+    use sea_orm::EntityTrait;
+    let dir = tempfile::tempdir().unwrap();
+    let connection = db::connect(dir.path()).await.unwrap();
+    db::insert_session(&connection, &login_session("h1", 200), 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        db::find_session(&connection, "h1", 200).await.unwrap(),
+        None
+    );
+    let rows = db::entities::sessions::Entity::find()
+        .all(&connection)
+        .await
+        .unwrap();
+    assert!(rows.is_empty());
+}
+
+#[tokio::test]
+async fn delete_session_removes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let connection = db::connect(dir.path()).await.unwrap();
+    db::insert_session(&connection, &login_session("h1", 200), 100)
+        .await
+        .unwrap();
+    db::delete_session(&connection, "h1").await.unwrap();
+    assert_eq!(
+        db::find_session(&connection, "h1", 150).await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn delete_expired_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let connection = db::connect(dir.path()).await.unwrap();
+    for (id, expires_at) in [("a", 150), ("b", 200), ("c", 500)] {
+        db::insert_session(&connection, &login_session(id, expires_at), 100)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        db::delete_expired_sessions(&connection, 200).await.unwrap(),
+        2
+    );
+    assert!(
+        db::find_session(&connection, "c", 200)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn migration_runs_on_existing_database() {
+    let dir = tempfile::tempdir().unwrap();
+    db::connect(dir.path()).await.unwrap();
+    db::connect(dir.path()).await.unwrap();
+}

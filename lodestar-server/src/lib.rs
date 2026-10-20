@@ -1,6 +1,7 @@
 pub mod access;
 pub mod agent_client;
 pub mod api;
+pub mod auth;
 mod clock;
 pub mod config;
 pub mod db;

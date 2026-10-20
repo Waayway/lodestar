@@ -6,6 +6,8 @@ import type { CheckoutStatus } from "@/bindings/CheckoutStatus";
 import type { DownReason } from "@/bindings/DownReason";
 import type { PromoteChannels } from "@/bindings/PromoteChannels";
 import type { HostView } from "@/bindings/HostView";
+import type { PublicService } from "@/bindings/PublicService";
+import type { PublicServiceState } from "@/bindings/PublicServiceState";
 import type { ServiceView } from "@/bindings/ServiceView";
 import type { SkipReason } from "@/bindings/SkipReason";
 import type { AgentStatus } from "@/lib/apiTypes";
@@ -294,10 +296,14 @@ export function serviceLabel(s: ServiceView): string {
  * or unchecked.
  */
 export function serviceSubLine(s: ServiceView, now: number): string | null {
-  const c = s.check;
-  if ((c.state !== "up" && c.state !== "down") || c.since === null) return null;
-  const duration = ago(c.since, now);
-  return duration === "just now" ? `${c.state} just now` : `${c.state} since ${duration.replace(/ ago$/, "")}`;
+  return stateSince(s.check.state, s.check.since, now);
+}
+
+/** The sub-line wording on its own: "up since 3h", "down just now"; null for any other state or no time. */
+export function stateSince(state: string, since: number | null, now: number): string | null {
+  if ((state !== "up" && state !== "down") || since === null) return null;
+  const duration = ago(since, now);
+  return duration === "just now" ? `${state} just now` : `${state} since ${duration.replace(/ ago$/, "")}`;
 }
 
 /** How many services are in each check state (the Services summary tiles). */
@@ -308,10 +314,22 @@ export function serviceCounts(list: ServiceView[]): { up: number; down: number; 
 }
 
 /** Services by group, groups sorted by name and each group's cards by title. */
-export function groupServices(list: ServiceView[]): [string, ServiceView[]][] {
-  const groups = new Map<string, ServiceView[]>();
+export function groupServices<T extends { group: string; title: string }>(list: T[]): [string, T[]][] {
+  const groups = new Map<string, T[]>();
   for (const s of list) groups.set(s.group, [...(groups.get(s.group) ?? []), s]);
   return [...groups.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([g, xs]) => [g, [...xs].sort((a, b) => a.title.localeCompare(b.title))]);
+}
+
+/** The anonymous badge word for a public service's state. */
+export function publicServiceLabel(state: PublicServiceState): "Up" | "Down" | "Unknown" {
+  return state === "up" ? "Up" : state === "down" ? "Down" : "Unknown";
+}
+
+/** How many public services are in each state (the anonymous summary tiles). */
+export function publicServiceCounts(list: PublicService[]): { up: number; down: number; unknown: number } {
+  const c = { up: 0, down: 0, unknown: 0 };
+  for (const s of list) c[s.state] += 1;
+  return c;
 }

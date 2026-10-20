@@ -33,6 +33,8 @@ export {
   CircleCheckIcon as Up,
   CircleXIcon as Down,
   ExternalLinkIcon as External,
+  LogInIcon as LogIn,
+  LogOutIcon as LogOut,
 } from "lucide-react";
 
 /** The type of any icon above (for props that take an icon). */

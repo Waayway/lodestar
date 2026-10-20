@@ -3,6 +3,7 @@
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type { HostView } from "@/bindings/HostView";
+import { ActGate } from "@/components/fleet/ActGate";
 import { ChannelPill } from "@/components/fleet/ChannelPill";
 import { CommitHash } from "@/components/fleet/CommitHash";
 import { OsIcon } from "@/components/fleet/OsIcon";
@@ -175,16 +176,21 @@ export function HostActions({ host: h, wide = false }: { host: HostView; wide?: 
           <Log aria-hidden="true" />
         </Button>
       )}
-      <Button
-        size="sm"
-        variant={h.behind === 0 ? "outline" : "default"}
-        disabled={sending || applying}
-        onClick={apply}
-        className={wide ? "flex-1" : undefined}
-      >
-        <Apply aria-hidden="true" />
-        {sending ? "Sending" : applying ? "Applying" : "Apply newest"}
-      </Button>
+      <ActGate className={wide ? "flex flex-1" : "inline-flex"}>
+        {(gate) => (
+          <Button
+            size="sm"
+            variant={h.behind === 0 ? "outline" : "default"}
+            disabled={sending || applying || gate.disabled}
+            title={gate.title}
+            onClick={gate.disabled ? undefined : apply}
+            className={wide ? "flex-1" : undefined}
+          >
+            <Apply aria-hidden="true" />
+            {sending ? "Sending" : applying ? "Applying" : "Apply newest"}
+          </Button>
+        )}
+      </ActGate>
     </div>
   );
 }

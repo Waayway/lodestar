@@ -7,7 +7,7 @@ import type { Me } from "@/bindings/Me";
 import type { PublicService } from "@/bindings/PublicService";
 import type { ServiceView } from "@/bindings/ServiceView";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { type Actions, ActionsContext } from "@/connection/ConnectionProvider";
+import { type Actions, ActionsContext, type ConnectionState, StateContext } from "@/connection/ConnectionProvider";
 
 export const REV = "0123456789abcdef0123456789abcdef01234567";
 export const NOW = 10_000;
@@ -88,11 +88,27 @@ export function fakeActions(): Actions & { [K in keyof Actions]: ReturnType<type
   } as never;
 }
 
-export function withActions(actions: Actions, children: ComponentChildren) {
+/** A connection state for components that read the viewer; defaults to a tailnet admin. */
+export function connectionState(over: Partial<ConnectionState> = {}): ConnectionState {
+  return {
+    snapshot: null,
+    feed: { kind: "live" } as never,
+    openLog: null,
+    audit: null,
+    viewer: me({}),
+    mode: "signed_in",
+    publicServices: null,
+    ...over,
+  };
+}
+
+export function withActions(actions: Actions, children: ComponentChildren, state: Partial<ConnectionState> = {}) {
   return (
-    <ActionsContext.Provider value={actions}>
-      <TooltipProvider>{children}</TooltipProvider>
-    </ActionsContext.Provider>
+    <StateContext.Provider value={connectionState(state)}>
+      <ActionsContext.Provider value={actions}>
+        <TooltipProvider>{children}</TooltipProvider>
+      </ActionsContext.Provider>
+    </StateContext.Provider>
   );
 }
 

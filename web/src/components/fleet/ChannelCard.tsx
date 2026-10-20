@@ -1,6 +1,7 @@
 import { useState } from "preact/hooks";
 import type { ChannelView } from "@/bindings/ChannelView";
 import type { HostView } from "@/bindings/HostView";
+import { ActGate } from "@/components/fleet/ActGate";
 import { ChannelPill } from "@/components/fleet/ChannelPill";
 import { CommitHash } from "@/components/fleet/CommitHash";
 import { Button } from "@/components/ui/button";
@@ -52,14 +53,18 @@ export function ChannelCard({
           </span>
         </div>
       )}
-      <Button
-        className="self-start"
-        disabled={sending || c.head === null || hosts.length === 0}
-        onClick={applyAll}
-      >
-        <Apply aria-hidden="true" />
-        {sending ? "Sending" : `Apply newest to all on ${c.name}`}
-      </Button>
+      <ActGate className="inline-flex self-start">
+        {(gate) => (
+          <Button
+            disabled={sending || c.head === null || hosts.length === 0 || gate.disabled}
+            title={gate.title}
+            onClick={gate.disabled ? undefined : applyAll}
+          >
+            <Apply aria-hidden="true" />
+            {sending ? "Sending" : `Apply newest to all on ${c.name}`}
+          </Button>
+        )}
+      </ActGate>
     </Card>
   );
 }

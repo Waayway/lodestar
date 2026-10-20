@@ -4,7 +4,7 @@ import { cleanup, render, screen } from "@testing-library/preact";
 import { useMemo } from "preact/hooks";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Snapshot } from "@/bindings/Snapshot";
-import { reduceSnapshot, StateContext } from "@/connection/ConnectionProvider";
+import { ActionsContext, reduceSnapshot, StateContext } from "@/connection/ConnectionProvider";
 import { useServices } from "@/connection/hooks";
 import type { ComponentChildren } from "preact";
 import type { ServiceView } from "@/bindings/ServiceView";
@@ -16,7 +16,7 @@ import { downReasonLabel, groupServices, serviceCounts, serviceLabel, serviceSub
 import { parseRoute } from "@/lib/route";
 import { serviceStyle } from "@/lib/tones";
 import { groupColumns, ServicesPage } from "@/pages/ServicesPage";
-import { host, NOW, service } from "./helpers";
+import { fakeActions, host, NOW, service } from "./helpers";
 
 afterEach(cleanup);
 
@@ -218,7 +218,9 @@ function WithSnap({ snap, children }: { snap: Snapshot | null; children: Compone
   const state = useMemo(() => ({ snapshot: snap, feed: { kind: "live" } as never, openLog: null, audit: null, viewer: null, mode: "signed_in" as const, publicServices: null }), [snap]);
   return (
     <StateContext.Provider value={state}>
-      <TooltipProvider>{children}</TooltipProvider>
+      <ActionsContext.Provider value={fakeActions()}>
+        <TooltipProvider>{children}</TooltipProvider>
+      </ActionsContext.Provider>
     </StateContext.Provider>
   );
 }

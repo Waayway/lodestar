@@ -1,6 +1,7 @@
 import { useState } from "preact/hooks";
 import type { ChannelView } from "@/bindings/ChannelView";
 import type { PromoteChannels } from "@/bindings/PromoteChannels";
+import { ActGate } from "@/components/fleet/ActGate";
 import { CommitHash } from "@/components/fleet/CommitHash";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +14,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { useActions } from "@/connection/hooks";
+import { useActions, useActPermission } from "@/connection/hooks";
 import { Promote } from "@/icons";
 import { shortRev } from "@/lib/format";
 
@@ -55,6 +56,7 @@ export function PromoteDialog({
   channels: ChannelView[];
 }) {
   const { promote } = useActions();
+  const act = useActPermission();
   // What the open dialog promotes, captured when it opened.
   const [target, setTarget] = useState<{ commit: string; subject: string | null } | null>(null);
   const [sending, setSending] = useState(false);
@@ -77,12 +79,21 @@ export function PromoteDialog({
     <Dialog
       open={target !== null}
       onOpenChange={(o) => {
-        if (!sending) setTarget(o ? { commit: candidate, subject: subjectOf(candidate) } : null);
+        if (sending) return;
+        // A disabled trigger cannot open it; this keeps any other way in shut too.
+        if (o && (!act.visible || act.disabledReason !== null)) return;
+        setTarget(o ? { commit: candidate, subject: subjectOf(candidate) } : null);
       }}
     >
-      <DialogTrigger asChild>
-        <Button size="sm">Promote {shortRev(candidate)}</Button>
-      </DialogTrigger>
+      <ActGate>
+        {(gate) => (
+          <DialogTrigger asChild>
+            <Button size="sm" disabled={gate.disabled} title={gate.title}>
+              Promote {shortRev(candidate)}
+            </Button>
+          </DialogTrigger>
+        )}
+      </ActGate>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>

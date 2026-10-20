@@ -3,7 +3,9 @@ import { ThemeToggle } from "@/components/brand/ThemeToggle";
 import { LivePill } from "@/components/fleet/LivePill";
 import { NavTabs } from "@/components/layout/NavTabs";
 import type { FeedStatus } from "@/connection/feed";
-import { Machines, Viewer } from "@/icons";
+import { Button } from "@/components/ui/button";
+import { useActions } from "@/connection/hooks";
+import { LogOut, Machines, Viewer } from "@/icons";
 import { count } from "@/lib/format";
 import type { Route } from "@/lib/route";
 
@@ -14,6 +16,7 @@ import type { Route } from "@/lib/route";
 export function PageHeader({
   feed,
   viewer,
+  session,
   hostCount,
   route,
   downCount,
@@ -21,11 +24,14 @@ export function PageHeader({
   feed: FeedStatus;
   /** Who the server says is looking (null before the first snapshot). */
   viewer: string | null;
+  /** Whether the viewer has a login session (a Log out button shows); false on the tailnet. */
+  session: boolean;
   hostCount: number | null;
   route: Route;
   /** Services that are down (the count on the Services tab). */
   downCount: number;
 }) {
+  const { logout } = useActions();
   return (
     <header className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -48,6 +54,12 @@ export function PageHeader({
               <span className="sr-only">Signed in as </span>
               {viewer}
             </span>
+          )}
+          {session && (
+            <Button variant="outline" size="sm" onClick={logout}>
+              <LogOut aria-hidden="true" />
+              Log out
+            </Button>
           )}
           <ThemeToggle />
         </div>

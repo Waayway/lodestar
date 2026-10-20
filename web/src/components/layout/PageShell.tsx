@@ -3,7 +3,7 @@ import type { Snapshot } from "@/bindings/Snapshot";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { ErrorState } from "@/components/layout/ErrorState";
 import { DemoBanner, PageHeader } from "@/components/layout/PageHeader";
-import { useFleet, useServices } from "@/connection/hooks";
+import { useFleet, useServices, useViewer } from "@/connection/hooks";
 import { Disconnected, Forbidden } from "@/icons";
 import type { Route } from "@/lib/route";
 
@@ -27,6 +27,7 @@ export function PageShell({
 }) {
   const { snapshot: snap, feed } = useFleet();
   const services = useServices();
+  const me = useViewer();
   const downCount = services?.filter((s) => s.check.state === "down").length ?? 0;
   return (
     <>
@@ -35,7 +36,8 @@ export function PageShell({
         <div className="mx-auto flex max-w-[1240px] min-w-0 flex-col gap-[22px]">
           <PageHeader
             feed={feed}
-            viewer={snap?.viewer ?? null}
+            viewer={snap?.viewer ?? me?.viewer ?? null}
+            session={me?.session ?? false}
             hostCount={snap?.hosts.length ?? null}
             route={route}
             downCount={downCount}

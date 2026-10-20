@@ -2,6 +2,7 @@
 // state up here instead of keeping their own maps; docs/style-guide.md ("State system")
 // describes the same table.
 import type { OnlineState } from "@/bindings/OnlineState";
+import type { PublicServiceState } from "@/bindings/PublicServiceState";
 import type { ServiceView } from "@/bindings/ServiceView";
 import {
   Activation,
@@ -141,6 +142,18 @@ export function serviceStyle(s: ServiceView): StateStyle & { icon: Icon } {
     case "pending":
       return { tone: "info", icon: Building, spin: true };
     case "unchecked":
+      return { tone: "neutral", icon: Idle };
+  }
+}
+
+/** A public service's state (PublicServiceCard): the check result only, no host causes. */
+export function publicServiceStyle(state: PublicServiceState): StateStyle & { icon: Icon } {
+  switch (state) {
+    case "up":
+      return { tone: "ok", icon: Up };
+    case "down":
+      return { tone: "bad", icon: Down };
+    case "unknown":
       return { tone: "neutral", icon: Idle };
   }
 }

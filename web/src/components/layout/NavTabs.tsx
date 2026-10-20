@@ -4,13 +4,24 @@ import { cn } from "@/lib/cn";
 import type { Route } from "@/lib/route";
 import { toneChip } from "@/lib/tones";
 
-/** The two pages, Fleet and Services; Services carries how many services are down. */
-export function NavTabs({ route, downCount }: { route: Route; downCount: number }) {
+/** The two pages, Fleet and Services (only Services when `fleet` is false); Services carries how many services are down. */
+export function NavTabs({
+  route,
+  downCount,
+  fleet = true,
+}: {
+  route: Route;
+  downCount: number;
+  /** Whether the Fleet tab shows (not for anonymous visitors). */
+  fleet?: boolean;
+}) {
   return (
     <nav aria-label="Pages" className="border-line flex gap-1 border-b">
-      <Tab href="#/" icon={Machines} current={route === "fleet"}>
-        Fleet
-      </Tab>
+      {fleet && (
+        <Tab href="#/" icon={Machines} current={route === "fleet"}>
+          Fleet
+        </Tab>
+      )}
       <Tab href="#/services" icon={Services} current={route === "services"}>
         Services
         {downCount > 0 && (

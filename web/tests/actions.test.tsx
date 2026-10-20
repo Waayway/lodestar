@@ -8,9 +8,16 @@ import type { HostView } from "@/bindings/HostView";
 import { ChannelCard } from "@/components/fleet/ChannelCard";
 import { HostRow } from "@/components/fleet/HostRow";
 import { PromoteDialog } from "@/components/fleet/PromoteCard";
-import { apply, fakeActions, host, NOW, REV, withActions } from "./helpers";
+import { apply, fakeActions, host, me, NOW, REV, withActions } from "./helpers";
 
-function renderRow(h: HostView, actions = fakeActions()) {
+/** The three viewers: a reader, an admin off the tailnet, an admin who may act. */
+const viewers = {
+  reader: { viewer: me({ viewer: "alice", role: "reader", can_act: false, reason: "not_admin" }) },
+  offTailnet: { viewer: me({ can_act: false, reason: "not_tailnet" }) },
+  admin: { viewer: me({}) },
+};
+
+function renderRow(h: HostView, actions = fakeActions(), state = viewers.admin) {
   const r = render(
     withActions(
       actions,
@@ -19,6 +26,7 @@ function renderRow(h: HostView, actions = fakeActions()) {
           <HostRow host={h} now={NOW} channelRole="unstable" />
         </tbody>
       </table>,
+      state,
     ),
   );
   return { ...r, actions };
@@ -110,5 +118,68 @@ describe("PromoteDialog", () => {
     rerender(ui("a".repeat(40)));
     fireEvent.click(screen.getAllByRole("button", { name: "Promote 0123456" }).at(-1)!);
     await vi.waitFor(() => expect(actions.promote).toHaveBeenCalledWith(REV, pair));
+  });
+});
+
+describe("action buttons by viewer", () => {
+  const channel: ChannelView = { name: "unstable", head: REV, head_subject: "s" };
+  const pair = { from: "unstable", to: "stable" };
+  const channels: ChannelView[] = [channel, { name: "stable", head: "f".repeat(40), head_subject: "old" }];
+  const cases: [string, (a: ReturnType<typeof fakeActions>, v: typeof viewers.admin) => unknown, string, string][] = [
+    [
+      "HostRow",
+      (a, v) => renderRow(host({ behind: 2, last_apply: apply({}) }), a, v),
+      "Apply newest",
+      "applyHost",
+    ],
+    [
+      "ChannelCard",
+      (a, v) =>
+        render(withActions(a, <ChannelCard channel={channel} hosts={[host({})]} role="unstable" />, v)),
+      "Apply newest to all on unstable",
+      "applyChannel",
+    ],
+    [
+      "PromoteDialog",
+      (a, v) =>
+        render(withActions(a, <PromoteDialog candidate={REV} pair={pair} channels={channels} />, v)),
+      "Promote 0123456",
+      "none",
+    ],
+  ];
+
+  for (const [name, show, label, action] of cases) {
+    it(`${name}: a reader has no button`, () => {
+      show(fakeActions(), viewers.reader);
+      expect(screen.queryByRole("button", { name: label })).toBeNull();
+    });
+
+    it(`${name}: an admin off the tailnet sees it disabled with the reason and cannot click`, () => {
+      const actions = fakeActions();
+      show(actions, viewers.offTailnet);
+      const b = screen.getByRole("button", { name: label }) as HTMLButtonElement;
+      expect(b.disabled).toBe(true);
+      expect(b.title).toBe("Only over Tailscale");
+      fireEvent.click(b);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      for (const fn of Object.values(actions)) expect(fn).not.toHaveBeenCalled();
+    });
+
+    it(`${name}: an admin who may act has it enabled`, () => {
+      const actions = fakeActions();
+      show(actions, viewers.admin);
+      const b = screen.getByRole("button", { name: label }) as HTMLButtonElement;
+      expect(b.disabled).toBe(false);
+      expect(b.title).not.toBe("Only over Tailscale");
+      fireEvent.click(b);
+      if (action !== "none") expect(actions[action as "applyHost"]).toHaveBeenCalled();
+    });
+  }
+
+  it("a reader still gets the log button", () => {
+    const actions = fakeActions();
+    renderRow(host({ last_apply: apply({ apply_id: "a7" }) }), actions, viewers.reader);
+    fireEvent.click(screen.getByRole("button", { name: "Show log for desktop" }));
+    expect(actions.showLog).toHaveBeenCalledWith("desktop", "a7");
   });
 });

@@ -139,6 +139,12 @@ A service card has the same 3 px stripe in the `serviceStyle` tone. Its words co
 `serviceLabel` and `downReasonLabel`; the sub line ("up since 3h", "down since 2h", "up just now",
 none while checking) from `serviceSubLine`. It counts from `check.since`, because the server
 only pushes a result when the state changes; a "checked N ago" line would look stalled.
+`serviceSubLine` is `stateSince(state, since, now)` on the check; the public card uses
+`stateSince` directly.
+
+A public service card (anonymous visitors) has the same stripe in the `publicServiceStyle` tone:
+`up` ok / `Up`, `down` bad / `Down`, `unknown` neutral / `Idle` icon / `Unknown`. It never
+knows which host runs the service, so there is no "host off" cause.
 
 Channel pills are not states: their `stable` / `unstable` colours live in `ChannelPill`.
 
@@ -152,7 +158,7 @@ under Lodestar names, 16 px (22 px in tiles and the promote card), `aria-hidden`
 `Off` (power), `Unreachable` (wifi-off), `Attention` (triangle-alert), `Machines` (monitor),
 `Channel` (git-branch), `Activation` (terminal), `Audit` (history), `Viewer` (user-round),
 `Queued` (clock), `Services` (layout-grid), `Up` (circle-check), `Down` (circle-x),
-`External` (external-link), `Close` (x), `ThemeSystem` / `ThemeLight` / `ThemeDark`
+`External` (external-link), `LogIn` / `LogOut` (log-in / log-out), `Close` (x), `ThemeSystem` / `ThemeLight` / `ThemeDark`
 (sun-moon / sun / moon), `Forbidden` (shield-off), `Disconnected` (cloud-off), and the toast icons
 `ToastSuccess` / `ToastInfo` / `ToastWarning` / `ToastError`. `Icon` is their type.
 
@@ -243,13 +249,20 @@ Components take typed props (types from `bindings/`); data and actions come only
   brand mark in `currentColor`; otherwise a Lodestar icon of that name; otherwise the
   title's first letter in the serif.
 
+- **PublicServiceCard** `{ service: PublicService, now }`: the `ServiceCard` for anonymous
+  visitors: one `li` with the state stripe, the icon tile and the title as plain text (no
+  link, no URL, no host), the description, a `Badge` (`Up` / `Down` / `Unknown`) and the
+  `stateSince` line.
+
 ### `layout/`
 
-- **PageHeader** `{ feed, viewer, hostCount }`: logo left; live pill, viewer and theme
-  toggle right. **DemoBanner** above everything in demo mode.
-- **NavTabs** `{ route, downCount }`: the Fleet and Services tabs under the header
-  (`aria-current="page"` on the current one, `#/` and `#/services`); Services carries a
-  `bad` chip with the number of down services (and "down" for screen readers).
+- **PageHeader** `{ feed, viewer, session, hostCount }`: logo left; live pill, viewer, an
+  outline `Log out` button (`actions.logout`, only when `session` is true: never on the
+  tailnet) and theme toggle right. **DemoBanner** above everything in demo mode.
+- **NavTabs** `{ route, downCount, fleet? = true }`: the Fleet and Services tabs under the
+  header (`aria-current="page"` on the current one, `#/` and `#/services`); Services carries a
+  `bad` chip with the number of down services (and "down" for screen readers). `fleet={false}`
+  leaves out the Fleet tab (anonymous visitors).
 - **PageShell** `{ route, loading, children }`: the frame both pages share (demo banner,
   header, tabs, the no-access / unreachable / loading states, then the page's content), so
   the two pages cannot drift apart.
@@ -260,11 +273,32 @@ Components take typed props (types from `bindings/`); data and actions come only
   (`groupColumns`), so small groups sit side by side and a later small group fills a gap;
   its cards use as many equal columns, so they line up across groups. An `EmptyState`
   "No services declared" when there are none.
+- **PublicServicesPage** (`pages/PublicServicesPage.tsx`): the only page an anonymous visitor
+  gets, whatever the route. Its own header (logo, theme toggle, a `Log in` button with the
+  `LogIn` icon calling `actions.login`), `NavTabs` with only Services, up / down / unknown
+  tiles, then the groups in the same grid as `ServicesPage` (`groupColumns`) with
+  `PublicServiceCard`s; "No services declared" when the list is empty.
 - **Section** `{ title, icon?, label?, children }`: heading with a rule to the right edge.
   **SectionHeading** for a heading inside a card.
 - **EmptyState** `{ title, children? }`: dashed box, muted text.
 - **ErrorState** `{ title, icon?, tone? = "bad", children? }`: can't show the fleet (no access, server
   unreachable); `role="alert"`.
+
+## Three states
+
+`App` asks the connection which state it is in (`useViewMode`):
+
+- **anonymous**: `PublicServicesPage` only; no Fleet tab, no links, hosts or buttons that act.
+- **reader** (signed in, role `reader`): the full dashboard, read-only. The apply and promote
+  buttons are not rendered (`ActGate`); the log button stays. The header shows `Log out`.
+- **admin**: the full dashboard. Apply and promote buttons act when `can_act` is true; when
+  it is false (off the tailnet) they show disabled with the title `Only over Tailscale`
+  (on the button and its wrapper, since a disabled button gets no pointer events).
+  On the tailnet itself (no session) there is no `Log out`.
+
+**ActGate** `{ className?, children(gate) }` (`components/fleet/`) wraps each action button
+(`HostActions` apply, `ChannelCard` apply, `PromoteDialog` trigger) and hands it
+`{ disabled, title }` from `useActPermission()`.
 
 ## Layout
 

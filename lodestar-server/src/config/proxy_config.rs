@@ -14,8 +14,10 @@ pub struct ProxyConfig {
 }
 
 impl ProxyConfig {
-    /// The public URL, parsed and validated: `http(s)://host[:port]` written with `://`, no
-    /// userinfo, no query, no fragment and no path beyond an optional `/`.
+    /// The public URL, parsed and validated: `https://host[:port]` written with `://`, no
+    /// userinfo, no query, no fragment and no path beyond an optional `/`. Plain http is
+    /// refused: the session and login cookies are `__Host-…; Secure`, which a browser never
+    /// keeps over http, so login could not work.
     pub fn parse_public_url(&self) -> anyhow::Result<reqwest::Url> {
         let text = self.public_url.trim();
         let url = reqwest::Url::parse(text)
@@ -23,11 +25,8 @@ impl ProxyConfig {
         let written_with_authority = text
             .get(url.scheme().len()..)
             .is_some_and(|rest| rest.starts_with("://"));
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host().is_none()
-            || !written_with_authority
-        {
-            anyhow::bail!("proxy.public_url {text:?} must be an http(s)://host[:port] URL");
+        if url.scheme() != "https" || url.host().is_none() || !written_with_authority {
+            anyhow::bail!("proxy.public_url {text:?} must be an https://host[:port] URL");
         }
         if !url.username().is_empty() || url.password().is_some() {
             anyhow::bail!("proxy.public_url {text:?} must not contain a user name or password");

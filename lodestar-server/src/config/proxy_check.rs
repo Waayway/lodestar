@@ -58,9 +58,14 @@ mod tests {
     }
 
     #[test]
-    fn public_url_must_be_http_or_https() {
+    fn public_url_must_be_https() {
         let mut config = config("");
         config.proxy.as_mut().unwrap().public_url = "ftp://x".into();
+        assert!(config.check_proxy().is_err());
+        // The cookies are `__Host-…; Secure`: a browser never keeps them over plain http.
+        config.proxy.as_mut().unwrap().public_url = "http://lodestar.example.com".into();
+        let error = config.check_proxy().unwrap_err().to_string();
+        assert!(error.contains("https://"), "{error}");
         assert!(config.check_proxy().is_err());
         config.proxy.as_mut().unwrap().public_url = "not a url".into();
         assert!(config.check_proxy().is_err());
@@ -99,14 +104,6 @@ mod tests {
                 "https://lodestar.example.com:8443/",
                 "https://lodestar.example.com:8443",
             ),
-            (
-                "http://lodestar.example.com:80",
-                "http://lodestar.example.com",
-            ),
-            (
-                "http://lodestar.example.com:8080",
-                "http://lodestar.example.com:8080",
-            ),
         ] {
             config_ok(&config_with(url));
             assert_eq!(
@@ -130,6 +127,8 @@ mod tests {
             "https:/lodestar.example.com",
             "https://",
             "mailto:alice@example.com",
+            "http://lodestar.example.com",
+            "http://lodestar.example.com:8080",
             "",
         ] {
             let config = config_with(url);

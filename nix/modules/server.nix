@@ -176,7 +176,7 @@ in
       type = types.nullOr types.str;
       default = null;
       example = "https://lodestar.example.com";
-      description = "Public URL of the dashboard (the OIDC redirect is `<publicUrl>/auth/callback`).";
+      description = "Public URL of the dashboard, `https://host[:port]` (the OIDC redirect is `<publicUrl>/auth/callback`). Plain http is refused at startup: the session cookie is `__Host-…; Secure`.";
     };
 
     oidc = {

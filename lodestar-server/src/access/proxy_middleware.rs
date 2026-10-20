@@ -17,7 +17,7 @@ use crate::{clock, db};
 
 /// The header the router sets on requests that reached it over Tailscale.
 pub const TAILNET_MARK_HEADER: &str = "x-homelab-via";
-/// The only value of [`TAILNET_MARK_HEADER`] that counts.
+/// The only value of [`TAILNET_MARK_HEADER`] that counts, and only as its single value.
 pub const TAILNET_MARK_VALUE: &str = "tailnet";
 
 /// Middleware: plain 403 `forbidden` unless the peer is one of the trusted proxies. Needs
@@ -48,10 +48,13 @@ pub async fn load_viewer(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let via_tailnet = request
-        .headers()
-        .get(TAILNET_MARK_HEADER)
-        .is_some_and(|value| value.as_bytes() == TAILNET_MARK_VALUE.as_bytes());
+    // Exactly one value, and that one `tailnet`: none or several count as unmarked, so the
+    // server doesn't depend on whether the router appends to or replaces a client's header.
+    let mut marks = request.headers().get_all(TAILNET_MARK_HEADER).iter();
+    let via_tailnet = match (marks.next(), marks.next()) {
+        (Some(value), None) => value.as_bytes() == TAILNET_MARK_VALUE.as_bytes(),
+        _ => false,
+    };
     let session_id = read_cookie(request.headers(), SESSION_COOKIE)
         .and_then(|value| SessionId::from_cookie(&value));
     let session = match session_id {

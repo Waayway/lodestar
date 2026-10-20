@@ -344,6 +344,31 @@ async fn admin_acts_only_with_exact_mark() {
 }
 
 #[tokio::test]
+async fn several_marks_count_as_none() {
+    let environment = env().await;
+    let base = &environment.base;
+    let (cookie, _) = login(&environment.state, "bob", Role::Admin, now() + 3600).await;
+    for marks in [["tailnet", "tailnet"], ["tailnet", "public"], ["public", "tailnet"]] {
+        let mut request = client()
+            .post(format!("{base}/api/hosts/h/apply"))
+            .header("cookie", &cookie)
+            .header("x-lodestar", "1");
+        for mark in marks {
+            request = request.header(MARK, mark);
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{marks:?}");
+        assert_eq!(error_of(response).await, "only over Tailscale", "{marks:?}");
+    }
+    assert!(
+        db::recent_audit(&environment.state.db, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn expired_session_is_anonymous() {
     let environment = env().await;
     let (cookie, hash) = login(&environment.state, "bob", Role::Admin, now() - 1).await;

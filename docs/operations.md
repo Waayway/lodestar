@@ -138,11 +138,15 @@ and `/auth/login`, `/auth/callback`, `/auth/logout`. Refusals are JSON `{"error"
 - Forward the public host to `proxyListen` (`http://<address>:<port>`, default port
   8081), from an address in `trustedProxies`. The firewall opens that port for those
   sources only; the server answers every other peer with a plain 403 `forbidden`.
+  Forward to the literal `proxyListen` address, not a host name, and list the router's
+  source address in `trustedProxies` in the same address family: a router that connects
+  over IPv6 while `trustedProxies` holds its IPv4 address (or the reverse) is refused.
 - On the tailnet entrance, set the header `X-Homelab-Via: tailnet`. On the public
   entrance, remove any `X-Homelab-Via` the client sent. The server trusts the header from
-  trusted peers only, and only the exact value `tailnet`.
+  trusted peers only, and only as a single header with the exact value `tailnet`; no
+  header, or several, counts as unmarked.
 - The router terminates TLS; the server sets `__Host-` cookies (`Secure`), so the public
-  URL must be `https://`.
+  URL must be `https://` (the server refuses to start with an `http://` one).
 
 ### Options
 
@@ -185,10 +189,14 @@ and surrounding whitespace (a trailing newline) is ignored.
 
 A login creates a session of 12 hours (cookie `__Host-lodestar_session`, stored hashed in
 `lodestar.db`). The role is taken from the groups at login: a group change takes effect at
-the next login. **Log out** deletes the session; an open dashboard's WebSocket closes
-within a minute after its session is gone. Pending logins (between `/auth/login` and the
-callback) live 10 minutes in memory: a server restart in between shows "Login failed"
-with **Try again**.
+the next login. A new login in a browser ends the session that browser had before.
+**Log out** deletes the session; an open dashboard's WebSocket closes within a minute
+after its session is gone. Pending logins (between `/auth/login` and the callback) live
+10 minutes in memory: a server restart in between shows "Login failed" with **Try
+again**. At most 256 are kept (the oldest dropped), so anonymous clients flooding
+`/auth/login` can make a real login fail the same way. Starting a second login in another
+tab replaces the first one's login cookie: the first tab's callback then shows "Login
+failed".
 
 ### Troubleshooting
 

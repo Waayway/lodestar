@@ -128,12 +128,10 @@ async fn bad_gateway_is_down() {
 #[tokio::test]
 async fn redirect_is_not_followed() {
     let addr = serve().await;
+    // Built outside the timed span: loading the system CA store can take a while (macOS).
+    let probers = Probers::new().unwrap();
     let started = Instant::now();
-    let outcome = probe(
-        &Probers::new().unwrap(),
-        &link(format!("http://{addr}/redir")),
-    )
-    .await;
+    let outcome = probe(&probers, &link(format!("http://{addr}/redir"))).await;
     assert_eq!(outcome.state, ServiceState::Up);
     assert!(started.elapsed() < Duration::from_secs(1));
 }
@@ -141,12 +139,10 @@ async fn redirect_is_not_followed() {
 #[tokio::test]
 async fn hang_times_out() {
     let addr = serve().await;
+    // Built outside the timed span: loading the system CA store can take a while (macOS).
+    let probers = Probers::new().unwrap();
     let started = Instant::now();
-    let outcome = probe(
-        &Probers::new().unwrap(),
-        &link(format!("http://{addr}/hang")),
-    )
-    .await;
+    let outcome = probe(&probers, &link(format!("http://{addr}/hang"))).await;
     assert_eq!(outcome.state, ServiceState::Down);
     assert_eq!(outcome.reason, Some(DownReason::Timeout));
     assert!(started.elapsed() < Duration::from_secs(6));

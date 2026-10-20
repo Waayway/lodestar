@@ -1,5 +1,6 @@
 # End-to-end NixOS VM test of Lodestar: a git remote, the server (with an agent for
-# itself) and two laptops, configured only through the modules' options.
+# itself) and two laptops, configured only through the modules' options; plus a Kanidm
+# server and a stand-in for the router that logs in through the router entrance.
 { pkgs, modules }:
 let
   user = "alice";
@@ -33,6 +34,36 @@ let
     # asserts the module opens it on tailscale0.)
     networking.firewall.interfaces.eth1.allowedTCPPorts = [ 7461 ];
   };
+
+  # Kanidm on https://acme.test with the snakeoil certificate nixpkgs' tests use (copied
+  # to the store as nixpkgs does, for kanidm's mount namespace).
+  certs = import "${pkgs.path}/nixos/tests/common/acme/server/snakeoil-certs.nix";
+  kanidmDomain = certs.domain;
+  certsPath = pkgs.runCommand "snakeoil-certs" { } ''
+    mkdir $out
+    cp ${certs.${kanidmDomain}.cert} $out/snakeoil.crt
+    cp ${certs.${kanidmDomain}.key} $out/snakeoil.key
+  '';
+  kanidmPackage = pkgs.kanidmWithSecretProvisioning_1_11;
+  publicUrl = "https://lodestar.example.test";
+  # TEST ONLY: a fixed client secret, shared by Kanidm and Lodestar.
+  clientSecretFile = pkgs.writeText "lodestar-client-secret" "very-strong-test-secret-for-lodestar";
+  scopes = [
+    "openid"
+    "profile"
+    "groups"
+  ];
+
+  # Logs in to the router entrance through Kanidm without a browser.
+  kanidmLogin = pkgs.writers.writePython3Bin "kanidm-login" { } (builtins.readFile ./kanidm-login.py);
+
+  # Trusts the snakeoil CA and finds Kanidm by its name.
+  kanidmClient =
+    { nodes, ... }:
+    {
+      security.pki.certificateFiles = [ certs.ca.cert ];
+      networking.hosts.${nodes.kanidm.networking.primaryIPAddress} = [ kanidmDomain ];
+    };
 in
 pkgs.testers.runNixOSTest {
   name = "lodestar-vm";
@@ -56,9 +87,12 @@ pkgs.testers.runNixOSTest {
       };
 
     manager =
-      { nodes, ... }:
+      { config, nodes, ... }:
       {
-        imports = [ agentNode ];
+        imports = [
+          agentNode
+          kanidmClient
+        ];
         environment.systemPackages = [ pkgs.jq ];
         # TEST ONLY: as for the agent port, the dashboard port is opened on tailscale0
         # by the module; there is no tailscale0 here.
@@ -90,6 +124,16 @@ pkgs.testers.runNixOSTest {
             };
           };
           listenAddress = "0.0.0.0";
+          # The router entrance, for the router node only, with login through Kanidm.
+          proxyListen.address = config.networking.primaryIPAddress;
+          trustedProxies = [ nodes.router.networking.primaryIPAddress ];
+          inherit publicUrl;
+          oidc = {
+            issuer = "https://${kanidmDomain}/oauth2/openid/lodestar";
+            clientSecretFile = "${clientSecretFile}";
+            readerGroup = "lodestar-users@${kanidmDomain}";
+            adminGroup = "admins@${kanidmDomain}";
+          };
           testing = {
             disableAccess = true;
             pollSecs = 5;
@@ -106,6 +150,61 @@ pkgs.testers.runNixOSTest {
 
     laptop1 = agentNode;
     laptop2 = agentNode;
+
+    kanidm =
+      { ... }:
+      {
+        services.kanidm = {
+          package = kanidmPackage;
+          server = {
+            enable = true;
+            settings = {
+              origin = "https://${kanidmDomain}";
+              domain = kanidmDomain;
+              bindaddress = "[::]:443";
+              tls_chain = "${certsPath}/snakeoil.crt";
+              tls_key = "${certsPath}/snakeoil.key";
+            };
+          };
+          provision = {
+            enable = true;
+            persons = {
+              alice.displayName = "Alice";
+              bob.displayName = "Bob";
+              carol.displayName = "Carol";
+            };
+            groups = {
+              lodestar-users.members = [ "alice" ];
+              admins.members = [ "bob" ];
+            };
+            systems.oauth2.lodestar = {
+              displayName = "Lodestar";
+              originUrl = "${publicUrl}/auth/callback";
+              originLanding = publicUrl;
+              basicSecretFile = clientSecretFile;
+              preferShortUsername = true;
+              scopeMaps = {
+                lodestar-users = scopes;
+                admins = scopes;
+              };
+            };
+          };
+        };
+        networking.firewall.allowedTCPPorts = [ 443 ];
+        environment.systemPackages = [ pkgs.curl ];
+      };
+
+    # Stands in for the homelab router: the one trusted proxy of the router entrance.
+    router =
+      { ... }:
+      {
+        imports = [ kanidmClient ];
+        environment.systemPackages = [
+          kanidmLogin
+          pkgs.curl
+          pkgs.jq
+        ];
+      };
   };
 
   testScript = ''
@@ -217,5 +316,110 @@ pkgs.testers.runNixOSTest {
         f"curl -sf localhost:8080/api/snapshot | jq -e '.hosts[] | select(.name==\"laptop1\") | .running == \"{head2}\"'",
         timeout=30,
     )
+
+    # 7. The router entrance, reached from the router with Kanidm login. Its IPv4
+    # address: the firewall opens the port to the router's IPv4 address only, so a
+    # connection to "manager" over IPv6 would be dropped.
+    listen = manager.succeed("jq -r .proxy.listen /etc/lodestar-server/config.json").strip()
+    entrance = f"http://{listen}"
+    mark = "-H 'X-Homelab-Via: tailnet'"
+    passwords = {
+        "alice": "alice-very-strong-test-password",
+        "bob": "bob-very-strong-test-password",
+        "carol": "carol-very-strong-test-password",
+    }
+
+    def call(method, path, session=None, marked=False):
+        headers = "-H 'X-Lodestar: 1'"
+        if session:
+            headers += f" -H 'Cookie: __Host-lodestar_session={session}'"
+        if marked:
+            headers += " " + mark
+        out = router.succeed(
+            f"curl -s -X {method} {headers} -w '\\n%{{http_code}}' {entrance}{path}"
+        )
+        body, code = out.rsplit("\n", 1)
+        return int(code), body
+
+    def call_json(method, path, session=None, marked=False):
+        code, body = call(method, path, session, marked)
+        return code, json.loads(body) if body else None
+
+    def login(name):
+        return router.succeed(
+            f"kanidm-login --server {entrance} --kanidm https://${kanidmDomain} "
+            f"--user {name} --password-file /tmp/{name}.password"
+        ).strip()
+
+    kanidm.wait_for_unit("kanidm.service")
+    router.wait_until_succeeds("curl -sf https://${kanidmDomain}/status")
+    kanidm_config = kanidm.succeed(
+        "systemctl show -p ExecStart --value kanidm.service | grep -o '/nix/store/[^ ;]*-server.toml'"
+    ).split()[0]
+    for name, password in passwords.items():
+        kanidm.succeed(
+            f"runuser -u kanidm -- env KANIDM_RECOVER_ACCOUNT_PASSWORD={password} "
+            f"${kanidmPackage}/bin/kanidmd scripting recover-account -c {kanidm_config} "
+            f"{name} --from-environment"
+        )
+        router.succeed(f"echo {password} > /tmp/{name}.password")
+    router.wait_until_succeeds(f"curl -sf {entrance}/api/me")
+
+    # The groups claim Kanidm puts in the ID token (logged for the record).
+    claims = json.loads(router.succeed(
+        "kanidm-login --id-token-claims --kanidm https://${kanidmDomain} --user bob "
+        "--password-file /tmp/bob.password --client-secret-file ${clientSecretFile} "
+        "--redirect-uri ${publicUrl}/auth/callback"
+    ))
+    print(f"ID token for bob: preferred_username={claims.get('preferred_username')} groups={claims.get('groups')}")
+    assert claims["preferred_username"] == "bob", claims
+    assert "admins@${kanidmDomain}" in claims["groups"], claims
+
+    # Anonymous: the reduced Services feed, nothing else.
+    code, services = call_json("GET", "/api/public/services")
+    assert code == 200 and services, (code, services)
+    assert sorted(services[0]) == ["description", "group", "icon", "since", "state", "title"], services[0]
+    code, _ = call("GET", "/api/snapshot")
+    assert code == 401, code
+
+    # alice (reader): sees the dashboard, cannot act even over Tailscale.
+    alice = login("alice")
+    code, me = call_json("GET", "/api/me", alice)
+    assert code == 200 and me["viewer"] == "alice" and me["role"] == "reader", me
+    code, _ = call("GET", "/api/snapshot", alice)
+    assert code == 200, code
+    code, body = call_json("POST", "/api/hosts/laptop1/apply", alice, marked=True)
+    assert code == 403 and body["error"] == "only admins can do this", (code, body)
+
+    # bob (admin): acts only with the router's tailnet mark; the audit names him.
+    bob = login("bob")
+    code, me = call_json("GET", "/api/me", bob, marked=True)
+    assert me["role"] == "admin" and me["can_act"], me
+    code, body = call_json("POST", "/api/hosts/laptop1/apply", bob)
+    assert code == 403 and body["error"] == "only over Tailscale", (code, body)
+    code, body = call_json("POST", "/api/hosts/laptop1/apply", bob, marked=True)
+    assert code == 202, (code, body)
+    code, events = call_json("GET", "/api/audit?limit=5", bob)
+    assert code == 200 and any(e["actor"] == "bob" for e in events), events
+
+    # carol (in neither group): no session.
+    out = router.fail(
+        f"kanidm-login --server {entrance} --kanidm https://${kanidmDomain} "
+        "--user carol --password-file /tmp/carol.password 2>&1"
+    )
+    print(f"carol: {out.strip()}")
+    assert "__Host" not in out and "failed at" in out, out
+
+    # bob logs out: his cookie is anonymous from then on.
+    code, _ = call("POST", "/auth/logout", bob)
+    assert code == 204, code
+    code, me = call_json("GET", "/api/me", bob)
+    assert me["role"] == "anonymous" and not me["session"], me
+
+    # Only the router gets in: the manager itself is refused, other hosts are dropped.
+    out = manager.succeed(f"curl -s -w '\\n%{{http_code}}' {mark} {entrance}/api/me")
+    assert out.rsplit("\n", 1)[1] == "403", out
+    status, _ = kanidm.execute("curl -s --connect-timeout 5 http://manager:8081/api/me")
+    assert status == 28, f"expected curl exit 28 (dropped), got {status}"
   '';
 }

@@ -37,6 +37,8 @@ nix run github:Waayway/lodestar#lodestar-demo   # dashboard against simulated ho
 - **lodestar** is the CLI for the same API.
 - **Services tab**: links to the web applications your hosts run, declared in Nix
   (`lodestar.links`), each with a live HTTP check and the state of its machine.
+- **Public URL** (optional): a second listener behind your reverse proxy, with login
+  through Kanidm (OpenID Connect); see `docs/operations.md` "Public URL".
 - Nothing changes on a host until someone presses apply (or runs
   `lodestar rebuild`). Every activation, including manual `nixos-rebuild` /
   `darwin-rebuild` runs and boots, lands in the audit log.

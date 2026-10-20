@@ -113,6 +113,100 @@ changes. The sub line counts from the last state change ("up since 3h", "down si
 After a server restart all links show "checking" until the first round, "down since" counts
 from the restart, and the latency shown is from the last state change, not the last probe.
 
+## Public URL
+
+The server can also serve the dashboard behind a reverse proxy (the "router entrance"),
+for a public URL such as `https://lodestar.example.com`. The tailnet listener and the CLI
+are unchanged. On the router entrance:
+
+- **anonymous** visitors see a reduced Services feed (`/api/public/services`: title,
+  group, description, icon, `up`/`down`/`unknown` and since when) and a **Log in** button;
+- **readers** (logged in, in `readerGroup`) see the whole dashboard read-only;
+- **admins** (in `adminGroup`, which wins over `readerGroup`) can also apply and promote,
+  but only on requests the router marks as coming over Tailscale; elsewhere the buttons
+  are disabled with "Only over Tailscale".
+
+Routes: the dashboard itself, `/api/me` (who you are and whether you can act),
+`/api/public/services`, the read routes (`/api/snapshot`, apply logs, `/api/audit`, the
+WebSocket `/api/ws`, which also needs the public URL as its `Origin`), the act routes,
+and `/auth/login`, `/auth/callback`, `/auth/logout`. Refusals are JSON `{"error": …}`:
+401 `log in first` (anonymous on a read or act route), 403 `only admins can do this`, 403
+`only over Tailscale`.
+
+### Router contract
+
+- Forward the public host to `proxyListen` (`http://<address>:<port>`, default port
+  8081), from an address in `trustedProxies`. The firewall opens that port for those
+  sources only; the server answers every other peer with a plain 403 `forbidden`.
+- On the tailnet entrance, set the header `X-Homelab-Via: tailnet`. On the public
+  entrance, remove any `X-Homelab-Via` the client sent. The server trusts the header from
+  trusted peers only, and only the exact value `tailnet`.
+- The router terminates TLS; the server sets `__Host-` cookies (`Secure`), so the public
+  URL must be `https://`.
+
+### Options
+
+```nix
+services.lodestar-server = {
+  proxyListen.address = "10.0.10.170";      # LAN address; null (default) turns it off
+  proxyListen.port = 8081;
+  trustedProxies = [ "10.0.10.110" ];       # the router(s)
+  publicUrl = "https://lodestar.example.com";
+  oidc = {
+    issuer = "https://id.example.com/oauth2/openid/lodestar";
+    clientId = "lodestar";                  # default
+    clientSecretFile = config.services.onepassword-secrets.secretPaths.lodestar-oidc;
+    readerGroup = "lodestar-users@id.example.com";
+    adminGroup = "admins@id.example.com";
+  };
+};
+```
+
+The secret file must be readable by the `lodestar-server` user; it is read at each login
+and surrounding whitespace (a trailing newline) is ignored.
+
+### The Kanidm client
+
+- Issuer: `https://<kanidm>/oauth2/openid/<client id>` (the server reads its discovery
+  document, cached 1 h, as are Kanidm's signing keys: after a key rotation, logins can
+  fail for up to an hour, or until the server restarts).
+- Redirect URL (`originUrl`): `<publicUrl>/auth/callback`, exactly; landing:
+  `<publicUrl>`.
+- `preferShortUsername = true`, so the user is `alice`, not `alice@id.example.com`
+  (the server takes `preferred_username`).
+- Scope maps: `openid profile groups` for every group that may log in. A user whose
+  groups have no scope map is refused by Kanidm itself.
+- Group names in the options are the values of the ID token's `groups` claim, compared
+  exactly: Kanidm sends each group as `<name>@<kanidm domain>` (and as its UUID), e.g.
+  `lodestar-users@id.example.com`.
+- ID tokens signed ES256 (Kanidm's default) or RS256 are accepted; PKCE is always used.
+
+### Sessions
+
+A login creates a session of 12 hours (cookie `__Host-lodestar_session`, stored hashed in
+`lodestar.db`). The role is taken from the groups at login: a group change takes effect at
+the next login. **Log out** deletes the session; an open dashboard's WebSocket closes
+within a minute after its session is gone. Pending logins (between `/auth/login` and the
+callback) live 10 minutes in memory: a server restart in between shows "Login failed"
+with **Try again**.
+
+### Troubleshooting
+
+- Every refused login logs `lodestar-server: login refused: <reason>`
+  (`journalctl -u lodestar-server`), for example `alice is in no Lodestar group`
+  (check the group names against the `@domain` form), `unknown or expired login state`
+  (a restart, a replayed or bookmarked callback), `issuer unreachable: …`, `rejected
+  (ID token)`. A successful one logs `lodestar-server: login: alice as reader`.
+- "Can't reach the login service": the server cannot fetch the issuer (DNS, TLS trust,
+  Kanidm down).
+- "No access": the user is in neither group (or Kanidm sent the login back with an
+  error). A user without a scope map is stopped by Kanidm before that, on Kanidm's own
+  page.
+- 403 `forbidden` on everything: the request did not come from a `trustedProxies`
+  address (the router forwards from another address, or the request skipped it).
+- Admin buttons disabled with "Only over Tailscale" while on the tailnet: the router
+  did not set `X-Homelab-Via: tailnet` on that entrance.
+
 ## Where things are
 
 Agent (every enrolled host):
@@ -181,5 +275,6 @@ nix build .#checks.aarch64-darwin.agent-module   # darwin module eval + shellche
 ```
 
 Linux-only checks need an x86_64-linux builder (KVM for the VM test):
-`checks.x86_64-linux.vm` (server, two agents and a git remote in VMs) and
+`checks.x86_64-linux.vm` (server, two agents and a git remote in VMs, plus Kanidm and a
+router stand-in that log in through the router entrance) and
 `checks.x86_64-linux.firewall`.

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // The viewer: `/api/me` decides what the dashboard renders. Pure tables, the client calls, and
 // the provider's flow (public feed polling, feed only when signed in, re-asking on `waiting`).
-import { act, cleanup, render } from "@testing-library/preact";
+import { act, cleanup, render, screen } from "@testing-library/preact";
+import { App } from "@/App";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMe, getPublicServices, loginUrl, logout } from "@/connection/client";
 import { ConnectionProvider } from "@/connection/ConnectionProvider";
@@ -210,5 +211,65 @@ describe("ConnectionProvider viewer flow", () => {
     expect(seen.mode).toBe("loading");
     await advance(1000);
     expect(seen.mode).toBe("signed_in");
+  });
+});
+
+// What the page shows before the viewer is known, or when the server refuses it or can't be
+// reached: the screen itself, not only the mode.
+describe("App before a viewer", () => {
+  afterEach(cleanup);
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    CountingSocket.count = 0;
+    vi.stubGlobal("WebSocket", CountingSocket);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  async function mountApp() {
+    render(<App />);
+    await flush();
+    await flush();
+  }
+  const fleetTab = () => screen.queryByRole("link", { name: /Fleet/ });
+
+  it("while /api/me is unanswered: a neutral loading frame, no Fleet tab", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    await mountApp();
+    expect(screen.getByText("Loading")).toBeTruthy();
+    expect(fleetTab()).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Pages" })).toBeNull();
+  });
+
+  it("403 from /api/me shows No access, not loading", async () => {
+    const calls: string[] = [];
+    stubApi({ me: () => new Response("", { status: 403 }), calls });
+    await mountApp();
+    expect(screen.getByRole("alert").textContent).toContain("You don't have access to this dashboard");
+    expect(document.querySelector('[data-state="forbidden"]')).not.toBeNull();
+    expect(screen.queryByText("Loading")).toBeNull();
+    expect(fleetTab()).toBeNull();
+    expect(CountingSocket.count).toBe(0);
+  });
+
+  it("an unreachable server shows Can't reach while /api/me retries, then the dashboard", async () => {
+    const calls: string[] = [];
+    let n = 0;
+    stubApi({
+      me: () => {
+        if (n++ === 0) throw new TypeError("network");
+        return Response.json(me({ role: "reader", can_act: false, reason: "not_admin" }));
+      },
+      calls,
+    });
+    await mountApp();
+    expect(screen.getByRole("alert").textContent).toContain("Can't reach the Lodestar server. Retrying.");
+    expect(document.querySelector('[data-state="waiting"]')).not.toBeNull();
+    expect(fleetTab()).toBeNull();
+    await advance(1000);
+    expect(screen.queryByText("Can't reach the Lodestar server. Retrying.")).toBeNull();
+    expect(fleetTab()).not.toBeNull();
   });
 });

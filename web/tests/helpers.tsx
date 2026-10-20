@@ -97,6 +97,7 @@ export function connectionState(over: Partial<ConnectionState> = {}): Connection
     audit: null,
     viewer: me({}),
     mode: "signed_in",
+    meRetryAt: null,
     publicServices: null,
     ...over,
   };

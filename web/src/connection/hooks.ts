@@ -96,6 +96,11 @@ export function useViewMode(): ViewMode {
   return useConnection().mode;
 }
 
+/** When `/api/me` is asked again after it could not be reached; null while it answers. */
+export function useMeRetryAt(): number | null {
+  return useConnection().meRetryAt;
+}
+
 /** The public service list for anonymous visitors; null until the first answer. */
 export function usePublicServices(): PublicService[] | null {
   return useConnection().publicServices;

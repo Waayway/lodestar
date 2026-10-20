@@ -92,6 +92,11 @@ export type ConnectionState = {
   /** Who the server says the viewer is; null until the first answer. */
   viewer: Me | null;
   mode: ViewMode;
+  /**
+   * When `/api/me` is asked again after it could not be reached (ms since epoch); null once it
+   * answers. With mode `loading` this is the "Can't reach the server" screen.
+   */
+  meRetryAt: number | null;
   /** What an anonymous visitor sees; null until the first answer. */
   publicServices: PublicService[] | null;
 };
@@ -119,6 +124,7 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
   snapRef.current = snap;
   const [viewer, setViewer] = useState<Me | null>(null);
   const [meForbidden, setMeForbidden] = useState(false);
+  const [meRetryAt, setMeRetryAt] = useState<number | null>(null);
   const [publicServices, setPublicServices] = useState<PublicService[] | null>(null);
   const candidateSeq = useRef(0);
   const heads = useRef("");
@@ -208,17 +214,20 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
       (m) => {
         if (seq !== meSeq.current) return;
         meBackoff.current = BACKOFF_START_MS;
+        setMeRetryAt(null);
         setMeForbidden(false);
         setViewer(m);
       },
       (e: unknown) => {
         if (seq !== meSeq.current) return;
         if (e instanceof client.ApiError && e.status === 403) {
+          setMeRetryAt(null);
           setMeForbidden(true);
           return;
         }
         const wait = meBackoff.current;
         meBackoff.current = nextBackoff(wait);
+        setMeRetryAt(Date.now() + wait);
         meTimer.current = setTimeout(loadMe, wait);
       },
     );
@@ -399,8 +408,8 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
   );
 
   const state = useMemo<ConnectionState>(
-    () => ({ snapshot: snap, feed, openLog, audit, viewer, mode, publicServices }),
-    [snap, feed, openLog, audit, viewer, mode, publicServices],
+    () => ({ snapshot: snap, feed, openLog, audit, viewer, mode, meRetryAt, publicServices }),
+    [snap, feed, openLog, audit, viewer, mode, meRetryAt, publicServices],
   );
 
   return (

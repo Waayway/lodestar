@@ -24,8 +24,8 @@ use lodestar_server::mirror::Mirror;
 use lodestar_server::state::AppState;
 use lodestar_server::tailscale::StaticOnline;
 use sea_orm::EntityTrait;
-use serde_json::Value;
-use support::Origin;
+use serde_json::{Value, json};
+use support::{FakeIssuer, Origin};
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -112,12 +112,24 @@ struct Env {
 /// The router entrance alone (`proxy_app`) with `trusted` as its trusted proxies and host
 /// `h` on channel `main`.
 async fn env_with(trusted: &[&str], session_recheck: Duration) -> Env {
+    env_full(trusted, session_recheck, None).await
+}
+
+/// Like [`env`], logging in against `issuer`.
+async fn env_with_issuer(issuer: String) -> Env {
+    env_full(&["127.0.0.1"], Duration::from_secs(60), Some(issuer)).await
+}
+
+async fn env_full(trusted: &[&str], session_recheck: Duration, issuer: Option<String>) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let origin = Origin::new(dir.path());
     origin.commit("one", "main");
     let agent = fake_agent().await;
     let mut config = server_config(dir.path(), &origin, agent);
-    let proxy = proxy_config("127.0.0.1:0".parse().unwrap(), trusted, dir.path());
+    let mut proxy = proxy_config("127.0.0.1:0".parse().unwrap(), trusted, dir.path());
+    if let Some(issuer) = issuer {
+        proxy.oidc.issuer = issuer;
+    }
     config.proxy = Some(proxy.clone());
     let addresses = HashMap::from([("h".to_string(), agent.to_string())]);
     let connection = db::connect(&config.state_dir).await.unwrap();
@@ -422,4 +434,337 @@ async fn server_start_binds_both_listeners() {
     assert_eq!(tailnet.role, Role::Admin);
     assert_eq!(tailnet.viewer.as_deref(), Some("dev"));
     handle.stop().await;
+}
+
+// ---- Login, callback and logout (driven by hand: no redirects, no cookie store) ----
+
+const READER_GROUP: &str = "lodestar-users@example.com";
+const SESSION_ATTRIBUTES: &str = "; Path=/; Max-Age=43200; Secure; HttpOnly; SameSite=Lax";
+
+fn no_redirects() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+}
+
+fn set_cookies(response: &reqwest::Response) -> Vec<String> {
+    response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap().to_string())
+        .collect()
+}
+
+/// The `Set-Cookie` that gives a session (a non-empty session value), if any.
+fn session_set_cookie(response: &reqwest::Response) -> Option<String> {
+    set_cookies(response).into_iter().find(|cookie| {
+        cookie.starts_with("__Host-lodestar_session=") && !cookie.contains("Max-Age=0")
+    })
+}
+
+fn location(response: &reqwest::Response) -> String {
+    response
+        .headers()
+        .get("location")
+        .expect("Location header")
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+fn query_of(url: &str) -> HashMap<String, String> {
+    reqwest::Url::parse(url)
+        .unwrap()
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect()
+}
+
+async fn session_rows(state: &AppState) -> usize {
+    sessions::Entity::find().all(&state.db).await.unwrap().len()
+}
+
+/// A started login: what `/auth/login` handed the browser.
+struct Started {
+    state: String,
+    nonce: String,
+    login_cookie: String,
+}
+
+/// `/auth/login?next=…` → 303 to the fake (whose authorize endpoint the browser then visits,
+/// so it learns the PKCE challenge).
+async fn start_login(base: &str, next: &str) -> Started {
+    let response = no_redirects()
+        .get(format!("{base}/auth/login"))
+        .query(&[("next", next)])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let authorize_url = location(&response);
+    let cookies = set_cookies(&response);
+    let query = query_of(&authorize_url);
+    let state = query["state"].clone();
+    assert_eq!(
+        cookies,
+        vec![format!(
+            "__Host-lodestar_login={state}; Path=/; Max-Age=600; Secure; HttpOnly; SameSite=Lax"
+        )]
+    );
+    let visit = reqwest::get(&authorize_url).await.unwrap();
+    assert!(visit.status().is_success());
+    Started {
+        nonce: query["nonce"].clone(),
+        login_cookie: format!("__Host-lodestar_login={state}"),
+        state,
+    }
+}
+
+async fn callback(base: &str, params: &[(&str, &str)], cookie: Option<&str>) -> reqwest::Response {
+    let mut request = no_redirects()
+        .get(format!("{base}/auth/callback"))
+        .query(params);
+    if let Some(cookie) = cookie {
+        request = request.header("cookie", cookie);
+    }
+    request.send().await.unwrap()
+}
+
+fn issue(fake: &FakeIssuer, code: &str, user: &str, groups: &[&str], nonce: &str) {
+    fake.issue(
+        code,
+        json!({
+            "sub": format!("{user}-id"),
+            "preferred_username": user,
+            "nonce": nonce,
+            "groups": groups,
+        }),
+    );
+}
+
+async fn assert_login_failed(response: reqwest::Response) {
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(session_set_cookie(&response).is_none());
+    let body = response.text().await.unwrap();
+    assert!(body.contains("Login failed"), "{body}");
+    assert!(body.contains("Start the login again."), "{body}");
+    assert!(body.contains("Try again"), "{body}");
+    assert!(body.contains(r#"href="/auth/login""#), "{body}");
+}
+
+#[tokio::test]
+async fn login_flow_sets_session_cookie() {
+    let fake = FakeIssuer::start().await;
+    let environment = env_with_issuer(fake.issuer()).await;
+    let base = &environment.base;
+    let started = start_login(base, "/#/services").await;
+    issue(&fake, "c1", "alice", &[READER_GROUP], &started.nonce);
+
+    let response = callback(
+        base,
+        &[("code", "c1"), ("state", &started.state)],
+        Some(&started.login_cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/#/services");
+    let session = session_set_cookie(&response).expect("session cookie");
+    let value = session
+        .strip_prefix("__Host-lodestar_session=")
+        .unwrap()
+        .strip_suffix(SESSION_ATTRIBUTES)
+        .unwrap_or_else(|| panic!("attributes of {session}"));
+    assert_eq!(value.len(), 43);
+    assert!(set_cookies(&response).contains(
+        &"__Host-lodestar_login=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax".to_string()
+    ));
+
+    let me = me(base, Some(&format!("__Host-lodestar_session={value}"))).await;
+    assert_eq!(me.viewer.as_deref(), Some("alice"));
+    assert_eq!(me.role, Role::Reader);
+    assert!(me.session);
+    assert_eq!(session_rows(&environment.state).await, 1);
+}
+
+#[tokio::test]
+async fn callback_replay_is_refused() {
+    let fake = FakeIssuer::start().await;
+    let environment = env_with_issuer(fake.issuer()).await;
+    let base = &environment.base;
+    let started = start_login(base, "/").await;
+    issue(&fake, "c1", "alice", &[READER_GROUP], &started.nonce);
+    let params = [("code", "c1"), ("state", started.state.as_str())];
+
+    let first = callback(base, &params, Some(&started.login_cookie)).await;
+    assert_eq!(first.status(), StatusCode::SEE_OTHER);
+    let second = callback(base, &params, Some(&started.login_cookie)).await;
+    assert_login_failed(second).await;
+    assert_eq!(session_rows(&environment.state).await, 1);
+}
+
+#[tokio::test]
+async fn callback_state_must_match_login_cookie() {
+    let fake = FakeIssuer::start().await;
+    let environment = env_with_issuer(fake.issuer()).await;
+    let base = &environment.base;
+    let started = start_login(base, "/").await;
+    issue(&fake, "c1", "alice", &[READER_GROUP], &started.nonce);
+    let params = [("code", "c1"), ("state", started.state.as_str())];
+
+    for cookie in [None, Some("__Host-lodestar_login=someone-elses-state")] {
+        assert_login_failed(callback(base, &params, cookie).await).await;
+    }
+    assert_eq!(session_rows(&environment.state).await, 0);
+}
+
+#[tokio::test]
+async fn callback_unknown_state_after_restart() {
+    let fake = FakeIssuer::start().await;
+    let before = env_with_issuer(fake.issuer()).await;
+    let started = start_login(&before.base, "/").await;
+    issue(&fake, "c1", "alice", &[READER_GROUP], &started.nonce);
+
+    // A fresh AuthState (as after a restart) has never heard of this state.
+    let after = env_with_issuer(fake.issuer()).await;
+    let response = callback(
+        &after.base,
+        &[("code", "c1"), ("state", &started.state)],
+        Some(&started.login_cookie),
+    )
+    .await;
+    assert_login_failed(response).await;
+    assert_eq!(session_rows(&after.state).await, 0);
+}
+
+#[tokio::test]
+async fn no_group_means_no_access_and_no_session() {
+    let fake = FakeIssuer::start().await;
+    let environment = env_with_issuer(fake.issuer()).await;
+    let base = &environment.base;
+    let started = start_login(base, "/").await;
+    issue(&fake, "c1", "carol", &[], &started.nonce);
+
+    let response = callback(
+        base,
+        &[("code", "c1"), ("state", &started.state)],
+        Some(&started.login_cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(session_set_cookie(&response).is_none());
+    let body = response.text().await.unwrap();
+    assert!(body.contains("No access"), "{body}");
+    assert!(
+        body.contains("Your account is not in a group that may use Lodestar."),
+        "{body}"
+    );
+    assert!(body.contains("Try again"), "{body}");
+    assert_eq!(session_rows(&environment.state).await, 0);
+}
+
+#[tokio::test]
+async fn kanidm_error_param_is_no_access() {
+    let fake = FakeIssuer::start().await;
+    let environment = env_with_issuer(fake.issuer()).await;
+    let base = &environment.base;
+    let started = start_login(base, "/").await;
+
+    let response = callback(
+        base,
+        &[("error", "access_denied"), ("state", &started.state)],
+        Some(&started.login_cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(session_set_cookie(&response).is_none());
+    assert!(response.text().await.unwrap().contains("No access"));
+    assert_eq!(session_rows(&environment.state).await, 0);
+}
+
+#[tokio::test]
+async fn issuer_down_shows_error_page() {
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let environment = env_with_issuer(format!("http://{closed}")).await;
+    let base = &environment.base;
+
+    let response = no_redirects()
+        .get(format!("{base}/auth/login"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert!(set_cookies(&response).is_empty());
+    let body = response.text().await.unwrap();
+    assert!(body.contains("Can't reach the login service"), "{body}");
+    assert!(body.contains("Try again in a moment."), "{body}");
+    assert!(body.contains(r#"href="/auth/login""#), "{body}");
+
+    let feed = client()
+        .get(format!("{base}/api/public/services"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(feed.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn next_is_sanitised() {
+    let fake = FakeIssuer::start().await;
+    let environment = env_with_issuer(fake.issuer()).await;
+    let base = &environment.base;
+    let started = start_login(base, "//evil.example.com").await;
+    issue(&fake, "c1", "bob", &["admins@example.com"], &started.nonce);
+
+    let response = callback(
+        base,
+        &[("code", "c1"), ("state", &started.state)],
+        Some(&started.login_cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/");
+}
+
+#[tokio::test]
+async fn logout_needs_csrf_header_and_deletes_session() {
+    let environment = env().await;
+    let base = &environment.base;
+    let (cookie, hash) = login(&environment.state, "alice", Role::Reader, now() + 3600).await;
+
+    let refused = client()
+        .post(format!("{base}/auth/logout"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    assert_eq!(me(base, Some(&cookie)).await.role, Role::Reader);
+
+    let response = client()
+        .post(format!("{base}/auth/logout"))
+        .header("cookie", &cookie)
+        .header("x-lodestar", "1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        set_cookies(&response),
+        vec!["__Host-lodestar_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"]
+    );
+    assert!(
+        sessions::Entity::find_by_id(hash)
+            .one(&environment.state.db)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let me = me(base, Some(&cookie)).await;
+    assert_eq!(me.role, Role::Anonymous);
+    assert!(!me.session);
 }

@@ -17,7 +17,10 @@ does; `docs/operations.md` for how it is run.
     the user (`git.rs`, `privileges.rs`), pre-apply checks (`checks.rs`),
     manager source check (`net/`), `config/`.
   - `lodestar-server/`: axum API by resource (`api/`) + WebSocket
-    (`websocket/`), access via `tailscale whois` (`access/`, `tailscale/`),
+    (`websocket/`), access via `tailscale whois` and the router entrance's
+    trusted-peer gate, session viewers and tailnet mark (`access/`, `tailscale/`),
+    OIDC login against Kanidm and sessions (`auth/`: client, pending logins,
+    cookies, the `/auth` login, callback and logout routes, error page),
     git mirror and promote (`mirror/`), poller (`poller/`), shared state and
     views (`state/`), SeaORM/SQLite (`db/`, one file per table concern;
     `migration/`), `config/`, the embedded frontend (`embed.rs`, `build.rs`:

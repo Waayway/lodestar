@@ -348,7 +348,11 @@ async fn several_marks_count_as_none() {
     let environment = env().await;
     let base = &environment.base;
     let (cookie, _) = login(&environment.state, "bob", Role::Admin, now() + 3600).await;
-    for marks in [["tailnet", "tailnet"], ["tailnet", "public"], ["public", "tailnet"]] {
+    for marks in [
+        ["tailnet", "tailnet"],
+        ["tailnet", "public"],
+        ["public", "tailnet"],
+    ] {
         let mut request = client()
             .post(format!("{base}/api/hosts/h/apply"))
             .header("cookie", &cookie)
@@ -464,6 +468,7 @@ async fn server_start_binds_both_listeners() {
 // ---- Login, callback and logout (driven by hand: no redirects, no cookie store) ----
 
 const READER_GROUP: &str = "lodestar-users@example.com";
+const ADMIN_GROUP: &str = "admins@example.com";
 const SESSION_ATTRIBUTES: &str = "; Path=/; Max-Age=43200; Secure; HttpOnly; SameSite=Lax";
 
 fn no_redirects() -> reqwest::Client {
@@ -610,6 +615,38 @@ async fn login_flow_sets_session_cookie() {
     assert_eq!(me.viewer.as_deref(), Some("alice"));
     assert_eq!(me.role, Role::Reader);
     assert!(me.session);
+    assert_eq!(session_rows(&environment.state).await, 1);
+}
+
+#[tokio::test]
+async fn new_login_ends_the_incoming_session() {
+    let fake = FakeIssuer::start().await;
+    let environment = env_with_issuer(fake.issuer()).await;
+    let base = &environment.base;
+    let (old_cookie, old_hash) =
+        login(&environment.state, "alice", Role::Reader, now() + 3600).await;
+    let started = start_login(base, "/").await;
+    issue(&fake, "c1", "bob", &[ADMIN_GROUP], &started.nonce);
+
+    let response = callback(
+        base,
+        &[("code", "c1"), ("state", &started.state)],
+        Some(&format!("{old_cookie}; {}", started.login_cookie)),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(session_set_cookie(&response).is_some());
+
+    let old = me(base, Some(&old_cookie)).await;
+    assert_eq!(old.role, Role::Anonymous);
+    assert!(!old.session);
+    assert!(
+        sessions::Entity::find_by_id(old_hash)
+            .one(&environment.state.db)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(session_rows(&environment.state).await, 1);
 }
 

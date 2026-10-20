@@ -26,8 +26,9 @@ pub struct CallbackQuery {
     error: Option<String>,
 }
 
-/// On success: a new session, 303 to the login's `next` with the session cookie set. Every
-/// answer clears the login cookie; no failure creates a session.
+/// On success: a new session (replacing the one the browser's session cookie names, if any),
+/// 303 to the login's `next` with the session cookie set. Every answer clears the login
+/// cookie; no failure creates or ends a session.
 pub async fn callback(
     State(state): State<AppState>,
     Extension(auth): Extension<Arc<AuthState>>,
@@ -104,7 +105,11 @@ async fn finish_login(
         role,
         expires_at: now + SESSION_TTL_SECS,
     };
-    if let Err(error) = store_session(state, &session, now).await {
+    // The session this browser had until now ends, so a copy of its old cookie stops working.
+    let replaced = read_cookie(headers, SESSION_COOKIE)
+        .and_then(|value| SessionId::from_cookie(&value))
+        .map(|id| id.hash());
+    if let Err(error) = store_session(state, &session, replaced.as_deref(), now).await {
         eprintln!("lodestar-server: login: storing the session: {error:#}");
         return login_failed_page(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -133,7 +138,15 @@ fn refused(reason: &str) -> Response {
     login_failed_page(StatusCode::BAD_REQUEST)
 }
 
-async fn store_session(state: &AppState, session: &LoginSession, now: i64) -> anyhow::Result<()> {
+async fn store_session(
+    state: &AppState,
+    session: &LoginSession,
+    replaced: Option<&str>,
+    now: i64,
+) -> anyhow::Result<()> {
+    if let Some(id_hash) = replaced {
+        db::delete_session(&state.db, id_hash).await?;
+    }
     db::delete_expired_sessions(&state.db, now).await?;
     db::insert_session(&state.db, session, now).await
 }

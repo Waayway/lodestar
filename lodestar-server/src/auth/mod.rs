@@ -1,6 +1,7 @@
 //! Login: the OpenID Connect client, pending logins, sessions, their cookies and the
 //! post-login redirect check.
 
+mod auth_state;
 pub mod cookie;
 mod groups_claim;
 mod login_error;
@@ -13,6 +14,7 @@ mod pending_login;
 mod pending_logins;
 mod session_id;
 
+pub use auth_state::{AuthState, SESSION_RECHECK};
 pub use groups_claim::GroupsClaim;
 pub use login_error::LoginError;
 pub use login_identity::LoginIdentity;

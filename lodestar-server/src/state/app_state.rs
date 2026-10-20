@@ -6,6 +6,7 @@ use sea_orm::DatabaseConnection;
 use tokio::sync::broadcast;
 
 use crate::agent_client::AgentClient;
+use crate::auth::AuthState;
 use crate::config::{Link, ManagedHost, ServerConfig};
 use crate::mirror::Mirror;
 use crate::tailscale::OnlineProvider;
@@ -38,6 +39,8 @@ pub struct AppState {
     pub(crate) actions: Arc<tokio::sync::Mutex<()>>,
     /// Demo mode (simulated hosts); reported in the snapshot.
     pub demo: bool,
+    /// The router entrance's login state; `None` when there is no router entrance.
+    pub auth: Option<Arc<AuthState>>,
 }
 
 impl AppState {
@@ -64,6 +67,7 @@ impl AppState {
             followers: Arc::default(),
             actions: Arc::default(),
             demo: false,
+            auth: None,
         })
     }
 

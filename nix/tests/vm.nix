@@ -408,7 +408,9 @@ pkgs.testers.runNixOSTest {
         "--user carol --password-file /tmp/carol.password 2>&1"
     )
     print(f"carol: {out.strip()}")
-    assert "__Host" not in out and "failed at" in out, out
+    # Kanidm refuses her (no scope map) at authorise, or Lodestar at the callback (No access).
+    assert "__Host" not in out, out
+    assert "failed at authorise" in out or "failed at lodestar callback" in out, out
 
     # bob logs out: his cookie is anonymous from then on.
     code, _ = call("POST", "/auth/logout", bob)

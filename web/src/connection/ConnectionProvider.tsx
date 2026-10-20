@@ -8,12 +8,14 @@ import type { AuditEvent } from "@/bindings/AuditEvent";
 import type { ChannelView } from "@/bindings/ChannelView";
 import type { HostView } from "@/bindings/HostView";
 import type { LogChunk } from "@/bindings/LogChunk";
+import type { Me } from "@/bindings/Me";
 import type { PromoteChannels } from "@/bindings/PromoteChannels";
+import type { PublicService } from "@/bindings/PublicService";
 import type { ServiceView } from "@/bindings/ServiceView";
 import type { Snapshot } from "@/bindings/Snapshot";
 import type { WsMessage } from "@/bindings/WsMessage";
 import * as client from "@/connection/client";
-import { connectFeed, type FeedStatus } from "@/connection/feed";
+import { BACKOFF_START_MS, connectFeed, type FeedStatus, nextBackoff } from "@/connection/feed";
 import {
   type FetchState,
   finishFetch,
@@ -25,6 +27,7 @@ import {
   watchLog,
 } from "@/lib/applyLog";
 import { agentStatusText, shortRev } from "@/lib/format";
+import { PUBLIC_POLL_MS, type ViewMode, viewMode } from "@/lib/viewer";
 
 type Action =
   | { type: "snapshot"; data: Snapshot }
@@ -74,6 +77,10 @@ export type Actions = {
   closeLog: () => void;
   /** Fetches the open log again (one request at a time). */
   fetchLog: () => void;
+  /** Goes to the login and comes back to this page. */
+  login: () => void;
+  /** Ends the session, then goes to the start page. */
+  logout: () => Promise<void>;
 };
 
 export type ConnectionState = {
@@ -82,6 +89,11 @@ export type ConnectionState = {
   openLog: OpenLog | null;
   /** Newest first; null until the first answer. */
   audit: AuditEvent[] | null;
+  /** Who the server says the viewer is; null until the first answer. */
+  viewer: Me | null;
+  mode: ViewMode;
+  /** What an anonymous visitor sees; null until the first answer. */
+  publicServices: PublicService[] | null;
 };
 
 export const StateContext = createContext<ConnectionState | null>(null);
@@ -105,6 +117,9 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
   }, []);
   const snapRef = useRef<Snapshot | null>(null);
   snapRef.current = snap;
+  const [viewer, setViewer] = useState<Me | null>(null);
+  const [meForbidden, setMeForbidden] = useState(false);
+  const [publicServices, setPublicServices] = useState<PublicService[] | null>(null);
   const candidateSeq = useRef(0);
   const heads = useRef("");
 
@@ -180,9 +195,76 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
     [],
   );
 
+  // Who is looking: asked once on mount (a network error retries with the feed's backoff) and
+  // again when the feed gives up (`waiting`) or an action answers 401, since the session may
+  // have ended. A failed re-ask keeps what is known.
+  const meSeq = useRef(0);
+  const meTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const meBackoff = useRef(BACKOFF_START_MS);
+  const loadMe = useCallback(() => {
+    const seq = ++meSeq.current;
+    if (meTimer.current) clearTimeout(meTimer.current);
+    client.getMe().then(
+      (m) => {
+        if (seq !== meSeq.current) return;
+        meBackoff.current = BACKOFF_START_MS;
+        setMeForbidden(false);
+        setViewer(m);
+      },
+      (e: unknown) => {
+        if (seq !== meSeq.current) return;
+        if (e instanceof client.ApiError && e.status === 403) {
+          setMeForbidden(true);
+          return;
+        }
+        const wait = meBackoff.current;
+        meBackoff.current = nextBackoff(wait);
+        meTimer.current = setTimeout(loadMe, wait);
+      },
+    );
+  }, []);
+  useEffect(() => {
+    loadMe();
+    return () => {
+      meSeq.current++;
+      if (meTimer.current) clearTimeout(meTimer.current);
+    };
+  }, [loadMe]);
+
+  const mode = viewMode(viewer, meForbidden || feed.kind === "forbidden");
+  const signedIn = mode === "signed_in";
+  const anonymous = mode === "anonymous";
+
+  useEffect(() => {
+    if (feed.kind === "waiting") loadMe();
+  }, [feed.kind, loadMe]);
+
+  // Anonymous visitors get the public list by polling; there is no socket for them.
+  useEffect(() => {
+    if (!anonymous) return;
+    let stopped = false;
+    const load = () =>
+      client.getPublicServices().then(
+        (l) => {
+          if (!stopped) setPublicServices(l);
+        },
+        (e: unknown) => {
+          // A session may have started elsewhere; otherwise keep the last list.
+          if (!stopped && e instanceof client.ApiError && e.status === 401) loadMe();
+        },
+      );
+    void load();
+    const timer = setInterval(load, PUBLIC_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [anonymous, loadMe]);
+
   useEffect(
-    () =>
-      connectFeed({
+    () => {
+      if (!signedIn) return;
+      return connectFeed({
         onStatus: setFeed,
         isForbidden: client.isForbidden,
         onMessage: (m: WsMessage) => {
@@ -230,8 +312,18 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
               break;
           }
         },
-      }),
-    [onChunk, fetchLog, setOpenLog, loadAudit, refreshAudit],
+      });
+    },
+    [signedIn, onChunk, fetchLog, setOpenLog, loadAudit, refreshAudit],
+  );
+
+  // An action that answers 401 means the session is gone: re-ask who we are, then report.
+  const fail = useCallback(
+    (what: string, e: unknown) => {
+      if (e instanceof client.ApiError && e.status === 401) loadMe();
+      reportError(what, e);
+    },
+    [loadMe],
   );
 
   const actions = useMemo<Actions>(
@@ -243,7 +335,7 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
           if (note) toast.warning(note);
           else toast.success(`Apply started on ${host}`);
         } catch (e) {
-          reportError(`Apply on ${host} failed`, e);
+          fail(`Apply on ${host} failed`, e);
         }
       },
       async applyChannel(channel) {
@@ -267,7 +359,7 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
             });
           else toast.success(summary);
         } catch (e) {
-          reportError(`Apply to ${channel} failed`, e);
+          fail(`Apply to ${channel} failed`, e);
         }
       },
       async promote(commit, pair) {
@@ -276,7 +368,7 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
           toast.success(`${pair.to} moved to ${shortRev(commit)}`);
           return true;
         } catch (e) {
-          reportError("Promote failed", e);
+          fail("Promote failed", e);
           return false;
         }
       },
@@ -290,13 +382,25 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
         setOpenLog(null);
       },
       fetchLog,
+      login() {
+        location.assign(client.loginUrl(location.pathname + location.hash));
+      },
+      async logout() {
+        try {
+          await client.logout();
+        } catch (e) {
+          reportError("Logout failed", e);
+          return;
+        }
+        location.assign("/");
+      },
     }),
-    [fetchLog, setOpenLog],
+    [fetchLog, setOpenLog, fail],
   );
 
   const state = useMemo<ConnectionState>(
-    () => ({ snapshot: snap, feed, openLog, audit }),
-    [snap, feed, openLog, audit],
+    () => ({ snapshot: snap, feed, openLog, audit, viewer, mode, publicServices }),
+    [snap, feed, openLog, audit, viewer, mode, publicServices],
   );
 
   return (

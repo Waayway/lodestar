@@ -10,7 +10,7 @@ import type { Snapshot } from "@/bindings/Snapshot";
 import type { WsMessage } from "@/bindings/WsMessage";
 import { AUDIT_LIMIT, ConnectionProvider, reduceSnapshot } from "@/connection/ConnectionProvider";
 import { useAudit, useFleet } from "@/connection/hooks";
-import { host } from "./helpers";
+import { host, me } from "./helpers";
 
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   hosts: [host({ name: "desktop" })],
@@ -100,7 +100,7 @@ describe("ConnectionProvider", () => {
     await flush();
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
     FakeSocket.all = [];
     snapshotRequests = [];
@@ -113,6 +113,7 @@ describe("ConnectionProvider", () => {
           auditRequests.push(url);
           return Promise.resolve(Response.json([]));
         }
+        if (url === "/api/me") return Promise.resolve(Response.json(me({ role: "reader" })));
         if (url === "/api/snapshot")
           return new Promise<Response>((resolve) =>
             snapshotRequests.push({ resolve: (s) => resolve(Response.json(s)) }),
@@ -125,6 +126,7 @@ describe("ConnectionProvider", () => {
         <Probe />
       </ConnectionProvider>,
     );
+    await flush(); // /api/me answers, then the feed opens
     act(() => FakeSocket.all[0].onopen!());
   });
   afterEach(() => {

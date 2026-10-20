@@ -4,6 +4,8 @@ import { useContext, useMemo } from "preact/hooks";
 import type { ActivationEvent } from "@/bindings/ActivationEvent";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { AuditEvent } from "@/bindings/AuditEvent";
+import type { Me } from "@/bindings/Me";
+import type { PublicService } from "@/bindings/PublicService";
 import type { ServiceView } from "@/bindings/ServiceView";
 import type { Snapshot } from "@/bindings/Snapshot";
 import {
@@ -14,6 +16,7 @@ import {
 } from "@/connection/ConnectionProvider";
 import type { FeedStatus } from "@/connection/feed";
 import type { HeldLog } from "@/lib/applyLog";
+import { actPermission, type ViewMode } from "@/lib/viewer";
 
 function useConnection(): ConnectionState {
   const s = useContext(StateContext);
@@ -81,4 +84,25 @@ export function useActions(): Actions {
   const a = useContext(ActionsContext);
   if (a === null) throw new Error("useActions outside <ConnectionProvider>");
   return a;
+}
+
+/** Who the server says the viewer is; null until the first answer. */
+export function useViewer(): Me | null {
+  return useConnection().viewer;
+}
+
+/** Which state to render: loading, anonymous, signed in, or refused. */
+export function useViewMode(): ViewMode {
+  return useConnection().mode;
+}
+
+/** The public service list for anonymous visitors; null until the first answer. */
+export function usePublicServices(): PublicService[] | null {
+  return useConnection().publicServices;
+}
+
+/** Whether action buttons show, and why they are disabled. */
+export function useActPermission(): { visible: boolean; disabledReason: string | null } {
+  const { viewer } = useConnection();
+  return useMemo(() => actPermission(viewer), [viewer]);
 }

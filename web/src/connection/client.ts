@@ -2,6 +2,8 @@
 // The only module (with `feed.ts`) that talks to the network: components go through
 // `connection/hooks`.
 import type { AuditEvent } from "@/bindings/AuditEvent";
+import type { Me } from "@/bindings/Me";
+import type { PublicService } from "@/bindings/PublicService";
 import type { Snapshot } from "@/bindings/Snapshot";
 
 import type { ApplyChannelResponse, ApplyHostResponse } from "@/lib/apiTypes";
@@ -79,4 +81,24 @@ export async function getApplyLog(host: string, applyId: string): Promise<string
 /** The newest audit events, newest first. */
 export async function getAudit(limit: number): Promise<AuditEvent[]> {
   return (await request("GET", `/api/audit?limit=${limit}`)).json();
+}
+
+/** Who the server thinks the viewer is. */
+export async function getMe(): Promise<Me> {
+  return (await request("GET", "/api/me")).json();
+}
+
+/** The reduced service list an anonymous visitor may see. */
+export async function getPublicServices(): Promise<PublicService[]> {
+  return (await request("GET", "/api/public/services")).json();
+}
+
+/** Ends the session (the server clears the cookie; answers 204). */
+export async function logout(): Promise<void> {
+  await request("POST", "/auth/logout");
+}
+
+/** Where the login starts; `next` is the page to come back to. */
+export function loginUrl(next: string): string {
+  return `/auth/login?next=${enc(next)}`;
 }

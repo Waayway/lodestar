@@ -38,7 +38,7 @@ does; `docs/operations.md` for how it is run.
     `hooks.ts` (`useFleet`, `useApplyLog`, `useAudit`, `useActions`).
     No component calls `fetch` or opens a socket.
   - `lib/`: pure helpers (`format.ts` labels, `applyLog.ts` log merge,
-    `time.ts`, `theme.ts`, `cn.ts`).
+    `time.ts`, `theme.ts`, `cn.ts`, `viewer.ts` view mode and act permission from `/api/me`).
   - `components/ui/` (shadcn primitives in the tokens), `components/brand/`,
     `components/fleet/`, `components/layout/`; `icons/` (Lucide under
     Lodestar names, `BrandIcon`); `styles/tokens.css` + `styles/base.css`;

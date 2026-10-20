@@ -53,7 +53,7 @@ describe("reduceSnapshot services", () => {
 });
 
 function Probe({ snap }: { snap: Snapshot | null }) {
-  const state = useMemo(() => ({ snapshot: snap, feed: { kind: "live" } as never, openLog: null, audit: null }), [snap]);
+  const state = useMemo(() => ({ snapshot: snap, feed: { kind: "live" } as never, openLog: null, audit: null, viewer: null, mode: "signed_in" as const, publicServices: null }), [snap]);
   return (
     <StateContext.Provider value={state}>
       <Inner />
@@ -215,7 +215,7 @@ describe("ServiceCard", () => {
 });
 
 function WithSnap({ snap, children }: { snap: Snapshot | null; children: ComponentChildren }) {
-  const state = useMemo(() => ({ snapshot: snap, feed: { kind: "live" } as never, openLog: null, audit: null }), [snap]);
+  const state = useMemo(() => ({ snapshot: snap, feed: { kind: "live" } as never, openLog: null, audit: null, viewer: null, mode: "signed_in" as const, publicServices: null }), [snap]);
   return (
     <StateContext.Provider value={state}>
       <TooltipProvider>{children}</TooltipProvider>

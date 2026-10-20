@@ -3,6 +3,8 @@ import type { ComponentChildren } from "preact";
 import { vi } from "vitest";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { HostView } from "@/bindings/HostView";
+import type { Me } from "@/bindings/Me";
+import type { PublicService } from "@/bindings/PublicService";
 import type { ServiceView } from "@/bindings/ServiceView";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { type Actions, ActionsContext } from "@/connection/ConnectionProvider";
@@ -57,6 +59,22 @@ export function service(over: Partial<ServiceView>): ServiceView {
   };
 }
 
+export function me(over: Partial<Me>): Me {
+  return { viewer: "bob", role: "admin", session: true, can_act: true, reason: null, ...over };
+}
+
+export function publicService(over: Partial<PublicService>): PublicService {
+  return {
+    title: "Grafana",
+    group: "Monitoring",
+    description: null,
+    icon: null,
+    state: "up",
+    since: NOW - 100,
+    ...over,
+  };
+}
+
 export function fakeActions(): Actions & { [K in keyof Actions]: ReturnType<typeof vi.fn> } {
   return {
     applyHost: vi.fn(async () => {}),
@@ -65,6 +83,8 @@ export function fakeActions(): Actions & { [K in keyof Actions]: ReturnType<type
     showLog: vi.fn(),
     closeLog: vi.fn(),
     fetchLog: vi.fn(),
+    login: vi.fn(),
+    logout: vi.fn(async () => {}),
   } as never;
 }
 

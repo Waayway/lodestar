@@ -66,6 +66,13 @@ let
     };
   };
   failedBad = lib.filter (a: !a.assertion) bad.config.assertions;
+  failedOf = system: lib.filter (a: !a.assertion) system.config.assertions;
+  channelFails =
+    extra:
+    let
+      failures = failedOf (mkSystem extra);
+    in
+    lib.length failures == 1 && lib.hasInfix "updates.channel" (lib.head failures).message;
 
   checks = [
     {
@@ -115,6 +122,47 @@ let
           withMetrics.config.networking.firewall.interfaces.tailscale0.allowedTCPPorts or [ ]
         ));
       what = "the module does not open the metrics port";
+    }
+    {
+      ok = failedOf plain == [ ];
+      what = "the default updates channel passes";
+    }
+    {
+      ok = lib.all channelFails [
+        { services.lodestar-server.updates.channel = "-x"; }
+        { services.lodestar-server.updates.channel = "a..b"; }
+        { services.lodestar-server.updates.channel = "un stable"; }
+        { services.lodestar-server.updates.channel = ""; }
+      ];
+      what = "an invalid updates.channel fails an assertion";
+    }
+    {
+      ok = lib.all channelFails [
+        { services.lodestar-server.updates.channel = "stable"; }
+        {
+          services.lodestar-server.promote = {
+            from = "unstable";
+            to = "release";
+          };
+          services.lodestar-server.updates.channel = "release";
+        }
+        {
+          services.lodestar-server.promote = null;
+          services.lodestar-server.updates.channel = "stable";
+        }
+      ];
+      what = "updates.channel equal to the promote target fails an assertion";
+    }
+    {
+      ok =
+        failedOf (mkSystem {
+          services.lodestar-server.promote = {
+            from = "unstable";
+            to = "release";
+          };
+          services.lodestar-server.updates.channel = "stable";
+        }) == [ ];
+      what = "stable is allowed when it is not the promote target";
     }
     {
       ok = lib.length failedBad == 3;

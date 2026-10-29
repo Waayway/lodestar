@@ -15,6 +15,8 @@ let
   stateDir = "/var/lib/lodestar-server";
 
   proxyEnabled = cfg.proxyListen.address != null;
+  # The channel the updater must never push to ("stable" when promote is off).
+  promoteTarget = if cfg.promote == null then "stable" else cfg.promote.to;
   isIpv6 = lib.hasInfix ":";
   ipv4Proxies = lib.filter (a: !isIpv6 a) cfg.trustedProxies;
   ipv6Proxies = lib.filter isIpv6 cfg.trustedProxies;
@@ -274,7 +276,7 @@ in
       channel = mkOption {
         type = types.str;
         default = "unstable";
-        description = "Channel the updater pushes flake.lock bumps to (never `stable`).";
+        description = "Channel the updater pushes flake.lock bumps to; never the promote target (`stable` when promote is off).";
       };
       intervalSecs = mkOption {
         type = types.ints.positive;
@@ -356,6 +358,18 @@ in
             && cfg.oidc.adminGroup != null
           );
         message = "services.lodestar-server: publicUrl, oidc.issuer, oidc.clientSecretFile, oidc.readerGroup and oidc.adminGroup must be set while proxyListen.address is set.";
+      }
+      {
+        # The server's `valid_channel`: letters, digits, `_` `.` `/` `-`, not starting with
+        # `-` `.` `/`, no `..`.
+        assertion =
+          builtins.match "[A-Za-z0-9_][A-Za-z0-9_./-]*" cfg.updates.channel != null
+          && !lib.hasInfix ".." cfg.updates.channel;
+        message = "services.lodestar-server.updates.channel = \"${cfg.updates.channel}\" is not a valid channel name.";
+      }
+      {
+        assertion = cfg.updates.channel != promoteTarget;
+        message = "services.lodestar-server.updates.channel must not be the promote target (${promoteTarget}).";
       }
     ]
     ++ lib.concatLists (

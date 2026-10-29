@@ -13,4 +13,5 @@ pub mod resend;
 pub mod server;
 pub mod state;
 pub mod tailscale;
+pub mod updates;
 pub mod websocket;

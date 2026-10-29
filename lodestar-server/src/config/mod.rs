@@ -9,6 +9,7 @@ mod online_source;
 mod proxy_check;
 mod proxy_config;
 mod server_config;
+mod updates_config;
 
 pub use access_config::AccessConfig;
 pub use link::{Link, LinkCheck, load_links};
@@ -18,3 +19,4 @@ pub use oidc_config::OidcConfig;
 pub use online_source::OnlineSource;
 pub use proxy_config::ProxyConfig;
 pub use server_config::ServerConfig;
+pub use updates_config::{MetricsConfig, SoftwareConfig, UpdatesConfig, Upstream};

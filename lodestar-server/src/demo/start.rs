@@ -130,6 +130,9 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         tailscale_bin: "tailscale".into(),
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
+        updates: Default::default(),
+        metrics: None,
+        nix_bin: "nix".into(),
     };
     let (links, services_task): (Vec<Link>, _) = start_demo_services().await?;
     tasks.push(services_task);

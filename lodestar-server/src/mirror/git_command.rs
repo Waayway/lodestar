@@ -25,7 +25,7 @@ impl GitOutput {
     }
 }
 
-pub(super) fn valid_channel(channel: &str) -> bool {
+pub(crate) fn valid_channel(channel: &str) -> bool {
     !channel.is_empty()
         && !channel.starts_with(['-', '.', '/'])
         && !channel.contains("..")

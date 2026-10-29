@@ -220,6 +220,9 @@ async fn env(agent: SocketAddr, online: Option<Arc<dyn OnlineProvider>>) -> Env 
         tailscale_bin: PathBuf::from("tailscale"),
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
+        updates: Default::default(),
+        metrics: None,
+        nix_bin: "nix".into(),
     };
     let connection = db::connect(&config.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());

@@ -5,7 +5,7 @@ use anyhow::Context;
 use lodestar_proto::PromoteChannels;
 use serde::{Deserialize, Serialize};
 
-use super::{AccessConfig, OnlineSource, ProxyConfig};
+use super::{AccessConfig, MetricsConfig, OnlineSource, ProxyConfig, UpdatesConfig};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ServerConfig {
@@ -34,6 +34,14 @@ pub struct ServerConfig {
     /// The router entrance; absent or `null` means only the tailnet listener.
     #[serde(default)]
     pub proxy: Option<ProxyConfig>,
+    /// The software updater; absent means defaults with nothing tracked.
+    #[serde(default)]
+    pub updates: UpdatesConfig,
+    /// Prometheus metrics listener; absent means none.
+    #[serde(default)]
+    pub metrics: Option<MetricsConfig>,
+    #[serde(default = "default_nix_bin")]
+    pub nix_bin: PathBuf,
 }
 
 fn default_mirror_fetch_secs() -> u64 {
@@ -47,6 +55,10 @@ fn default_promote() -> Option<PromoteChannels> {
 }
 fn default_tailscale_bin() -> PathBuf {
     PathBuf::from("tailscale")
+}
+
+fn default_nix_bin() -> PathBuf {
+    PathBuf::from("nix")
 }
 
 impl ServerConfig {

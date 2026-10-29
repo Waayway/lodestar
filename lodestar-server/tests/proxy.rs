@@ -90,6 +90,9 @@ fn server_config(dir: &Path, origin: &Origin, agent: SocketAddr) -> ServerConfig
         tailscale_bin: PathBuf::from("tailscale"),
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
+        updates: Default::default(),
+        metrics: None,
+        nix_bin: "nix".into(),
     }
 }
 

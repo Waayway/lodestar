@@ -42,9 +42,29 @@ pub enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Tracked software, its latest upstream version and the last update run per flake
+    /// input; `updates run` starts a run now.
+    Updates {
+        #[command(subcommand)]
+        action: Option<UpdatesAction>,
+    },
     /// Recent audit events.
     Audit {
         #[arg(long, default_value_t = 20)]
         limit: u64,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum UpdatesAction {
+    /// Check and bump the tracked flake inputs now.
+    Run {
+        /// Wait for the run to finish; exit 0 only if every input ended `pushed` or
+        /// `no-change`.
+        #[arg(long)]
+        wait: bool,
+        /// Give up waiting after this many seconds.
+        #[arg(long, default_value_t = 1800)]
+        timeout: u64,
     },
 }

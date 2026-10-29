@@ -243,3 +243,134 @@ fn transient_errors() {
     assert!(!transient(RequestError::Status(404, String::new())));
     assert!(!is_transient(&anyhow::anyhow!("decoding response")));
 }
+
+/// A server that answers `GET /api/updates` with the next of `views` (the last one repeats)
+/// and `POST /api/updates/run` with 202. Returns its client and the number of POSTs seen.
+async fn updates_server(
+    views: Vec<lodestar_proto::UpdatesView>,
+) -> (Client, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (gets, posts) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let (get_count, post_count) = (gets.clone(), posts.clone());
+    let app = axum::Router::new().route(
+        "/api/updates",
+        axum::routing::get(move || {
+            let index = get_count
+                .fetch_add(1, Ordering::SeqCst)
+                .min(views.len() - 1);
+            let view = views[index].clone();
+            async move { axum::Json(view) }
+        }),
+    );
+    let app = app.route(
+        "/api/updates/run",
+        axum::routing::post(move || {
+            post_count.fetch_add(1, Ordering::SeqCst);
+            async {
+                (
+                    axum::http::StatusCode::ACCEPTED,
+                    axum::Json(serde_json::json!({})),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut client = Client::new(&format!("http://{addr}"));
+    client.poll = Duration::from_millis(50);
+    (client, posts)
+}
+
+fn updates_view(running: bool, result: &str) -> lodestar_proto::UpdatesView {
+    use lodestar_proto::{InputView, SoftwareView, UpdateRunView, VersionChangeView};
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    lodestar_proto::UpdatesView {
+        software: vec![SoftwareView {
+            name: "tailscale".into(),
+            input: "nixpkgs".into(),
+            latest: Some("1.98.10".into()),
+            checked_at: Some(now),
+            error: None,
+        }],
+        inputs: vec![InputView {
+            name: "nixpkgs".into(),
+            last: Some(UpdateRunView {
+                finished_at: now - 2 * 3600,
+                result: result.into(),
+                commit: None,
+                changes: vec![VersionChangeView {
+                    software: "tailscale".into(),
+                    from: "1.98.8".into(),
+                    to: "1.98.10".into(),
+                }],
+                host: None,
+            }),
+        }],
+        running,
+    }
+}
+
+#[tokio::test]
+async fn updates_prints_a_table() {
+    let (client, _) = updates_server(vec![updates_view(false, "pushed")]).await;
+    let (code, out) = go(&client, Command::Updates { action: None }).await;
+    assert_eq!(code, 0, "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[0].split_whitespace().collect::<Vec<_>>(),
+        ["SOFTWARE", "LATEST", "INPUT", "LAST", "RESULT", "AGE"]
+    );
+    assert_eq!(
+        lines[1].split_whitespace().collect::<Vec<_>>(),
+        ["tailscale", "1.98.10", "nixpkgs", "pushed", "2h"],
+        "{out}"
+    );
+}
+
+#[tokio::test]
+async fn updates_run_wait_polls_until_done() {
+    use lodestar_cli::UpdatesAction;
+    let action = Some(UpdatesAction::Run {
+        wait: true,
+        timeout: 30,
+    });
+    let (client, posts) = updates_server(vec![
+        updates_view(true, "pushed"),
+        updates_view(false, "pushed"),
+    ])
+    .await;
+    let (code, out) = go(&client, Command::Updates { action }).await;
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let action = Some(UpdatesAction::Run {
+        wait: true,
+        timeout: 30,
+    });
+    let (client, _) = updates_server(vec![
+        updates_view(true, "pushed"),
+        updates_view(false, "build-failed"),
+    ])
+    .await;
+    let (code, out) = go(&client, Command::Updates { action }).await;
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("build-failed"), "{out}");
+}
+
+#[tokio::test]
+async fn updates_run_without_wait_returns_at_once() {
+    use lodestar_cli::UpdatesAction;
+    let (client, posts) = updates_server(vec![updates_view(true, "pushed")]).await;
+    let action = Some(UpdatesAction::Run {
+        wait: false,
+        timeout: 30,
+    });
+    let (code, _) = go(&client, Command::Updates { action }).await;
+    assert_eq!(code, 0);
+    assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

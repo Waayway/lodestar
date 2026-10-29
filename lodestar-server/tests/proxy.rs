@@ -308,6 +308,31 @@ async fn reader_reads_but_cannot_act() {
 }
 
 #[tokio::test]
+async fn reader_sees_updates_but_cannot_run_them() {
+    let environment = env().await;
+    let base = &environment.base;
+    let (cookie, _) = login(&environment.state, "alice", Role::Reader, now() + 3600).await;
+    let response = client()
+        .get(format!("{base}/api/updates"))
+        .header("cookie", &cookie)
+        .header(MARK, "tailnet")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = client()
+        .post(format!("{base}/api/updates/run"))
+        .header("cookie", &cookie)
+        .header(MARK, "tailnet")
+        .header("x-lodestar", "1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error_of(response).await, "only admins can do this");
+}
+
+#[tokio::test]
 async fn admin_acts_only_with_exact_mark() {
     let environment = env().await;
     let base = &environment.base;

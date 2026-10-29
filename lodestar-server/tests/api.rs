@@ -17,13 +17,16 @@ use lodestar_proto::{
     ApplyRequest, AuditEvent, LogChunk, Me, Role, ServiceCheck, ServiceState, WsMessage,
 };
 use lodestar_server::config::{
-    AccessConfig, Link, LinkCheck, ManagedHost, OnlineSource, ServerConfig,
+    AccessConfig, Link, LinkCheck, ManagedHost, OnlineSource, ServerConfig, SoftwareConfig,
+    UpdatesConfig, Upstream,
 };
 use lodestar_server::db;
 use lodestar_server::db::entities::applies;
 use lodestar_server::mirror::Mirror;
 use lodestar_server::state::AppState;
 use lodestar_server::tailscale::StaticOnline;
+use lodestar_server::updates::nix_runner::NixRunner;
+use lodestar_server::updates::upstream::LatestVersion;
 use sea_orm::EntityTrait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -120,6 +123,30 @@ async fn env_with_links(
     access: AccessConfig,
     links: Vec<Link>,
 ) -> Env {
+    env_build(
+        dir,
+        repository_url,
+        agent,
+        hosts,
+        access,
+        links,
+        Default::default(),
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn env_build(
+    dir: tempfile::TempDir,
+    repository_url: &str,
+    agent: SocketAddr,
+    hosts: Vec<ManagedHost>,
+    access: AccessConfig,
+    links: Vec<Link>,
+    updates: UpdatesConfig,
+    nix: Option<Arc<dyn NixRunner>>,
+) -> Env {
     let addresses: HashMap<String, String> = hosts
         .iter()
         .map(|managed_host| (managed_host.name.to_lowercase(), agent.to_string()))
@@ -142,7 +169,7 @@ async fn env_with_links(
         tailscale_bin: PathBuf::from("tailscale"),
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
-        updates: Default::default(),
+        updates,
         metrics: None,
         nix_bin: "nix".into(),
     };
@@ -151,6 +178,9 @@ async fn env_with_links(
     let online = Arc::new(StaticOnline::new(&addresses).unwrap());
     let mut state = AppState::new(Arc::new(config), connection, mirror, online, hosts).unwrap();
     state.links = Arc::new(links);
+    if let Some(nix) = nix {
+        state.nix = nix;
+    }
     let app = lodestar_server::api::app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -774,4 +804,137 @@ async fn public_services_has_only_public_fields() {
     );
     assert_eq!(service["state"], "down");
     assert_eq!(service["since"], 1_700_000_000);
+}
+
+/// Nix whose `flake_update` waits until the test releases it.
+struct BlockedNix {
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl NixRunner for BlockedNix {
+    async fn flake_update(&self, _dir: &std::path::Path, _input: &str) -> anyhow::Result<()> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Ok(())
+    }
+
+    async fn eval_versions(
+        &self,
+        _dir: &std::path::Path,
+        _host: &ManagedHost,
+    ) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+        Ok(Default::default())
+    }
+
+    async fn build(&self, _dir: &std::path::Path, _host: &ManagedHost) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn updates_view_and_run_endpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    std::fs::write(origin.work.join("flake.lock"), "{}\n").unwrap();
+    git(&origin.work, &["add", "flake.lock"]);
+    origin.commit("lock", "unstable");
+    let agent = fake_agent(Shared::default()).await;
+    let updates = UpdatesConfig {
+        software: std::collections::BTreeMap::from([(
+            "tailscale".to_string(),
+            SoftwareConfig {
+                input: "nixpkgs".into(),
+                upstream: Upstream::Github("tailscale/tailscale".into()),
+            },
+        )]),
+        ..Default::default()
+    };
+    let (entered, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let nix = Arc::new(BlockedNix {
+        entered: entered.clone(),
+        release: release.clone(),
+    });
+    let environment = env_build(
+        dir,
+        origin.bare.to_str().unwrap(),
+        agent,
+        vec![host("H1", "unstable")],
+        AccessConfig::Disabled,
+        Vec::new(),
+        updates,
+        Some(nix),
+    )
+    .await;
+    environment.state.latest.lock().unwrap().insert(
+        "tailscale".into(),
+        LatestVersion {
+            version: Some("1.98.10".into()),
+            checked_at: Some(7),
+            error: None,
+        },
+    );
+    let http = dashboard_client();
+    let url = format!("{}/api/updates", environment.base);
+    let view: lodestar_proto::UpdatesView =
+        http.get(&url).send().await.unwrap().json().await.unwrap();
+    assert_eq!(
+        view,
+        lodestar_proto::UpdatesView {
+            software: vec![lodestar_proto::SoftwareView {
+                name: "tailscale".into(),
+                input: "nixpkgs".into(),
+                latest: Some("1.98.10".into()),
+                checked_at: Some(7),
+                error: None,
+            }],
+            inputs: vec![lodestar_proto::InputView {
+                name: "nixpkgs".into(),
+                last: None,
+            }],
+            running: false,
+        }
+    );
+
+    let run_url = format!("{url}/run");
+    let response = http.post(&run_url).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    entered.notified().await;
+    let view: lodestar_proto::UpdatesView =
+        http.get(&url).send().await.unwrap().json().await.unwrap();
+    assert!(view.running);
+    let response = http.post(&run_url).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body, json!({"error": "already running"}));
+
+    release.notify_one();
+    let mut view = view;
+    for _ in 0..100 {
+        view = http.get(&url).send().await.unwrap().json().await.unwrap();
+        if !view.running && view.inputs[0].last.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let last = view.inputs[0].last.clone().expect("run recorded");
+    assert_eq!(last.result, "no-change");
+    let audit: Vec<AuditEvent> = http
+        .get(format!("{}/api/audit", environment.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let requested = audit_kinds(&audit, "update-requested");
+    assert_eq!(requested.len(), 1, "{audit:?}");
+    assert_eq!(requested[0].actor, "dev");
+    // The 409 was not audited.
+    let response = http.post(&run_url).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
 }

@@ -5,7 +5,9 @@ use axum::routing::{get, post};
 use axum::{Extension, Router, middleware};
 
 use super::error::ApiError;
-use super::{audit, channels, csrf, hosts, me, metrics, promote, public_services, snapshot};
+use super::{
+    audit, channels, csrf, hosts, me, metrics, promote, public_services, snapshot, updates,
+};
 use crate::access::{
     AccessState, Need, load_viewer, require_access, require_need, require_public_origin,
     require_trusted_peer,
@@ -114,6 +116,7 @@ fn read_routes() -> Router<AppState> {
         .route("/snapshot", get(snapshot::get_snapshot))
         .route("/hosts/{name}/applies/{id}/log", get(hosts::apply_log))
         .route("/audit", get(audit::audit))
+        .route("/updates", get(updates::get_updates))
         .layer(middleware::from_fn(|request, next| {
             require_need(Need::Read, request, next)
         }))
@@ -125,6 +128,7 @@ fn act_routes() -> Router<AppState> {
         .route("/hosts/{name}/apply", post(hosts::apply_host))
         .route("/channels/{channel}/apply", post(channels::apply_channel))
         .route("/promote", post(promote::promote))
+        .route("/updates/run", post(updates::run_updates))
         .layer(middleware::from_fn(|request, next| {
             require_need(Need::Act, request, next)
         }))

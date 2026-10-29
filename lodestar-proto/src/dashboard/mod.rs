@@ -9,6 +9,7 @@ mod public_service;
 mod role;
 mod service_view;
 mod snapshot;
+mod updates_view;
 mod ws_message;
 
 pub use audit_event::AuditEvent;
@@ -20,4 +21,5 @@ pub use public_service::{PublicService, PublicServiceState};
 pub use role::Role;
 pub use service_view::{DownReason, ServiceCheck, ServiceState, ServiceView};
 pub use snapshot::Snapshot;
+pub use updates_view::{InputView, SoftwareView, UpdateRunView, UpdatesView, VersionChangeView};
 pub use ws_message::WsMessage;

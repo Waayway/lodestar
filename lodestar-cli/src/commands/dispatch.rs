@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use super::{audit, log, promote, rebuild, status};
+use super::{audit, log, promote, rebuild, status, updates};
 use crate::cli::Command;
 use crate::client::Client;
 
@@ -29,6 +29,7 @@ pub async fn run(client: &Client, command: Command, out: &mut impl Write) -> Res
         }
         Command::Log { host, apply_id } => log::log(client, host, apply_id, out).await,
         Command::Promote { yes } => promote::promote(client, yes, out).await,
+        Command::Updates { action } => updates::updates(client, action, out).await,
         Command::Audit { limit } => audit::audit(client, limit, out).await,
     }
 }

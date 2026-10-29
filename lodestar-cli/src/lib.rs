@@ -11,7 +11,7 @@ mod server_address;
 mod table;
 mod wait;
 
-pub use cli::{Cli, Command};
+pub use cli::{Cli, Command, UpdatesAction};
 pub use client::Client;
 pub use commands::run;
 pub use request_error::{RequestError, is_transient};

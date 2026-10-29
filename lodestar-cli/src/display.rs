@@ -42,3 +42,14 @@ pub(crate) fn describe(apply: &ApplyRecord) -> String {
     }
     text
 }
+
+/// A duration in seconds as the coarsest whole unit: `45s`, `5m`, `2h`, `3d`.
+pub(crate) fn age(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m", seconds / 60),
+        3600..86400 => format!("{}h", seconds / 3600),
+        _ => format!("{}d", seconds / 86400),
+    }
+}

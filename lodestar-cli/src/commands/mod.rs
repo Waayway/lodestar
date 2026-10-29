@@ -6,5 +6,6 @@ mod log;
 mod promote;
 mod rebuild;
 mod status;
+mod updates;
 
 pub use dispatch::run;

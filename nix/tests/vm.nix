@@ -95,8 +95,12 @@ pkgs.testers.runNixOSTest {
         ];
         environment.systemPackages = [ pkgs.jq ];
         # TEST ONLY: as for the agent port, the dashboard port is opened on tailscale0
-        # by the module; there is no tailscale0 here.
-        networking.firewall.interfaces.eth1.allowedTCPPorts = [ 8080 ];
+        # by the module; there is no tailscale0 here. The module never opens the
+        # metrics port (9466).
+        networking.firewall.interfaces.eth1.allowedTCPPorts = [
+          8080
+          9466
+        ];
         services.lodestar-server = {
           enable = true;
           inherit repoUrl;
@@ -124,6 +128,12 @@ pkgs.testers.runNixOSTest {
             };
           };
           listenAddress = "0.0.0.0";
+          # No network in the VM: the upstream check records an error.
+          metrics.address = config.networking.primaryIPAddress;
+          updates.software.tailscale = {
+            input = "nixpkgs";
+            upstream.github = "tailscale/tailscale";
+          };
           # The router entrance, for the router node only, with login through Kanidm.
           proxyListen.address = config.networking.primaryIPAddress;
           trustedProxies = [ nodes.router.networking.primaryIPAddress ];
@@ -148,7 +158,10 @@ pkgs.testers.runNixOSTest {
         };
       };
 
-    laptop1 = agentNode;
+    laptop1 = {
+      imports = [ agentNode ];
+      services.lodestar-agent.versions.tailscale = "1.0.0";
+    };
     laptop2 = agentNode;
 
     kanidm =
@@ -273,6 +286,20 @@ pkgs.testers.runNixOSTest {
         ".services[] | select(.id==\"closed\") | .check.state == \"down\" and .check.reason.kind == \"connection_refused\"'",
         timeout=60,
     )
+
+    # Software versions: laptop1 reports the version its module declares, and the
+    # metrics endpoint (on the manager's test-network address) exposes it. The upstream
+    # latest is unknown (no network), so there is no up_to_date line.
+    metrics_listen = manager.succeed("jq -r .metrics.listen /etc/lodestar-server/config.json").strip()
+    metrics_url = f"http://{metrics_listen}/metrics"
+    running = 'lodestar_software_running_info{host="laptop1",software="tailscale",version="1.0.0"} 1'
+    manager.wait_until_succeeds(f"curl -sf {metrics_url} | grep -qxF '{running}'", timeout=60)
+    metrics = laptop2.succeed(f"curl -sf {metrics_url}")
+    assert running in metrics.splitlines(), metrics
+    assert not any(l.startswith("lodestar_software_up_to_date") for l in metrics.splitlines()), metrics
+    updates = json.loads(manager.succeed("curl -sf localhost:8080/api/updates"))
+    tailscale = next(s for s in updates["software"] if s["name"] == "tailscale")
+    assert tailscale["latest"] is None and tailscale["error"], tailscale
 
     # 2-3. Apply laptop1: accepted, then it runs the head.
     res = apply("laptop1")

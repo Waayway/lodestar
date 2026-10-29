@@ -7,7 +7,7 @@ import { TableCell, TableRow } from "@/components/ui/table";
 import { useUpdates } from "@/connection/hooks";
 import type { ChannelRole } from "@/lib/format";
 
-/** One machine in the table (900 px and up): six columns, sub-lines wrap. */
+/** One machine in the table (900 px and up): seven columns, sub-lines wrap. */
 export function HostRow({
   host: h,
   now,

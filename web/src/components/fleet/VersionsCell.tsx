@@ -1,11 +1,12 @@
 import type { SoftwareView } from "@/bindings/SoftwareView";
+import { Attention } from "@/icons";
 import { cn } from "@/lib/cn";
 import { isBehind } from "@/lib/versions";
 import { toneText } from "@/lib/tones";
 
 /**
  * The tracked software a machine reported, `name version` each. A version older than the
- * software's latest release is drawn in `warn` with the latest in its tooltip; unknown
+ * software's latest release is drawn in `warn` with an alert icon and "→ latest" beside it; unknown
  * versions stay plain. Empty when the machine reports none.
  */
 export function VersionsCell({
@@ -30,11 +31,18 @@ export function VersionsCell({
           <li
             key={name}
             data-behind={behind}
-            title={behind ? `Latest is ${latest}` : undefined}
             className="whitespace-nowrap"
           >
             <span className="text-muted">{name}</span>{" "}
             <span className={cn("font-mono tabular-nums", behind && toneText.warn)}>{version}</span>
+            {behind && (
+              <span className={cn("ml-1 inline-flex items-center gap-1 text-xs", toneText.warn)}>
+                <Attention aria-hidden="true" className="size-3.5" />
+                <span className="sr-only">Behind, latest </span>
+                <span aria-hidden="true">→ </span>
+                <span className="font-mono">{latest}</span>
+              </span>
+            )}
           </li>
         );
       })}

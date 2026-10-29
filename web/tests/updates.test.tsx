@@ -62,12 +62,17 @@ describe("VersionsCell", () => {
     expect(el.closest("[data-behind]")?.getAttribute("data-behind")).toBe("true");
     expect(el.className).toContain("text-warn");
     expect(screen.getByText("tailscale")).toBeTruthy();
+    // Not colour alone: visible latest version and accessible text.
+    expect(screen.getByText("Behind, latest")).toBeTruthy();
+    expect(screen.getByText("1.104.2")).toBeTruthy();
+    expect(el.closest("li")?.textContent).toContain("→ 1.104.2");
   });
   it("is plain when equal", () => {
     render(<VersionsCell versions={{ tailscale: "1.104.2" }} software={[sw()]} />);
     const el = screen.getByText("1.104.2");
     expect(el.closest("[data-behind]")?.getAttribute("data-behind")).toBe("false");
     expect(el.className).not.toContain("text-warn");
+    expect(screen.queryByText(/Behind/)).toBeNull();
   });
   it("shows nothing when the host reports no versions", () => {
     const { container } = render(<VersionsCell versions={{}} software={[sw()]} />);

@@ -25,7 +25,12 @@ pub async fn get_metrics(State(state): State<AppState>) -> Response {
         .filter(|(software, _)| state.config.updates.software.contains_key(*software))
         .map(|(software, latest)| (software.clone(), latest.clone()))
         .collect();
-    let body = render(&MetricsInput { running, latest });
+    let last_runs = state.updates.last.lock().unwrap().clone();
+    let body = render(&MetricsInput {
+        running,
+        latest,
+        last_runs,
+    });
     (
         [(
             header::CONTENT_TYPE,

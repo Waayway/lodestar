@@ -1,4 +1,9 @@
 pub mod metrics;
+pub mod nix_runner;
+pub mod update_run;
+pub mod updater;
+pub mod updater_loop;
+pub mod updates_state;
 pub mod upstream;
 pub mod upstream_loop;
 pub mod version;

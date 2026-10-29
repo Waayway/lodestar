@@ -10,6 +10,8 @@ use crate::auth::AuthState;
 use crate::config::{Link, ManagedHost, ServerConfig};
 use crate::mirror::Mirror;
 use crate::tailscale::OnlineProvider;
+use crate::updates::nix_runner::{NixCommand, NixRunner};
+use crate::updates::updates_state::UpdatesState;
 use crate::updates::upstream::{GithubProvider, LatestVersion, UpstreamProvider};
 
 const BROADCAST_CAPACITY: usize = 256;
@@ -39,6 +41,10 @@ pub struct AppState {
     pub latest: Arc<Mutex<HashMap<String, LatestVersion>>>,
     /// Where upstream releases come from (tests inject a fake).
     pub upstream: Arc<dyn UpstreamProvider>,
+    /// The updater's lock and last run per input.
+    pub updates: Arc<UpdatesState>,
+    /// How the updater runs Nix (tests inject a fake).
+    pub nix: Arc<dyn NixRunner>,
     /// `(host, apply_id)` pairs with a live log follower.
     pub(crate) followers: Arc<Mutex<HashSet<(String, String)>>>,
     /// Serialises dashboard actions (apply, promote) from mirror fetch to recorded result, so
@@ -59,6 +65,9 @@ impl AppState {
         hosts: Vec<ManagedHost>,
     ) -> anyhow::Result<Self> {
         let (sender, _) = broadcast::channel(BROADCAST_CAPACITY);
+        let nix = Arc::new(NixCommand {
+            bin: config.nix_bin.clone(),
+        });
         Ok(Self {
             db,
             mirror,
@@ -74,6 +83,8 @@ impl AppState {
             versions: Arc::default(),
             latest: Arc::default(),
             upstream: Arc::new(GithubProvider::new()?),
+            updates: Arc::default(),
+            nix,
             followers: Arc::default(),
             actions: Arc::default(),
             demo: false,

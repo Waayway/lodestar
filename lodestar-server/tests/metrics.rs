@@ -13,6 +13,7 @@ use lodestar_server::config::{
 use lodestar_server::server;
 use lodestar_server::tailscale::StaticOnline;
 use lodestar_server::updates::metrics::{MetricsInput, render};
+use lodestar_server::updates::update_run::{UpdateOutcome, UpdateRun, VersionChange};
 use lodestar_server::updates::upstream::LatestVersion;
 use support::Origin;
 
@@ -46,6 +47,7 @@ fn renders_running_latest_and_up_to_date() {
             ("c", "tailscale", "1.x"),
         ]),
         latest: latest(Some("1.104.2"), Some(1234)),
+        last_runs: BTreeMap::new(),
     });
     for line in [
         r#"lodestar_software_running_info{host="a",software="tailscale",version="1.104.2"} 1"#,
@@ -74,6 +76,7 @@ fn newer_than_latest_counts_as_up_to_date() {
     let out = render(&MetricsInput {
         running: running(&[("a", "tailscale", "1.105.0")]),
         latest: latest(Some("1.104.2"), Some(1)),
+        last_runs: BTreeMap::new(),
     });
     assert!(out.contains(r#"up_to_date{host="a",software="tailscale"} 1"#));
 }
@@ -83,6 +86,7 @@ fn unknown_latest_gives_running_lines_only() {
     let out = render(&MetricsInput {
         running: running(&[("a", "tailscale", "1.104.2")]),
         latest: latest(None, None),
+        last_runs: BTreeMap::new(),
     });
     assert!(out.contains("lodestar_software_running_info{"));
     assert!(!out.contains("lodestar_software_up_to_date{"));
@@ -95,6 +99,7 @@ fn checked_timestamp_only_when_checked() {
     let out = render(&MetricsInput {
         running: BTreeMap::new(),
         latest: latest(Some("1.0"), None),
+        last_runs: BTreeMap::new(),
     });
     assert!(out.contains(r#"latest_info{software="tailscale",version="1.0"} 1"#));
     assert!(!out.contains("latest_checked_timestamp_seconds{"));
@@ -105,9 +110,66 @@ fn label_values_are_escaped() {
     let out = render(&MetricsInput {
         running: running(&[("a\"b", "tailscale", "1\\2\n3")]),
         latest: BTreeMap::new(),
+        last_runs: BTreeMap::new(),
     });
     assert!(
         out.contains(r#"host="a\"b",software="tailscale",version="1\\2\n3""#),
+        "{out}"
+    );
+}
+
+#[test]
+fn renders_last_update_run_per_input() {
+    let run = |input: &str, finished_at: i64, outcome: UpdateOutcome| {
+        (
+            input.to_string(),
+            UpdateRun {
+                input: input.into(),
+                finished_at,
+                outcome,
+            },
+        )
+    };
+    let out = render(&MetricsInput {
+        running: BTreeMap::new(),
+        latest: BTreeMap::new(),
+        last_runs: BTreeMap::from([
+            run(
+                "nixpkgs-unstable",
+                1234,
+                UpdateOutcome::Pushed {
+                    commit: "a".repeat(40),
+                    changes: vec![VersionChange {
+                        software: "tailscale".into(),
+                        from: "1.98.10".into(),
+                        to: "1.104.2".into(),
+                    }],
+                },
+            ),
+            run(
+                "home-manager",
+                99,
+                UpdateOutcome::BuildFailed {
+                    host: "a".into(),
+                    log: "boom".into(),
+                },
+            ),
+        ]),
+    });
+    for line in [
+        r#"lodestar_update_last_result{input="nixpkgs-unstable",result="pushed"} 1"#,
+        r#"lodestar_update_last_run_timestamp_seconds{input="nixpkgs-unstable"} 1234"#,
+        r#"lodestar_update_last_result{input="home-manager",result="build-failed"} 1"#,
+        r#"lodestar_update_last_run_timestamp_seconds{input="home-manager"} 99"#,
+        "# TYPE lodestar_update_last_result gauge",
+        "# TYPE lodestar_update_last_run_timestamp_seconds gauge",
+    ] {
+        assert!(out.lines().any(|l| l == line), "missing {line}\n{out}");
+    }
+    // Only the last result per input is present.
+    assert_eq!(
+        out.matches("lodestar_update_last_result{").count(),
+        2,
         "{out}"
     );
 }

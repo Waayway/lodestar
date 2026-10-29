@@ -1,10 +1,11 @@
 //! Prometheus text rendering of the tracked software: what runs where, what is latest
-//! upstream, and whether each host is up to date.
+//! upstream, whether each host is up to date, and the updater's last run per input.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
+use super::update_run::UpdateRun;
 use super::upstream::LatestVersion;
 use super::version::compare_versions;
 
@@ -14,6 +15,8 @@ pub struct MetricsInput {
     pub running: BTreeMap<String, BTreeMap<String, String>>,
     /// Software -> latest upstream release; only configured software.
     pub latest: BTreeMap<String, LatestVersion>,
+    /// Flake input -> the updater's last run.
+    pub last_runs: BTreeMap<String, UpdateRun>,
 }
 
 /// Escapes a label value: `\`, `"` and newline.
@@ -88,6 +91,16 @@ pub fn render(input: &MetricsInput) -> String {
             checked.push((format!(r#"software="{software}""#), at.to_string()));
         }
     }
+    let mut last_run = Vec::new();
+    let mut last_result = Vec::new();
+    for (input, run) in &input.last_runs {
+        let input = escape(input);
+        last_run.push((format!(r#"input="{input}""#), run.finished_at.to_string()));
+        last_result.push((
+            format!(r#"input="{input}",result="{}""#, run.outcome.result()),
+            "1".to_string(),
+        ));
+    }
     let mut out = String::new();
     family(
         &mut out,
@@ -112,6 +125,18 @@ pub fn render(input: &MetricsInput) -> String {
         "lodestar_software_latest_checked_timestamp_seconds",
         "Unix time of the last successful upstream check.",
         checked,
+    );
+    family(
+        &mut out,
+        "lodestar_update_last_run_timestamp_seconds",
+        "Unix time the updater last finished a run for a flake input.",
+        last_run,
+    );
+    family(
+        &mut out,
+        "lodestar_update_last_result",
+        "1 for the result of the updater's last run for a flake input.",
+        last_result,
     );
     out
 }

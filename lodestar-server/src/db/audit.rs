@@ -43,6 +43,22 @@ pub async fn recent_audit(
     Ok(rows.into_iter().map(audit_from_row).collect())
 }
 
+/// Newest first (by time, then id), only events of `kind`.
+pub async fn recent_audit_of_kind(
+    db: &impl ConnectionTrait,
+    kind: &str,
+    limit: u64,
+) -> anyhow::Result<Vec<AuditEvent>> {
+    let rows = audit_events::Entity::find()
+        .filter(audit_events::Column::Kind.eq(kind))
+        .order_by_desc(audit_events::Column::Time)
+        .order_by_desc(audit_events::Column::Id)
+        .limit(limit)
+        .all(db)
+        .await?;
+    Ok(rows.into_iter().map(audit_from_row).collect())
+}
+
 fn audit_from_row(row: audit_events::Model) -> AuditEvent {
     AuditEvent {
         id: row.id,

@@ -42,6 +42,7 @@ pub fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
     }
     if !state.config.updates.software.is_empty() {
         tasks.push(crate::updates::upstream_loop::spawn(state.clone()));
+        tasks.push(crate::updates::updater_loop::spawn(state.clone()));
     }
     let agents = tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(state.config.poll_secs.max(1)));

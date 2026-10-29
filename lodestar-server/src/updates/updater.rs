@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::nix_runner::log_tail;
+use super::run_guard::RunGuard;
 use super::update_run::{UpdateOutcome, UpdateRun, VersionChange};
 use super::updates_state::AlreadyRunning;
 use super::version::compare_versions;
@@ -35,22 +36,14 @@ pub fn commit_message(input: &str, changes: &[VersionChange]) -> String {
 /// Runs every input that some tracked software uses, one after the other. Refuses (without
 /// waiting) when another run is in progress.
 pub async fn run_all(state: &AppState) -> Result<Vec<UpdateRun>, AlreadyRunning> {
-    let running = state
-        .updates
-        .running
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| AlreadyRunning)?;
+    let running = state.updates.try_start()?;
     Ok(run_all_locked(state, running).await)
 }
 
-/// [`run_all`] for a caller that already took `state.updates.running` (the API takes it
-/// before answering, so a status read right after sees the run). The guard is held until
-/// every input is done.
-pub async fn run_all_locked(
-    state: &AppState,
-    running: tokio::sync::OwnedMutexGuard<()>,
-) -> Vec<UpdateRun> {
+/// [`run_all`] for a caller that already started the run (the API does before answering, so
+/// a status read right after sees it). The guard keeps the run marked as in progress until
+/// every input is done, and is dropped on every exit, a panic included.
+pub async fn run_all_locked(state: &AppState, running: RunGuard) -> Vec<UpdateRun> {
     let mut runs = Vec::new();
     for (input, software) in state.config.updates.inputs() {
         runs.push(run_input(state, &input, &software).await);

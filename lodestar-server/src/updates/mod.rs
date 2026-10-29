@@ -1,5 +1,6 @@
 pub mod metrics;
 pub mod nix_runner;
+pub mod run_guard;
 pub mod update_run;
 pub mod updater;
 pub mod updater_loop;

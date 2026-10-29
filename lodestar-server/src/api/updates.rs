@@ -69,8 +69,8 @@ pub(super) async fn get_updates(State(state): State<AppState>) -> Json<UpdatesVi
             name,
         })
         .collect();
-    // A probe that releases at once: the guard is only held while a run is in progress.
-    let running = state.updates.running.try_lock().is_err();
+    // A flag, not a lock probe: a poll must never make a concurrent start fail.
+    let running = state.updates.is_running();
     Json(UpdatesView {
         software,
         inputs,
@@ -84,7 +84,7 @@ pub(super) async fn run_updates(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     // Take the run lock before answering: a status read right after the 202 then sees
     // `running`, and two requests cannot both start a run.
-    let Ok(running) = state.updates.running.clone().try_lock_owned() else {
+    let Ok(running) = state.updates.try_start() else {
         return Err(ApiError(StatusCode::CONFLICT, "already running".into()));
     };
     if let Err(error) = db::insert_audit(

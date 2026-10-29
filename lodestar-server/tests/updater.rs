@@ -17,6 +17,7 @@ use lodestar_server::tailscale::StaticOnline;
 use lodestar_server::updates::nix_runner::NixRunner;
 use lodestar_server::updates::update_run::{UpdateOutcome, UpdateRun, VersionChange};
 use lodestar_server::updates::updater::{commit_message, restore_last, run_all, run_input};
+use lodestar_server::updates::updater_loop::{newest_finished, next_run_at};
 use support::{Origin, git};
 use tokio::sync::Notify;
 
@@ -644,6 +645,16 @@ async fn restore_last_reads_the_newest_audit_per_configured_input() {
     let last = fixture.state.updates.last.lock().unwrap().clone();
     assert_eq!(last[INPUT], pushed);
     assert!(!last.contains_key("home-manager"));
+    // The schedule after a restart starts from the restored run.
+    assert_eq!(newest_finished(&fixture.state), Some(pushed.finished_at));
+    assert_eq!(
+        next_run_at(
+            newest_finished(&fixture.state),
+            pushed.finished_at + 60,
+            86_400
+        ),
+        pushed.finished_at + 86_400
+    );
 }
 
 #[test]

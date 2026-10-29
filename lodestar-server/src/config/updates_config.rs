@@ -56,6 +56,12 @@ impl UpdatesConfig {
                 self.channel
             );
         }
+        if self.interval_secs == 0 {
+            anyhow::bail!("updates.interval_secs must be greater than 0");
+        }
+        if self.upstream_interval_secs == 0 {
+            anyhow::bail!("updates.upstream_interval_secs must be greater than 0");
+        }
         for (name, software) in &self.software {
             if name.is_empty()
                 || !name

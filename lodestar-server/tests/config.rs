@@ -76,6 +76,11 @@ fn check_rejects_bad_values_naming_them() {
         (software("Tail scale", "nixpkgs", "a/b"), "Tail scale"),
         (r#"{"channel":"-x"}"#.into(), "-x"),
         (r#"{"channel":"stable"}"#.into(), "stable"),
+        (r#"{"interval_secs":0}"#.into(), "updates.interval_secs"),
+        (
+            r#"{"upstream_interval_secs":0}"#.into(),
+            "upstream_interval_secs",
+        ),
     ];
     for (updates, needle) in cases {
         let error = with_updates(&updates).check_updates().unwrap_err();

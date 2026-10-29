@@ -40,6 +40,9 @@ pub fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
         }
         Err(error) => eprintln!("lodestar-server: service checks disabled: {error:#}"),
     }
+    if !state.config.updates.software.is_empty() {
+        tasks.push(crate::updates::upstream_loop::spawn(state.clone()));
+    }
     let agents = tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(state.config.poll_secs.max(1)));
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);

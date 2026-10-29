@@ -10,6 +10,7 @@ use crate::auth::AuthState;
 use crate::config::{Link, ManagedHost, ServerConfig};
 use crate::mirror::Mirror;
 use crate::tailscale::OnlineProvider;
+use crate::updates::upstream::{GithubProvider, LatestVersion, UpstreamProvider};
 
 const BROADCAST_CAPACITY: usize = 256;
 
@@ -34,6 +35,10 @@ pub struct AppState {
     pub(crate) agent_up: Arc<Mutex<HashMap<String, bool>>>,
     /// Latest tracked software versions per host name; replaced on every status, never merged.
     pub(crate) versions: Arc<Mutex<HashMap<String, BTreeMap<String, String>>>>,
+    /// Latest upstream release per software name.
+    pub latest: Arc<Mutex<HashMap<String, LatestVersion>>>,
+    /// Where upstream releases come from (tests inject a fake).
+    pub upstream: Arc<dyn UpstreamProvider>,
     /// `(host, apply_id)` pairs with a live log follower.
     pub(crate) followers: Arc<Mutex<HashSet<(String, String)>>>,
     /// Serialises dashboard actions (apply, promote) from mirror fetch to recorded result, so
@@ -67,6 +72,8 @@ impl AppState {
             reachable: Arc::default(),
             agent_up: Arc::default(),
             versions: Arc::default(),
+            latest: Arc::default(),
+            upstream: Arc::new(GithubProvider::new()?),
             followers: Arc::default(),
             actions: Arc::default(),
             demo: false,

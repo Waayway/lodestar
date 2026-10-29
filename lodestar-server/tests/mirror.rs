@@ -379,3 +379,88 @@ async fn push_lock_rejects_bad_input_and_foreign_changes() {
     assert_eq!(origin.bare_ref("unstable"), base);
     mirror.remove_worktree(&dir).await;
 }
+
+#[tokio::test]
+async fn push_lock_rejects_a_deleted_lock() {
+    use lodestar_server::mirror::PushError;
+    let (origin, base) = origin_with_lock();
+    let (mirror, _state) = mirror_of(&origin).await;
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().join("wt");
+    mirror.worktree("unstable", &dir).await.unwrap();
+    std::fs::remove_file(dir.join("flake.lock")).unwrap();
+    assert!(matches!(
+        mirror.push_lock(&dir, "unstable", &base, "m").await,
+        Err(PushError::Rejected(_))
+    ));
+    assert_eq!(origin.bare_ref("unstable"), base);
+    mirror.remove_worktree(&dir).await;
+}
+
+#[tokio::test]
+async fn push_lock_rejects_an_untracked_new_lock() {
+    use lodestar_server::mirror::PushError;
+    let origin = Origin::new();
+    let base = origin.commit("no lock", "unstable");
+    let (mirror, _state) = mirror_of(&origin).await;
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().join("wt");
+    mirror.worktree("unstable", &dir).await.unwrap();
+    write_lock_file(&dir, "{}\n");
+    assert!(matches!(
+        mirror.push_lock(&dir, "unstable", &base, "m").await,
+        Err(PushError::Rejected(_))
+    ));
+    assert_eq!(origin.bare_ref("unstable"), base);
+    mirror.remove_worktree(&dir).await;
+}
+
+#[tokio::test]
+async fn push_lock_rejects_the_promote_target() {
+    use lodestar_server::mirror::PushError;
+    let (origin, _base) = origin_with_lock();
+    // Default promote pair: unstable -> stable.
+    origin.commit("lock on stable", "stable");
+    let stable = origin.bare_ref("stable");
+    let (mirror, _state) = mirror_of(&origin).await;
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().join("wt");
+    mirror.worktree("stable", &dir).await.unwrap();
+    write_lock_file(&dir, "{\"nodes\":1}\n");
+    assert!(matches!(
+        mirror.push_lock(&dir, "stable", &stable, "m").await,
+        Err(PushError::Rejected(_))
+    ));
+    assert_eq!(origin.bare_ref("stable"), stable);
+    mirror.remove_worktree(&dir).await;
+
+    // A custom target, and "stable" when promote is disabled.
+    for (promote, target) in [
+        (
+            Some(lodestar_proto::PromoteChannels {
+                from: "unstable".into(),
+                to: "release".into(),
+            }),
+            "release",
+        ),
+        (None, "stable"),
+    ] {
+        let (origin, _base) = origin_with_lock();
+        origin.commit("target", target);
+        let head = origin.bare_ref(target);
+        let state = tempfile::tempdir().unwrap();
+        let mut settings = config(state.path(), origin.bare.to_str().unwrap());
+        settings.promote = promote;
+        let mirror = Mirror::open_or_init(&settings).await.unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().join("wt");
+        mirror.worktree(target, &dir).await.unwrap();
+        write_lock_file(&dir, "{\"nodes\":1}\n");
+        assert!(matches!(
+            mirror.push_lock(&dir, target, &head, "m").await,
+            Err(PushError::Rejected(_))
+        ));
+        assert_eq!(origin.bare_ref(target), head);
+        mirror.remove_worktree(&dir).await;
+    }
+}

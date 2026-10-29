@@ -251,7 +251,8 @@ impl Mirror {
 
     /// Commits `flake.lock` in `dir` as Lodestar <lodestar@vanwaaij.com> with `message`, pushes it
     /// to `channel` iff the remote head is still `base` (never forced); returns the new commit.
-    /// Only `flake.lock` may have changed in `dir`, and it must have.
+    /// Only `flake.lock` may have changed in `dir`, and it must have been modified (not added or
+    /// deleted). `channel` must not be the promote target.
     pub async fn push_lock(
         &self,
         dir: &Path,
@@ -262,6 +263,14 @@ impl Mirror {
         let reject = |message: String| Err(PushError::Rejected(message));
         if !valid_channel(channel) {
             return reject(format!("invalid channel {channel:?}"));
+        }
+        // The updater never writes the promote target ("stable" when promote is disabled).
+        let target = self
+            .promote
+            .as_ref()
+            .map_or("stable", |channels| channels.to.as_str());
+        if channel == target {
+            return reject(format!("{channel} is the promote target"));
         }
         if !is_commit_hash(base) {
             return reject("base is not a commit hash".into());
@@ -293,20 +302,19 @@ impl Mirror {
         if !output.ok() {
             return Err(anyhow::anyhow!("git status failed: {}", output.stderr.trim()).into());
         }
-        // Entries are "XY path\0" (renames carry a second path entry; those fail the check).
+        // Entries are "XY path\0" (renames carry a second path entry). Exactly one is allowed:
+        // `flake.lock`, modified (in the worktree, the index or both); a deleted, added or
+        // untracked lock and any other path are refused.
         let entries: Vec<&str> = output
             .stdout
             .split('\0')
-            .filter(|e| !e.is_empty())
+            .filter(|entry| !entry.is_empty())
             .collect();
-        if let Some(other) = entries
-            .iter()
-            .find(|entry| entry.get(3..) != Some("flake.lock"))
-        {
-            return reject(format!("unexpected change in worktree: {other}"));
-        }
-        if entries.is_empty() {
-            return reject("flake.lock did not change".into());
+        match entries.as_slice() {
+            [] => return reject("flake.lock did not change".into()),
+            [entry] if matches!(*entry, " M flake.lock" | "M  flake.lock" | "MM flake.lock") => {}
+            [entry] => return reject(format!("unexpected change in worktree: {entry}")),
+            _ => return reject(format!("unexpected changes in worktree: {entries:?}")),
         }
         let output = self.git_in(dir, ["add", "--", "flake.lock"]).await?;
         if !output.ok() {

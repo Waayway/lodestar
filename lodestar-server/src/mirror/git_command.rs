@@ -47,7 +47,8 @@ impl Mirror {
     }
 
     /// Runs git inside a worktree of the mirror, as `Lodestar <lodestar@vanwaaij.com>` (set for
-    /// this invocation only; no git config is changed).
+    /// this invocation only, both as config and as the `GIT_AUTHOR_*`/`GIT_COMMITTER_*`
+    /// variables, which win over anything in the service environment; no git config is changed).
     pub(super) async fn git_in<I, S>(&self, dir: &Path, args: I) -> anyhow::Result<GitOutput>
     where
         I: IntoIterator<Item = S>,
@@ -63,6 +64,10 @@ impl Mirror {
                 "-c",
                 "user.email=lodestar@vanwaaij.com",
             ])
+            .env("GIT_AUTHOR_NAME", "Lodestar")
+            .env("GIT_AUTHOR_EMAIL", "lodestar@vanwaaij.com")
+            .env("GIT_COMMITTER_NAME", "Lodestar")
+            .env("GIT_COMMITTER_EMAIL", "lodestar@vanwaaij.com")
             .args(args);
         run(command).await
     }

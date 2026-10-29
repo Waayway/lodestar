@@ -21,6 +21,8 @@ pub struct LatestVersion {
     pub checked_at: Option<i64>,
     /// Why the last check failed; the last known `version` stays.
     pub error: Option<String>,
+    /// Failed checks since start ("no stable release" included); a counter, never reset.
+    pub errors: u64,
 }
 
 #[derive(Deserialize)]
@@ -84,7 +86,7 @@ impl UpstreamProvider for GithubProvider {
 }
 
 /// Checks every tracked software once. A failure (or no stable release) keeps the last known
-/// version and its time and records the error.
+/// version and its time, records the error and counts it.
 pub async fn check_once(state: &AppState) {
     for (name, software) in &state.config.updates.software {
         let Upstream::Github(repo) = &software.upstream;
@@ -105,6 +107,7 @@ pub async fn check_once(state: &AppState) {
             Err(error) => {
                 eprintln!("lodestar-server: upstream check for {name}: {error:#}");
                 entry.error = Some(format!("{error:#}"));
+                entry.errors += 1;
             }
         }
     }

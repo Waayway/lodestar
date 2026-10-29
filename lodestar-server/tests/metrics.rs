@@ -34,8 +34,38 @@ fn latest(version: Option<&str>, checked_at: Option<i64>) -> BTreeMap<String, La
             version: version.map(String::from),
             checked_at,
             error: None,
+            errors: 0,
         },
     )])
+}
+
+#[test]
+fn upstream_check_errors_are_a_counter() {
+    let mut known = latest(None, None);
+    known.get_mut("tailscale").unwrap().errors = 3;
+    let out = render(&MetricsInput {
+        running: BTreeMap::new(),
+        latest: known,
+        last_runs: BTreeMap::new(),
+    });
+    assert!(
+        out.contains("# TYPE lodestar_software_latest_check_errors_total counter\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("lodestar_software_latest_check_errors_total{software=\"tailscale\"} 3\n"),
+        "{out}"
+    );
+    // Zero is rendered too (a counter that exists from the first check).
+    let out = render(&MetricsInput {
+        running: BTreeMap::new(),
+        latest: latest(Some("1.104.2"), Some(1)),
+        last_runs: BTreeMap::new(),
+    });
+    assert!(
+        out.contains("lodestar_software_latest_check_errors_total{software=\"tailscale\"} 0\n"),
+        "{out}"
+    );
 }
 
 #[test]

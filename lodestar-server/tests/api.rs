@@ -876,6 +876,7 @@ async fn updates_view_and_run_endpoint() {
             version: Some("1.98.10".into()),
             checked_at: Some(7),
             error: None,
+            errors: 0,
         },
     );
     let http = dashboard_client();

@@ -154,6 +154,7 @@ the firewall opens it only to monitor.
 | `lodestar_software_running_info` | `host`, `software`, `version` | 1 |
 | `lodestar_software_latest_info` | `software`, `version` | 1 |
 | `lodestar_software_latest_checked_timestamp_seconds` | `software` | unix time |
+| `lodestar_software_latest_check_errors_total` | `software` | counter: failed upstream checks since start ("no stable release" included) |
 | `lodestar_software_up_to_date` | `host`, `software` | 1 up to date, 0 behind; absent when unknown |
 | `lodestar_update_last_run_timestamp_seconds` | `input` | unix time |
 | `lodestar_update_last_result` | `input`, `result` | 1 for the last result (`pushed`, `no-change`, `build-failed`, `push-failed`, `eval-failed`) |

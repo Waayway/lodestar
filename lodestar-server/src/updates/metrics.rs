@@ -33,10 +33,20 @@ fn escape(value: &str) -> String {
     out
 }
 
-fn family(out: &mut String, name: &str, help: &str, mut lines: Vec<(String, String)>) {
+fn family(out: &mut String, name: &str, help: &str, lines: Vec<(String, String)>) {
+    typed_family(out, name, "gauge", help, lines);
+}
+
+fn typed_family(
+    out: &mut String,
+    name: &str,
+    kind: &str,
+    help: &str,
+    mut lines: Vec<(String, String)>,
+) {
     lines.sort();
     let _ = writeln!(out, "# HELP {name} {help}");
-    let _ = writeln!(out, "# TYPE {name} gauge");
+    let _ = writeln!(out, "# TYPE {name} {kind}");
     for (labels, value) in lines {
         let _ = writeln!(out, "{name}{{{labels}}} {value}");
     }
@@ -79,8 +89,13 @@ pub fn render(input: &MetricsInput) -> String {
     }
     let mut latest_info = Vec::new();
     let mut checked = Vec::new();
+    let mut check_errors = Vec::new();
     for (software, latest) in &input.latest {
         let software = escape(software);
+        check_errors.push((
+            format!(r#"software="{software}""#),
+            latest.errors.to_string(),
+        ));
         if let Some(version) = &latest.version {
             latest_info.push((
                 format!(r#"software="{software}",version="{}""#, escape(version)),
@@ -125,6 +140,13 @@ pub fn render(input: &MetricsInput) -> String {
         "lodestar_software_latest_checked_timestamp_seconds",
         "Unix time of the last successful upstream check.",
         checked,
+    );
+    typed_family(
+        &mut out,
+        "lodestar_software_latest_check_errors_total",
+        "counter",
+        "Failed upstream checks since the server started (no stable release included).",
+        check_errors,
     );
     family(
         &mut out,

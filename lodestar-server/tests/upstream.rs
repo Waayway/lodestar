@@ -122,6 +122,7 @@ async fn failures_keep_last_known_version_and_record_the_error() {
     assert_eq!(first.version.as_deref(), Some("1.104.2"));
     assert!(first.checked_at.is_some());
     assert_eq!(first.error, None);
+    assert_eq!(first.errors, 0);
 
     *answer.lock().unwrap() = Err("403 rate limit".into());
     check_once(&state).await;
@@ -129,6 +130,7 @@ async fn failures_keep_last_known_version_and_record_the_error() {
     assert_eq!(failed.version, first.version);
     assert_eq!(failed.checked_at, first.checked_at);
     assert!(failed.error.unwrap().contains("403 rate limit"));
+    assert_eq!(failed.errors, 1);
 
     *answer.lock().unwrap() = Ok(ONLY_PRE.to_string());
     check_once(&state).await;
@@ -136,8 +138,12 @@ async fn failures_keep_last_known_version_and_record_the_error() {
     assert_eq!(pre.version, first.version);
     assert_eq!(pre.checked_at, first.checked_at);
     assert!(pre.error.is_some());
+    // "No stable release" counts as a failed check.
+    assert_eq!(pre.errors, 2);
 
     *answer.lock().unwrap() = Ok(LIST.to_string());
     check_once(&state).await;
     assert_eq!(latest(&state).error, None);
+    // A counter: a success does not reset it.
+    assert_eq!(latest(&state).errors, 2);
 }

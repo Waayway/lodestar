@@ -374,3 +374,28 @@ async fn updates_run_without_wait_returns_at_once() {
     assert_eq!(code, 0);
     assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+#[test]
+fn updates_run_waits_two_hours_by_default() {
+    use clap::{CommandFactory, Parser};
+    let cli = lodestar_cli::Cli::try_parse_from(["lodestar", "updates", "run", "--wait"]).unwrap();
+    match cli.command {
+        Command::Updates {
+            action: Some(lodestar_cli::UpdatesAction::Run { wait, timeout }),
+        } => {
+            assert!(wait);
+            assert_eq!(timeout, 7200);
+        }
+        _ => panic!("expected updates run"),
+    }
+    let mut command = lodestar_cli::Cli::command();
+    let help = command
+        .find_subcommand_mut("updates")
+        .unwrap()
+        .find_subcommand_mut("run")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+    assert!(help.contains("[default: 7200]"), "{help}");
+    assert!(help.contains("builds can take"), "{help}");
+}

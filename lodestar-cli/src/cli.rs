@@ -63,8 +63,9 @@ pub enum UpdatesAction {
         /// `no-change`.
         #[arg(long)]
         wait: bool,
-        /// Give up waiting after this many seconds.
-        #[arg(long, default_value_t = 1800)]
+        /// Give up waiting after this many seconds (builds can take two hours; the run goes
+        /// on on the server after the CLI gives up).
+        #[arg(long, default_value_t = 7200)]
         timeout: u64,
     },
 }

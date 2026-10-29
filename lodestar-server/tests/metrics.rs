@@ -1,0 +1,189 @@
+//! Prometheus metrics for tracked software: the pure renderer and the `/metrics` listener.
+
+mod support;
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use lodestar_server::config::{
+    AccessConfig, MetricsConfig, OnlineSource, ServerConfig, SoftwareConfig, UpdatesConfig,
+    Upstream,
+};
+use lodestar_server::server;
+use lodestar_server::tailscale::StaticOnline;
+use lodestar_server::updates::metrics::{MetricsInput, render};
+use lodestar_server::updates::upstream::LatestVersion;
+use support::Origin;
+
+fn running(pairs: &[(&str, &str, &str)]) -> BTreeMap<String, BTreeMap<String, String>> {
+    let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    for (host, software, version) in pairs {
+        out.entry(host.to_string())
+            .or_default()
+            .insert(software.to_string(), version.to_string());
+    }
+    out
+}
+
+fn latest(version: Option<&str>, checked_at: Option<i64>) -> BTreeMap<String, LatestVersion> {
+    BTreeMap::from([(
+        "tailscale".to_string(),
+        LatestVersion {
+            version: version.map(String::from),
+            checked_at,
+            error: None,
+        },
+    )])
+}
+
+#[test]
+fn renders_running_latest_and_up_to_date() {
+    let out = render(&MetricsInput {
+        running: running(&[
+            ("a", "tailscale", "1.104.2"),
+            ("b", "tailscale", "1.98.10"),
+            ("c", "tailscale", "1.x"),
+        ]),
+        latest: latest(Some("1.104.2"), Some(1234)),
+    });
+    for line in [
+        r#"lodestar_software_running_info{host="a",software="tailscale",version="1.104.2"} 1"#,
+        r#"lodestar_software_running_info{host="c",software="tailscale",version="1.x"} 1"#,
+        r#"lodestar_software_up_to_date{host="a",software="tailscale"} 1"#,
+        r#"lodestar_software_up_to_date{host="b",software="tailscale"} 0"#,
+        r#"lodestar_software_latest_info{software="tailscale",version="1.104.2"} 1"#,
+        r#"lodestar_software_latest_checked_timestamp_seconds{software="tailscale"} 1234"#,
+        "# TYPE lodestar_software_running_info gauge",
+        "# TYPE lodestar_software_up_to_date gauge",
+        "# TYPE lodestar_software_latest_info gauge",
+        "# TYPE lodestar_software_latest_checked_timestamp_seconds gauge",
+    ] {
+        assert!(out.lines().any(|l| l == line), "missing {line}\n{out}");
+    }
+    assert!(!out.contains(r#"up_to_date{host="c""#), "{out}");
+    assert!(out.ends_with('\n'));
+    // sorted by labels within a family
+    let a = out.find(r#"running_info{host="a""#).unwrap();
+    let b = out.find(r#"running_info{host="b""#).unwrap();
+    assert!(a < b);
+}
+
+#[test]
+fn newer_than_latest_counts_as_up_to_date() {
+    let out = render(&MetricsInput {
+        running: running(&[("a", "tailscale", "1.105.0")]),
+        latest: latest(Some("1.104.2"), Some(1)),
+    });
+    assert!(out.contains(r#"up_to_date{host="a",software="tailscale"} 1"#));
+}
+
+#[test]
+fn unknown_latest_gives_running_lines_only() {
+    let out = render(&MetricsInput {
+        running: running(&[("a", "tailscale", "1.104.2")]),
+        latest: latest(None, None),
+    });
+    assert!(out.contains("lodestar_software_running_info{"));
+    assert!(!out.contains("lodestar_software_up_to_date{"));
+    assert!(!out.contains("lodestar_software_latest_info{"));
+    assert!(!out.contains("latest_checked_timestamp_seconds{"));
+}
+
+#[test]
+fn checked_timestamp_only_when_checked() {
+    let out = render(&MetricsInput {
+        running: BTreeMap::new(),
+        latest: latest(Some("1.0"), None),
+    });
+    assert!(out.contains(r#"latest_info{software="tailscale",version="1.0"} 1"#));
+    assert!(!out.contains("latest_checked_timestamp_seconds{"));
+}
+
+#[test]
+fn label_values_are_escaped() {
+    let out = render(&MetricsInput {
+        running: running(&[("a\"b", "tailscale", "1\\2\n3")]),
+        latest: BTreeMap::new(),
+    });
+    assert!(
+        out.contains(r#"host="a\"b",software="tailscale",version="1\\2\n3""#),
+        "{out}"
+    );
+}
+
+#[tokio::test]
+async fn metrics_listener_serves_and_dashboard_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    origin.commit("one", "main");
+    let config = ServerConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        agent_port: 7461,
+        hosts_file: dir.path().join("hosts.json"),
+        links_file: None,
+        repo_url: origin.bare.to_str().unwrap().into(),
+        push_url: origin.bare.to_str().unwrap().into(),
+        deploy_key_file: None,
+        state_dir: dir.path().join("state"),
+        access: AccessConfig::Disabled,
+        online: OnlineSource::Static {
+            addresses: HashMap::new(),
+        },
+        mirror_fetch_secs: 300,
+        poll_secs: 60,
+        tailscale_bin: PathBuf::from("tailscale"),
+        promote: None,
+        proxy: None,
+        updates: UpdatesConfig {
+            software: BTreeMap::from([(
+                "tailscale".to_string(),
+                SoftwareConfig {
+                    input: "nixpkgs".into(),
+                    upstream: Upstream::Github("tailscale/tailscale".into()),
+                },
+            )]),
+            ..Default::default()
+        },
+        metrics: Some(MetricsConfig {
+            listen: "127.0.0.1:0".parse().unwrap(),
+        }),
+        nix_bin: "nix".into(),
+    };
+    let online = Arc::new(StaticOnline::new(&HashMap::new()).unwrap());
+    let handle = server::start(config, vec![], vec![], online, false)
+        .await
+        .unwrap();
+    handle.state.versions.lock().unwrap().insert(
+        "a".into(),
+        BTreeMap::from([("tailscale".into(), "1.0".into())]),
+    );
+    let metrics = handle.metrics_addr.expect("metrics listener");
+
+    let response = reqwest::get(format!("http://{metrics}/metrics"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let content_type = response.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        content_type.starts_with("text/plain; version=0.0.4"),
+        "{content_type}"
+    );
+    let body = response.text().await.unwrap();
+    assert!(body.contains(
+        r#"lodestar_software_running_info{host="a",software="tailscale",version="1.0"} 1"#
+    ));
+
+    let other = reqwest::get(format!("http://{metrics}/api/snapshot"))
+        .await
+        .unwrap();
+    assert_eq!(other.status(), 404);
+    let dashboard = reqwest::get(format!("http://{}/metrics", handle.addr))
+        .await
+        .unwrap();
+    assert_eq!(dashboard.status(), 404);
+    handle.stop().await;
+}

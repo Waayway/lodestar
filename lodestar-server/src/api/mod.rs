@@ -12,9 +12,10 @@ mod csrf;
 mod error;
 mod hosts;
 mod me;
+mod metrics;
 mod promote;
 mod public_services;
 mod snapshot;
 
-pub use app::{app, proxy_app};
+pub use app::{app, metrics_app, proxy_app};
 pub use csrf::LODESTAR_HEADER;

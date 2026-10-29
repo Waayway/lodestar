@@ -34,7 +34,7 @@ pub struct AppState {
     /// not contacted), so the poller logs only changes.
     pub(crate) agent_up: Arc<Mutex<HashMap<String, bool>>>,
     /// Latest tracked software versions per host name; replaced on every status, never merged.
-    pub(crate) versions: Arc<Mutex<HashMap<String, BTreeMap<String, String>>>>,
+    pub versions: Arc<Mutex<HashMap<String, BTreeMap<String, String>>>>,
     /// Latest upstream release per software name.
     pub latest: Arc<Mutex<HashMap<String, LatestVersion>>>,
     /// Where upstream releases come from (tests inject a fake).

@@ -5,7 +5,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Router, middleware};
 
 use super::error::ApiError;
-use super::{audit, channels, csrf, hosts, me, promote, public_services, snapshot};
+use super::{audit, channels, csrf, hosts, me, metrics, promote, public_services, snapshot};
 use crate::access::{
     AccessState, Need, load_viewer, require_access, require_need, require_public_origin,
     require_trusted_peer,
@@ -24,6 +24,7 @@ pub fn app(state: AppState) -> Router {
     let websocket = Router::new().route("/ws", get(websocket::handler));
     Router::new()
         .nest("/api", api_routes(websocket))
+        .route("/metrics", get(not_found))
         .fallback(embed::static_handler)
         .layer(middleware::from_fn_with_state(access, require_access))
         .with_state(state)
@@ -53,9 +54,18 @@ pub fn proxy_app(state: AppState) -> Router {
     Router::new()
         .nest("/api", api_routes(websocket))
         .nest("/auth", auth_routes(auth.clone()))
+        .route("/metrics", get(not_found))
         .fallback(embed::static_handler)
         .layer(middleware::from_fn_with_state(state.clone(), load_viewer))
         .layer(middleware::from_fn_with_state(auth, require_trusted_peer))
+        .with_state(state)
+}
+
+/// The Prometheus listener: only `GET /metrics`, no tailnet access check (the firewall
+/// restricts who can reach the port).
+pub fn metrics_app(state: AppState) -> Router {
+    Router::new()
+        .route("/metrics", get(metrics::get_metrics))
         .with_state(state)
 }
 

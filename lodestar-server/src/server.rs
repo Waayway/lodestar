@@ -22,6 +22,8 @@ pub struct ServerHandle {
     pub addr: SocketAddr,
     /// The router entrance's address, when one is configured.
     pub proxy_addr: Option<SocketAddr>,
+    /// The metrics listener's address, when one is configured.
+    pub metrics_addr: Option<SocketAddr>,
     pub state: AppState,
     /// One serve task per listener.
     serves: Vec<JoinHandle<std::io::Result<()>>>,
@@ -113,6 +115,7 @@ pub async fn start(
     let mirror = Arc::new(Mirror::open_or_init(&config).await?);
     let listen = config.listen;
     let proxy = config.proxy.clone();
+    let metrics = config.metrics.clone();
     let mut state = AppState::new(Arc::new(config), connection, mirror, online, hosts)?;
     state.links = Arc::new(links);
     state.demo = demo;
@@ -122,6 +125,10 @@ pub async fn start(
     let (listener, addr) = bind(listen).await?;
     let proxy_listener = match &proxy {
         Some(proxy) => Some(bind(proxy.listen).await?),
+        None => None,
+    };
+    let metrics_listener = match &metrics {
+        Some(metrics) => Some(bind(metrics.listen).await?),
         None => None,
     };
     let (shutdown, stopped) = watch::channel(());
@@ -136,14 +143,24 @@ pub async fn start(
         serves.push(spawn_serve(
             listener,
             api::proxy_app(state.clone()),
-            stopped,
+            stopped.clone(),
         ));
         eprintln!("lodestar-server: router entrance on {proxy_addr}");
         proxy_addr
     });
+    let metrics_addr = metrics_listener.map(|(listener, metrics_addr)| {
+        serves.push(spawn_serve(
+            listener,
+            api::metrics_app(state.clone()),
+            stopped,
+        ));
+        eprintln!("lodestar-server: metrics on {metrics_addr}");
+        metrics_addr
+    });
     Ok(ServerHandle {
         addr,
         proxy_addr,
+        metrics_addr,
         state,
         serves,
         background,

@@ -190,6 +190,14 @@ async fn attempt(
         };
         return (outcome, None);
     }
+    if !lock.is_file() {
+        eprintln!("lodestar-server: update {input}: flake.lock is missing after the update");
+        let outcome = UpdateOutcome::EvalFailed {
+            host: String::new(),
+            log: format!("flake.lock is missing after `nix flake update {input}`"),
+        };
+        return (outcome, None);
+    }
     if std::fs::read(&lock).ok() == old_lock {
         return (UpdateOutcome::NoChange, None);
     }

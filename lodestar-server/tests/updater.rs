@@ -47,6 +47,10 @@ struct FakeNix {
     on_build: Option<Box<dyn Fn() + Send + Sync>>,
     /// `(entered, release)`: `flake_update` signals `entered` and waits for `release`.
     gate: Option<(Arc<Notify>, Arc<Notify>)>,
+    /// `flake_update` deletes `flake.lock` instead of writing `new_lock`.
+    delete_lock: bool,
+    /// `eval_versions` calls after `flake_update`.
+    evals_after_update: Mutex<u32>,
 }
 
 #[async_trait]
@@ -57,14 +61,20 @@ impl NixRunner for FakeNix {
             entered.notify_one();
             release.notified().await;
         }
-        if let Some(lock) = &self.new_lock {
+        if self.delete_lock {
+            std::fs::remove_file(dir.join("flake.lock"))?;
+        } else if let Some(lock) = &self.new_lock {
             std::fs::write(dir.join("flake.lock"), lock)?;
         }
         Ok(())
     }
 
     async fn eval_versions(&self, dir: &Path, host: &ManagedHost) -> anyhow::Result<Versions> {
-        let lock = std::fs::read_to_string(dir.join("flake.lock"))?;
+        if !self.updated.lock().unwrap().is_empty() {
+            *self.evals_after_update.lock().unwrap() += 1;
+        }
+        // A missing lock reads as "after" (nix would lock the inputs afresh).
+        let lock = std::fs::read_to_string(dir.join("flake.lock")).unwrap_or_default();
         let phase = if lock == OLD_LOCK {
             &self.before
         } else {
@@ -451,6 +461,34 @@ async fn failing_eval_pushes_nothing() {
     let audits = update_audits(&fixture.state).await;
     assert_eq!(audits[0]["result"], "eval-failed");
     assert_eq!(audits[0]["host"], "b");
+}
+
+#[tokio::test]
+async fn missing_lock_after_the_update_stops_before_evaluating() {
+    let mut fixture = fixture().await;
+    let nix = install(
+        &mut fixture,
+        FakeNix {
+            delete_lock: true,
+            before: before(),
+            after: HashMap::from([
+                ("a".into(), Ok(versions(&[("tailscale", "1.104.2")]))),
+                ("b".into(), Ok(versions(&[("tailscale", "1.104.2")]))),
+            ]),
+            ..Default::default()
+        },
+    );
+    let run = run_input(&fixture.state, INPUT, &software()).await;
+    let UpdateOutcome::EvalFailed { host, log } = &run.outcome else {
+        panic!("expected EvalFailed, got {:?}", run.outcome);
+    };
+    assert_eq!(host, "");
+    assert!(log.contains("flake.lock"), "{log}");
+    assert_eq!(*nix.evals_after_update.lock().unwrap(), 0);
+    assert!(nix.built.lock().unwrap().is_empty());
+    assert_eq!(fixture.remote_head(), fixture.base);
+    let audits = update_audits(&fixture.state).await;
+    assert_eq!(audits[0]["result"], "eval-failed");
 }
 
 #[tokio::test]

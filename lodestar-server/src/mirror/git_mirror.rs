@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use lodestar_proto::{PromoteChannels, is_commit_hash};
 
-use super::PromoteError;
 use super::git_command::valid_channel;
+use super::{PromoteError, PushError};
 use crate::config::ServerConfig;
 
 pub struct Mirror {
@@ -48,6 +49,11 @@ impl Mirror {
 
     pub async fn fetch(&self) -> anyhow::Result<()> {
         let _guard = self.write_lock.lock().await;
+        self.fetch_locked().await
+    }
+
+    /// `fetch` for callers that already hold `write_lock`.
+    async fn fetch_locked(&self) -> anyhow::Result<()> {
         let output = self
             .git([
                 "fetch",
@@ -209,5 +215,174 @@ impl Mirror {
             return Err(anyhow::anyhow!("git push failed: {}", output.stderr.trim()).into());
         }
         Ok(())
+    }
+
+    /// Fresh worktree of `channel`'s head at `dir` (removed first if present); returns the head
+    /// commit. The mirror is bare, so this is a linked worktree of it (`git worktree add
+    /// --detach`): no second clone, the objects are shared and the lock commit can be pushed
+    /// from the mirror itself.
+    pub async fn worktree(&self, channel: &str, dir: &Path) -> anyhow::Result<String> {
+        if !valid_channel(channel) {
+            bail!("invalid channel {channel:?}");
+        }
+        let _guard = self.write_lock.lock().await;
+        self.fetch_locked().await?;
+        let Some(head) = self.try_head(channel).await? else {
+            bail!("channel {channel} does not exist in the mirror");
+        };
+        self.remove_worktree_locked(dir).await;
+        let output = self
+            .git([
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("--quiet"),
+                OsStr::new("--detach"),
+                OsStr::new("--"),
+                dir.as_os_str(),
+                OsStr::new(&head),
+            ])
+            .await?;
+        if !output.ok() {
+            self.remove_worktree_locked(dir).await;
+            bail!("git worktree add failed: {}", output.stderr.trim());
+        }
+        Ok(head)
+    }
+
+    /// Commits `flake.lock` in `dir` as Lodestar <lodestar@vanwaaij.com> with `message`, pushes it
+    /// to `channel` iff the remote head is still `base` (never forced); returns the new commit.
+    /// Only `flake.lock` may have changed in `dir`, and it must have.
+    pub async fn push_lock(
+        &self,
+        dir: &Path,
+        channel: &str,
+        base: &str,
+        message: &str,
+    ) -> Result<String, PushError> {
+        let reject = |message: String| Err(PushError::Rejected(message));
+        if !valid_channel(channel) {
+            return reject(format!("invalid channel {channel:?}"));
+        }
+        if !is_commit_hash(base) {
+            return reject("base is not a commit hash".into());
+        }
+        if message.is_empty() || message.contains(['\n', '\r', '\0']) {
+            return reject("commit message must be one non-empty line without NUL".into());
+        }
+        let _guard = self.write_lock.lock().await;
+        self.fetch_locked().await?;
+        let actual = self.try_head(channel).await?.unwrap_or_default();
+        if actual != base {
+            return Err(PushError::ChannelMoved {
+                expected: base.into(),
+                actual,
+            });
+        }
+        let output = self
+            .git_in(dir, ["rev-parse", "--verify", "HEAD^{commit}"])
+            .await?;
+        if !output.ok() || output.stdout.trim() != base {
+            return reject(format!("worktree is not at {base}"));
+        }
+        let output = self
+            .git_in(
+                dir,
+                ["status", "--porcelain", "-z", "--untracked-files=all"],
+            )
+            .await?;
+        if !output.ok() {
+            return Err(anyhow::anyhow!("git status failed: {}", output.stderr.trim()).into());
+        }
+        // Entries are "XY path\0" (renames carry a second path entry; those fail the check).
+        let entries: Vec<&str> = output
+            .stdout
+            .split('\0')
+            .filter(|e| !e.is_empty())
+            .collect();
+        if let Some(other) = entries
+            .iter()
+            .find(|entry| entry.get(3..) != Some("flake.lock"))
+        {
+            return reject(format!("unexpected change in worktree: {other}"));
+        }
+        if entries.is_empty() {
+            return reject("flake.lock did not change".into());
+        }
+        let output = self.git_in(dir, ["add", "--", "flake.lock"]).await?;
+        if !output.ok() {
+            return Err(anyhow::anyhow!("git add failed: {}", output.stderr.trim()).into());
+        }
+        let output = self
+            .git_in(
+                dir,
+                [
+                    "commit",
+                    "--quiet",
+                    "--no-verify",
+                    "-m",
+                    message,
+                    "--",
+                    "flake.lock",
+                ],
+            )
+            .await?;
+        if !output.ok() {
+            return Err(anyhow::anyhow!("git commit failed: {}", output.stderr.trim()).into());
+        }
+        let output = self
+            .git_in(dir, ["rev-parse", "--verify", "HEAD^{commit}"])
+            .await?;
+        let commit = output.stdout.trim().to_string();
+        if !output.ok() || !is_commit_hash(&commit) {
+            return Err(anyhow::anyhow!("git rev-parse failed: {}", output.stderr.trim()).into());
+        }
+        let output = self
+            .git([
+                "push",
+                "--quiet",
+                "--",
+                &self.push_url,
+                &format!("{commit}:refs/heads/{channel}"),
+            ])
+            .await?;
+        if !output.ok() {
+            // Lost a race between the check above and the push: the remote refused the
+            // non-fast-forward. Report that as a moved channel, not as a git failure.
+            if self.fetch_locked().await.is_ok()
+                && let Ok(Some(actual)) = self.try_head(channel).await
+                && actual != base
+            {
+                return Err(PushError::ChannelMoved {
+                    expected: base.into(),
+                    actual,
+                });
+            }
+            return Err(anyhow::anyhow!("git push failed: {}", output.stderr.trim()).into());
+        }
+        // Make the mirror see its own push right away.
+        let _ = self.fetch_locked().await;
+        Ok(commit)
+    }
+
+    /// Removes the worktree at `dir`, also when it is half-created or already gone, and prunes
+    /// the registration. Errors are ignored: this is cleanup.
+    pub async fn remove_worktree(&self, dir: &Path) {
+        let _guard = self.write_lock.lock().await;
+        self.remove_worktree_locked(dir).await;
+    }
+
+    async fn remove_worktree_locked(&self, dir: &Path) {
+        let _ = self
+            .git([
+                OsStr::new("worktree"),
+                OsStr::new("remove"),
+                OsStr::new("--force"),
+                OsStr::new("--force"),
+                OsStr::new("--"),
+                dir.as_os_str(),
+            ])
+            .await;
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = self.git(["worktree", "prune"]).await;
     }
 }

@@ -255,3 +255,127 @@ async fn promote_disabled() {
     assert!(mirror.promote(&second_commit).await.is_err());
     assert_ne!(origin.bare_ref("stable"), second_commit);
 }
+
+fn write_lock_file(dir: &Path, content: &str) {
+    std::fs::write(dir.join("flake.lock"), content).unwrap();
+}
+
+/// Origin with a first commit that has a `flake.lock`.
+fn origin_with_lock() -> (Origin, String) {
+    let origin = Origin::new();
+    write_lock_file(&origin.work, "{}\n");
+    git(&origin.work, &["add", "flake.lock"]);
+    let base = origin.commit("lock", "unstable");
+    (origin, base)
+}
+
+#[tokio::test]
+async fn worktree_checks_out_channel_head() {
+    let (origin, base) = origin_with_lock();
+    let (mirror, _state) = mirror_of(&origin).await;
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().join("wt");
+    assert_eq!(mirror.worktree("unstable", &dir).await.unwrap(), base);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("flake.lock")).unwrap(),
+        "{}\n"
+    );
+    // Again over the existing directory.
+    assert_eq!(mirror.worktree("unstable", &dir).await.unwrap(), base);
+    mirror.remove_worktree(&dir).await;
+    assert!(!dir.exists());
+    mirror.remove_worktree(&dir).await;
+    assert!(mirror.worktree("../x", &dir).await.is_err());
+    assert!(mirror.worktree("missing", &dir).await.is_err());
+}
+
+#[tokio::test]
+async fn push_lock_fast_forwards_with_lodestar_identity() {
+    let (origin, base) = origin_with_lock();
+    let (mirror, _state) = mirror_of(&origin).await;
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().join("wt");
+    mirror.worktree("unstable", &dir).await.unwrap();
+    write_lock_file(&dir, "{\"nodes\":1}\n");
+    let commit = mirror
+        .push_lock(&dir, "unstable", &base, "chore(x): bump")
+        .await
+        .unwrap();
+    assert_eq!(origin.bare_ref("unstable"), commit);
+    assert_eq!(
+        git(&origin.bare, &["rev-parse", &format!("{commit}^")]),
+        base
+    );
+    assert_eq!(
+        git(
+            &origin.bare,
+            &["log", "-1", "--format=%an <%ae>|%cn <%ce>|%s", &commit]
+        ),
+        "Lodestar <lodestar@vanwaaij.com>|Lodestar <lodestar@vanwaaij.com>|chore(x): bump"
+    );
+    assert_eq!(
+        git(&origin.bare, &["diff", "--name-only", &base, &commit]),
+        "flake.lock"
+    );
+    assert_eq!(mirror.head("unstable").await, Some(commit));
+    mirror.remove_worktree(&dir).await;
+}
+
+#[tokio::test]
+async fn push_lock_reports_moved_channel_and_pushes_nothing() {
+    let (origin, base) = origin_with_lock();
+    let (mirror, _state) = mirror_of(&origin).await;
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().join("wt");
+    mirror.worktree("unstable", &dir).await.unwrap();
+    write_lock_file(&dir, "{\"nodes\":1}\n");
+    let moved = origin.commit("someone else", "unstable");
+    match mirror
+        .push_lock(&dir, "unstable", &base, "chore: bump")
+        .await
+    {
+        Err(lodestar_server::mirror::PushError::ChannelMoved { expected, actual }) => {
+            assert_eq!(expected, base);
+            assert_eq!(actual, moved);
+        }
+        other => panic!("expected ChannelMoved, got {other:?}"),
+    }
+    assert_eq!(origin.bare_ref("unstable"), moved);
+    mirror.remove_worktree(&dir).await;
+}
+
+#[tokio::test]
+async fn push_lock_rejects_bad_input_and_foreign_changes() {
+    use lodestar_server::mirror::PushError;
+    let (origin, base) = origin_with_lock();
+    let (mirror, _state) = mirror_of(&origin).await;
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().join("wt");
+    mirror.worktree("unstable", &dir).await.unwrap();
+    // Nothing changed.
+    assert!(matches!(
+        mirror.push_lock(&dir, "unstable", &base, "m").await,
+        Err(PushError::Rejected(_))
+    ));
+    write_lock_file(&dir, "{\"nodes\":1}\n");
+    for (channel, hash, message) in [
+        ("-bad", base.as_str(), "m"),
+        ("unstable", "--force", "m"),
+        ("unstable", base.as_str(), "two\nlines"),
+        ("unstable", base.as_str(), "nul\0"),
+        ("unstable", base.as_str(), ""),
+    ] {
+        assert!(matches!(
+            mirror.push_lock(&dir, channel, hash, message).await,
+            Err(PushError::Rejected(_))
+        ));
+    }
+    // Another file changed too.
+    std::fs::write(dir.join("other.txt"), "x").unwrap();
+    assert!(matches!(
+        mirror.push_lock(&dir, "unstable", &base, "m").await,
+        Err(PushError::Rejected(_))
+    ));
+    assert_eq!(origin.bare_ref("unstable"), base);
+    mirror.remove_worktree(&dir).await;
+}

@@ -10,7 +10,9 @@
 mod git_command;
 mod git_mirror;
 mod promote_error;
+mod push_error;
 
 pub(crate) use git_command::valid_channel;
 pub use git_mirror::Mirror;
 pub use promote_error::PromoteError;
+pub use push_error::PushError;

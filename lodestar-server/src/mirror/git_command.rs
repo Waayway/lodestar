@@ -1,6 +1,7 @@
 //! Running git against the mirror, and the channel-name check.
 
 use std::ffi::OsStr;
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -40,11 +41,35 @@ impl Mirror {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        let mut command = self.command();
+        command.arg("--git-dir").arg(&self.path).args(args);
+        run(command).await
+    }
+
+    /// Runs git inside a worktree of the mirror, as `Lodestar <lodestar@vanwaaij.com>` (set for
+    /// this invocation only; no git config is changed).
+    pub(super) async fn git_in<I, S>(&self, dir: &Path, args: I) -> anyhow::Result<GitOutput>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let mut command = self.command();
+        command
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=Lodestar",
+                "-c",
+                "user.email=lodestar@vanwaaij.com",
+            ])
+            .args(args);
+        run(command).await
+    }
+
+    fn command(&self) -> Command {
         let mut command = Command::new("git");
         command
-            .arg("--git-dir")
-            .arg(&self.path)
-            .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -59,14 +84,18 @@ impl Mirror {
                 ),
             );
         }
-        let output = tokio::time::timeout(NETWORK_TIMEOUT, command.output())
-            .await
-            .context("git timed out")?
-            .context("running git")?;
-        Ok(GitOutput {
-            code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
+        command
     }
+}
+
+async fn run(mut command: Command) -> anyhow::Result<GitOutput> {
+    let output = tokio::time::timeout(NETWORK_TIMEOUT, command.output())
+        .await
+        .context("git timed out")?
+        .context("running git")?;
+    Ok(GitOutput {
+        code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
 }

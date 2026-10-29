@@ -77,6 +77,7 @@ let
             repoUrl = "https://example.com/infra.git";
             package = fakeAgent;
             cliPackage = fakeAgent;
+            versions.tailscale = "1.104.2";
           };
         }
         extra
@@ -107,6 +108,11 @@ let
   };
 
   checks = [
+    {
+      ok =
+        signed.environment.etc."lodestar/versions.json".text == builtins.toJSON { tailscale = "1.104.2"; };
+      what = "versions.json is written from `versions`";
+    }
     {
       ok = programOf signed == "/var/lib/lodestar-agent/bin/lodestar-agent";
       what = "launchd runs the default binaryPath (got ${programOf signed})";

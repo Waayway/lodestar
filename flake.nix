@@ -212,6 +212,11 @@
                 inherit pkgs lib;
                 darwinModule = agentDarwin;
               };
+              # Software-version options of the NixOS modules (evaluation only).
+              updates-module = import ./nix/tests/updates-module.nix {
+                inherit pkgs lib;
+                nixosModule = self.nixosModules.default;
+              };
               links-from = import ./nix/tests/links-from.nix {
                 inherit pkgs lib;
                 linksFrom = self.lib.linksFrom;

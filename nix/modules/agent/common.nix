@@ -162,6 +162,17 @@ in
         8080; set it when the server listens on another port.
       '';
     };
+
+    versions = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      example = lib.literalExpression "{ tailscale = config.services.tailscale.package.version; }";
+      description = ''
+        Versions of software on this host that the server tracks, by software name
+        (the keys of `services.lodestar-server.updates.software`). Written to
+        `/etc/lodestar/versions.json`, which the agent reports in its status.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -194,6 +205,7 @@ in
           in
           "http://${cfg.managerHost}:${toString port}";
     };
+    environment.etc."lodestar/versions.json".text = builtins.toJSON cfg.versions;
     environment.etc."lodestar-agent/config.json".text = builtins.toJSON {
       host = cfg.hostName;
       inherit (cfg)
@@ -212,6 +224,7 @@ in
       launcher = if isDarwin then "detach" else "systemd_run";
       os = if isDarwin then "darwin" else "linux";
       agent_exe = cfg.binaryPath;
+      versions_file = "/etc/lodestar/versions.json";
     };
   };
 }

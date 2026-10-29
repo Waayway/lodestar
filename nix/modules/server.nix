@@ -26,6 +26,28 @@ let
     else
       "${cfg.proxyListen.address}:${proxyPort}";
 
+  metricsPort = toString cfg.metrics.port;
+  metricsListen =
+    if isIpv6 cfg.metrics.address then
+      "[${cfg.metrics.address}]:${metricsPort}"
+    else
+      "${cfg.metrics.address}:${metricsPort}";
+
+  softwareType = types.submodule {
+    options = {
+      input = mkOption {
+        type = types.str;
+        example = "nixpkgs-unstable";
+        description = "Flake input the updater bumps when a host runs a newer version.";
+      };
+      upstream.github = mkOption {
+        type = types.str;
+        example = "tailscale/tailscale";
+        description = "GitHub repository (`owner/repo`) whose latest release is the upstream version.";
+      };
+    };
+  };
+
   linkType = import ../lib/linkType.nix { inherit lib; } { hostType = types.str; };
 
   hostType = types.submodule {
@@ -248,6 +270,52 @@ in
       description = "Promote fast-forwards `to` to a commit of `from`; null disables promote.";
     };
 
+    updates = {
+      channel = mkOption {
+        type = types.str;
+        default = "unstable";
+        description = "Channel the updater pushes flake.lock bumps to (never `stable`).";
+      };
+      intervalSecs = mkOption {
+        type = types.ints.positive;
+        default = 86400;
+        description = "Seconds between updater runs.";
+      };
+      upstreamIntervalSecs = mkOption {
+        type = types.ints.positive;
+        default = 21600;
+        description = "Seconds between checks of the latest upstream releases.";
+      };
+      software = mkOption {
+        type = types.attrsOf softwareType;
+        default = { };
+        example = lib.literalExpression ''
+          { tailscale = { input = "nixpkgs-unstable"; upstream.github = "tailscale/tailscale"; }; }
+        '';
+        description = ''
+          Software to track, by name (a key of the agents' `versions`). Empty turns the
+          updater off.
+        '';
+      };
+    };
+
+    metrics = {
+      address = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "10.0.10.170";
+        description = ''
+          Address of a Prometheus `/metrics` listener; null (default) runs none. The module
+          does not open the port in the firewall: the scraper's host does that.
+        '';
+      };
+      port = mkOption {
+        type = types.port;
+        default = 9466;
+        description = "TCP port of the metrics listener.";
+      };
+    };
+
     testing = {
       staticAddresses = mkOption {
         type = types.nullOr (types.attrsOf types.str);
@@ -289,7 +357,23 @@ in
           );
         message = "services.lodestar-server: publicUrl, oidc.issuer, oidc.clientSecretFile, oidc.readerGroup and oidc.adminGroup must be set while proxyListen.address is set.";
       }
-    ];
+    ]
+    ++ lib.concatLists (
+      lib.mapAttrsToList (name: sw: [
+        {
+          assertion = builtins.match "[a-z0-9_-]+" name != null;
+          message = "services.lodestar-server.updates.software: name \"${name}\" must match [a-z0-9_-]+.";
+        }
+        {
+          assertion = builtins.match "[A-Za-z0-9_-]+" sw.input != null;
+          message = "services.lodestar-server.updates.software.${name}.input = \"${sw.input}\" must match [A-Za-z0-9_-]+.";
+        }
+        {
+          assertion = builtins.match "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+" sw.upstream.github != null;
+          message = "services.lodestar-server.updates.software.${name}.upstream.github = \"${sw.upstream.github}\" must be owner/repo (letters, digits, `_`, `.`, `-`).";
+        }
+      ]) cfg.updates.software
+    );
 
     users.users.lodestar-server = {
       isSystemUser = true;
@@ -384,7 +468,19 @@ in
           else
             { kind = "tailscale"; };
         tailscale_bin = lib.getExe' config.services.tailscale.package "tailscale";
+        updates = {
+          inherit (cfg.updates) channel;
+          interval_secs = cfg.updates.intervalSecs;
+          upstream_interval_secs = cfg.updates.upstreamIntervalSecs;
+          software = lib.mapAttrs (_: sw: {
+            inherit (sw) input;
+            upstream = {
+              inherit (sw.upstream) github;
+            };
+          }) cfg.updates.software;
+        };
       }
+      // lib.optionalAttrs (cfg.metrics.address != null) { metrics.listen = metricsListen; }
       // lib.optionalAttrs (cfg.testing.pollSecs != null) { poll_secs = cfg.testing.pollSecs; }
       // lib.optionalAttrs proxyEnabled {
         proxy = {

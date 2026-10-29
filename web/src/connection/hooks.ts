@@ -8,6 +8,7 @@ import type { Me } from "@/bindings/Me";
 import type { PublicService } from "@/bindings/PublicService";
 import type { ServiceView } from "@/bindings/ServiceView";
 import type { Snapshot } from "@/bindings/Snapshot";
+import type { UpdatesView } from "@/bindings/UpdatesView";
 import {
   type Actions,
   ActionsContext,
@@ -110,4 +111,9 @@ export function usePublicServices(): PublicService[] | null {
 export function useActPermission(): { visible: boolean; disabledReason: string | null } {
   const { viewer } = useConnection();
   return useMemo(() => actPermission(viewer), [viewer]);
+}
+
+/** Tracked software and the updater's runs; null until loaded. */
+export function useUpdates(): UpdatesView | null {
+  return useConnection().updates;
 }

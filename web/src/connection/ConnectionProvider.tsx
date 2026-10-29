@@ -13,6 +13,7 @@ import type { PromoteChannels } from "@/bindings/PromoteChannels";
 import type { PublicService } from "@/bindings/PublicService";
 import type { ServiceView } from "@/bindings/ServiceView";
 import type { Snapshot } from "@/bindings/Snapshot";
+import type { UpdatesView } from "@/bindings/UpdatesView";
 import type { WsMessage } from "@/bindings/WsMessage";
 import * as client from "@/connection/client";
 import { BACKOFF_START_MS, connectFeed, type FeedStatus, nextBackoff } from "@/connection/feed";
@@ -72,6 +73,8 @@ export type Actions = {
   applyChannel: (channel: string) => Promise<void>;
   /** Promotes `commit` along `pair`. True when it was pushed (the dialog closes then). */
   promote: (commit: string, pair: PromoteChannels) => Promise<boolean>;
+  /** Starts an updater run ("Check now") and refreshes the updates panel; toasts a failure. */
+  runUpdates: () => Promise<void>;
   /** Opens the apply log sheet on one apply and fetches its log. */
   showLog: (host: string, applyId: string) => void;
   closeLog: () => void;
@@ -99,7 +102,12 @@ export type ConnectionState = {
   meRetryAt: number | null;
   /** What an anonymous visitor sees; null until the first answer. */
   publicServices: PublicService[] | null;
+  /** Tracked software and the updater's runs; null until the first answer (or when it fails). */
+  updates: UpdatesView | null;
 };
+
+/** How often `/api/updates` is asked while a run is in progress. */
+export const UPDATES_POLL_MS = 5000;
 
 export const StateContext = createContext<ConnectionState | null>(null);
 export const ActionsContext = createContext<Actions | null>(null);
@@ -126,6 +134,7 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
   const [meForbidden, setMeForbidden] = useState(false);
   const [meRetryAt, setMeRetryAt] = useState<number | null>(null);
   const [publicServices, setPublicServices] = useState<PublicService[] | null>(null);
+  const [updates, setUpdates] = useState<UpdatesView | null>(null);
   const candidateSeq = useRef(0);
   const heads = useRef("");
 
@@ -270,6 +279,25 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
     };
   }, [anonymous, loadMe]);
 
+  // The updates panel: `/api/updates` is not in the feed, so it is asked on load, after
+  // "Check now", and every few seconds while a run is going. A failure keeps what is shown.
+  const loadUpdates = useCallback(async () => {
+    try {
+      setUpdates(await client.getUpdates());
+    } catch {
+      // Keep the last answer; the next poll or click tries again.
+    }
+  }, []);
+  useEffect(() => {
+    if (signedIn) void loadUpdates();
+  }, [signedIn, loadUpdates]);
+  const updatesRunning = updates?.running === true;
+  useEffect(() => {
+    if (!signedIn || !updatesRunning) return;
+    const timer = setInterval(() => void loadUpdates(), UPDATES_POLL_MS);
+    return () => clearInterval(timer);
+  }, [signedIn, updatesRunning, loadUpdates]);
+
   useEffect(
     () => {
       if (!signedIn) return;
@@ -381,6 +409,15 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
           return false;
         }
       },
+      async runUpdates() {
+        try {
+          await client.runUpdates();
+        } catch (e) {
+          // 409: a run is already going; the refresh below shows it.
+          if (!(e instanceof client.ApiError && e.status === 409)) fail("Update check failed", e);
+        }
+        await loadUpdates();
+      },
       showLog(host, applyId) {
         const rec = snapRef.current?.hosts.find((h) => h.name === host)?.last_apply;
         const running = rec?.apply_id === applyId ? rec.state === "running" : null;
@@ -404,12 +441,12 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
         location.assign("/");
       },
     }),
-    [fetchLog, setOpenLog, fail],
+    [fetchLog, setOpenLog, fail, loadUpdates],
   );
 
   const state = useMemo<ConnectionState>(
-    () => ({ snapshot: snap, feed, openLog, audit, viewer, mode, meRetryAt, publicServices }),
-    [snap, feed, openLog, audit, viewer, mode, meRetryAt, publicServices],
+    () => ({ snapshot: snap, feed, openLog, audit, viewer, mode, meRetryAt, publicServices, updates }),
+    [snap, feed, openLog, audit, viewer, mode, meRetryAt, publicServices, updates],
   );
 
   return (

@@ -10,6 +10,8 @@ import {
   RunningInfo,
 } from "@/components/fleet/HostParts";
 import { OnlineState } from "@/components/fleet/OnlineState";
+import { VersionsCell } from "@/components/fleet/VersionsCell";
+import { useUpdates } from "@/connection/hooks";
 import { cn } from "@/lib/cn";
 import type { ChannelRole } from "@/lib/format";
 
@@ -24,6 +26,7 @@ export function HostCard({
   channelRole: ChannelRole;
 }) {
   const stripe = hostStripe(h);
+  const software = useUpdates()?.software ?? [];
   return (
     <li
       data-tone={stripe.tone}
@@ -41,6 +44,11 @@ export function HostCard({
         <Field label="Behind">
           <BehindCount behind={h.behind} />
         </Field>
+        {Object.keys(h.versions).length > 0 && (
+          <Field label="Software">
+            <VersionsCell versions={h.versions} software={software} />
+          </Field>
+        )}
         <Field label="Last apply">
           <LastApplyInfo host={h} now={now} />
         </Field>

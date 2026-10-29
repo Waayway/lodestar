@@ -3,10 +3,11 @@ import { AuditList } from "@/components/fleet/AuditList";
 import { ChannelCard } from "@/components/fleet/ChannelCard";
 import { HostTable } from "@/components/fleet/HostTable";
 import { PromoteCard } from "@/components/fleet/PromoteCard";
+import { UpdatesCard } from "@/components/fleet/UpdatesCard";
 import { StatTile } from "@/components/fleet/StatTile";
 import { PageShell } from "@/components/layout/PageShell";
 import { Section } from "@/components/layout/Section";
-import { useAudit } from "@/connection/hooks";
+import { useAudit, useUpdates } from "@/connection/hooks";
 import { Applied, Attention, Audit, Building, Channel, Machines } from "@/icons";
 import { cn } from "@/lib/cn";
 import { channelRole, fleetCounts } from "@/lib/format";
@@ -22,7 +23,7 @@ export function DashboardPage() {
       {(snap) => (
         <>
           <Stats snap={snap} />
-          <Channels snap={snap} />
+          <Channels snap={snap} now={now} />
           <Section title="Machines" icon={Machines}>
             <HostTable hosts={snap.hosts} now={now} promote={snap.promote} />
           </Section>
@@ -48,7 +49,8 @@ function Stats({ snap }: { snap: Snapshot }) {
 }
 
 /** Channel cards, with the promote card between the promote pair when there is a candidate. */
-function Channels({ snap }: { snap: Snapshot }) {
+function Channels({ snap, now }: { snap: Snapshot; now: number }) {
+  const updates = useUpdates();
   const pair = snap.promote;
   const showPromote = snap.promote_candidate !== null && pair !== null;
   const from = pair && snap.channels.find((c) => c.name === pair.from);
@@ -89,6 +91,7 @@ function Channels({ snap }: { snap: Snapshot }) {
             {promoteCard}
           </>
         )}
+        {updates !== null && updates.software.length > 0 && <UpdatesCard updates={updates} now={now} />}
       </div>
     </Section>
   );

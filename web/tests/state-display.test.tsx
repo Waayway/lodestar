@@ -185,7 +185,7 @@ describe("Machines layout", () => {
   const renderTable = () =>
     render(withActions(fakeActions(), <HostTable hosts={hosts} now={NOW} promote={{ from: "unstable", to: "stable" }} />));
 
-  it("is a six-column table from 900 px and a card list below, with no minimum width", () => {
+  it("is a seven-column table from 900 px and a card list below, with no minimum width", () => {
     const { container } = renderTable();
     const box = container.querySelector("[data-slot=table-container]")!;
     expect(box.className).toContain("hidden");
@@ -197,10 +197,11 @@ describe("Machines layout", () => {
       "Status",
       "Running",
       "Behind",
+      "Software",
       "Last apply",
       "Actions",
     ]);
-    expect(table.querySelectorAll("tbody tr")[0].querySelectorAll("td")).toHaveLength(6);
+    expect(table.querySelectorAll("tbody tr")[0].querySelectorAll("td")).toHaveLength(7);
     const cards = container.querySelector("[data-layout=cards]")!;
     expect(cards.className).toContain("min-[900px]:hidden");
     // By channel, then name, like the table.

@@ -5,6 +5,7 @@ import type { AuditEvent } from "@/bindings/AuditEvent";
 import type { Me } from "@/bindings/Me";
 import type { PublicService } from "@/bindings/PublicService";
 import type { Snapshot } from "@/bindings/Snapshot";
+import type { UpdatesView } from "@/bindings/UpdatesView";
 
 import type { ApplyChannelResponse, ApplyHostResponse } from "@/lib/apiTypes";
 
@@ -72,6 +73,16 @@ export async function applyChannel(channel: string): Promise<ApplyChannelRespons
 
 export async function promote(commit: string): Promise<void> {
   await request("POST", "/api/promote", { commit });
+}
+
+/** Tracked software with its latest release, the updater's inputs, and whether a run is going. */
+export async function getUpdates(): Promise<UpdatesView> {
+  return (await request("GET", "/api/updates")).json();
+}
+
+/** Starts an updater run ("Check now"); a 409 ApiError means one is already running. */
+export async function runUpdates(): Promise<void> {
+  await request("POST", "/api/updates/run");
 }
 
 export async function getApplyLog(host: string, applyId: string): Promise<string> {

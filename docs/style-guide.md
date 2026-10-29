@@ -207,7 +207,15 @@ Components take typed props (types from `bindings/`); data and actions come only
 - **HostTable** `{ hosts, now, promote }`: every machine, sorted by channel then name; an
   empty state when there are none. Renders the table (from 900 px) and the card list
   (below 900 px); CSS shows the one that fits, so neither ever scrolls sideways.
-- **HostRow** `{ host: HostView, now, channelRole }`: one table row, six columns:
+- **UpdatesCard** `{ updates: UpdatesView, now }`: in the Channels grid (full row from 900 px),
+  only when software is tracked: each software's latest release, the last run per flake input
+  (`updateResultLabel` / `updateResultStyle`: Pushed ok, No change neutral, failures bad; age,
+  commit, what got newer) and an outline "Check now" in an `ActGate` (disabled and "Running…"
+  while a run is going). `/api/updates` is fetched on load and after the click, and polled
+  every 5 s while running.
+- **VersionsCell** `{ versions, software }`: `name version` per tracked software; a version
+  older than the latest (`lib/versions.ts`, the server's comparison rule) is `warn`.
+- **HostRow** `{ host: HostView, now, channelRole }`: one table row, seven columns (**Software**, the tracked versions, sits after Behind; the others):
   **Machine** (OS tile; the name, never broken; under it the OS and the ChannelPill),
   **Status** (OnlineState), **Running** (CommitHash, "dirty", the checkout line, which may
   wrap and keeps its warnings), **Behind**, **Last apply** (StatusBadge, commit · age ·
@@ -308,7 +316,7 @@ Components take typed props (types from `bindings/`); data and actions come only
 - Summary tiles: four columns, two below 900 px.
 - Channels: `from` card, promote card, `to` card in one row (`1fr auto 1fr`); other
   channels flow in a grid. Cards stack below 900 px.
-- Machines: a six-column table from 900 px with no minimum width (long sub-lines wrap,
+- Machines: a seven-column table from 900 px with no minimum width (long sub-lines wrap,
   names don't), a list of stacked cards below 900 px. Neither the page nor the table
   scrolls sideways at any width (checked at 1440, 1024, 900, 768 and 390 px, both themes).
 

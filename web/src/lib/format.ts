@@ -333,3 +333,21 @@ export function publicServiceCounts(list: PublicService[]): { up: number; down: 
   for (const s of list) c[s.state] += 1;
   return c;
 }
+
+/** The words for an updater run's result. */
+export function updateResultLabel(result: string): string {
+  switch (result) {
+    case "pushed":
+      return "Pushed";
+    case "no-change":
+      return "No change";
+    case "eval-failed":
+      return "Eval failed";
+    case "build-failed":
+      return "Build failed";
+    case "push-failed":
+      return "Push failed";
+    default:
+      return result;
+  }
+}

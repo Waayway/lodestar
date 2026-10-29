@@ -81,6 +81,7 @@ export function fakeActions(): Actions & { [K in keyof Actions]: ReturnType<type
     applyHost: vi.fn(async () => {}),
     applyChannel: vi.fn(async () => {}),
     promote: vi.fn(async () => true),
+    runUpdates: vi.fn(async () => {}),
     showLog: vi.fn(),
     closeLog: vi.fn(),
     fetchLog: vi.fn(),
@@ -100,6 +101,7 @@ export function connectionState(over: Partial<ConnectionState> = {}): Connection
     mode: "signed_in",
     meRetryAt: null,
     publicServices: null,
+    updates: null,
     ...over,
   };
 }

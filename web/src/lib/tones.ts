@@ -157,3 +157,10 @@ export function publicServiceStyle(state: PublicServiceState): StateStyle & { ic
       return { tone: "neutral", icon: Idle };
   }
 }
+
+/** An updater run's result (UpdatesCard): pushed is ok, no change quiet, any failure bad. */
+export function updateResultStyle(result: string): StateStyle & { icon: Icon } {
+  if (result === "pushed") return { tone: "ok", icon: Applied };
+  if (result === "no-change") return { tone: "neutral", icon: Idle };
+  return { tone: "bad", icon: Failed };
+}

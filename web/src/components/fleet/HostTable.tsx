@@ -32,6 +32,7 @@ export function HostTable({
             <TableHead>Status</TableHead>
             <TableHead>Running</TableHead>
             <TableHead>Behind</TableHead>
+            <TableHead>Software</TableHead>
             <TableHead>Last apply</TableHead>
             <TableHead>
               <span className="sr-only">Actions</span>

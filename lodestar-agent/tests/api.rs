@@ -323,3 +323,14 @@ async fn apply_records_last_fetch() {
     let agent_status = wait_state(&app, ApplyState::Ok).await;
     assert!(agent_status.checkout.last_fetch_at.is_some());
 }
+
+#[tokio::test]
+async fn status_reports_versions_and_survives_a_broken_file() {
+    let fixture = configured();
+    let app = app(&fixture, MANAGER);
+    assert!(status(&app).await.versions.is_empty());
+    std::fs::write(&fixture.config.versions_file, "not json").unwrap();
+    assert!(status(&app).await.versions.is_empty());
+    std::fs::write(&fixture.config.versions_file, r#"{"tailscale":"1.104.2"}"#).unwrap();
+    assert_eq!(status(&app).await.versions["tailscale"], "1.104.2");
+}

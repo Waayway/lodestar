@@ -69,6 +69,11 @@ async fn poll_host(
 
 async fn handle_status(state: &AppState, host: &ManagedHost, base: &str, status: &AgentStatus) {
     let name = host.name.as_str();
+    state
+        .versions
+        .lock()
+        .unwrap()
+        .insert(name.to_string(), status.versions.clone());
     log_err(
         "saving status",
         name,

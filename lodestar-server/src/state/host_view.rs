@@ -67,6 +67,13 @@ pub(crate) async fn host_view_with(
         last_apply: status.and_then(|status| status.apply),
         desired_apply_id,
         last_activation,
+        versions: state
+            .versions
+            .lock()
+            .unwrap()
+            .get(&host.name)
+            .cloned()
+            .unwrap_or_default(),
     }
 }
 

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::Script;
 
 /// A simulated host as its agent sees it.
@@ -12,4 +14,6 @@ pub struct HostSetup {
     pub generation: u64,
     /// When the initial manual activation happened (unix seconds).
     pub activated_at: i64,
+    /// Tracked software versions the host reports.
+    pub versions: BTreeMap<String, String>,
 }

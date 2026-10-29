@@ -44,6 +44,9 @@ pub struct AgentConfig {
     pub agent_exe: Option<PathBuf>,
     /// "linux" or "darwin"
     pub os: String,
+    /// JSON object of tracked software name to version, written by the system configuration.
+    #[serde(default = "default_versions_file")]
+    pub versions_file: PathBuf,
 }
 
 fn default_port() -> u16 {
@@ -52,6 +55,10 @@ fn default_port() -> u16 {
 
 fn default_state_dir() -> PathBuf {
     PathBuf::from("/var/lib/lodestar-agent")
+}
+
+fn default_versions_file() -> PathBuf {
+    PathBuf::from("/etc/lodestar/versions.json")
 }
 
 impl AgentConfig {

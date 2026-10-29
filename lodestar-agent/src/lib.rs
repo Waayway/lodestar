@@ -9,3 +9,4 @@ pub mod launcher;
 pub mod net;
 pub mod privileges;
 pub mod status;
+pub mod versions;

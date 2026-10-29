@@ -85,6 +85,7 @@ describe("watchLog", () => {
       last_apply,
       desired_apply_id: null,
       last_activation: null,
+      versions: {},
     },
   });
   const snapshotMsg = (last_apply: ApplyRecord | null): WsMessage => ({

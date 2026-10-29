@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use lodestar_proto::{ServiceCheck, WsMessage};
@@ -32,6 +32,8 @@ pub struct AppState {
     /// Whether each host's agent answered the last time it was contacted (offline hosts are
     /// not contacted), so the poller logs only changes.
     pub(crate) agent_up: Arc<Mutex<HashMap<String, bool>>>,
+    /// Latest tracked software versions per host name; replaced on every status, never merged.
+    pub(crate) versions: Arc<Mutex<HashMap<String, BTreeMap<String, String>>>>,
     /// `(host, apply_id)` pairs with a live log follower.
     pub(crate) followers: Arc<Mutex<HashSet<(String, String)>>>,
     /// Serialises dashboard actions (apply, promote) from mirror fetch to recorded result, so
@@ -64,6 +66,7 @@ impl AppState {
             config,
             reachable: Arc::default(),
             agent_up: Arc::default(),
+            versions: Arc::default(),
             followers: Arc::default(),
             actions: Arc::default(),
             demo: false,

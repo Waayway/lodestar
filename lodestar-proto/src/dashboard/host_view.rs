@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -29,4 +31,6 @@ pub struct HostView {
     pub last_apply: Option<ApplyRecord>,
     pub desired_apply_id: Option<String>,
     pub last_activation: Option<ActivationEvent>,
+    /// Tracked software versions the host last reported.
+    pub versions: BTreeMap<String, String>,
 }

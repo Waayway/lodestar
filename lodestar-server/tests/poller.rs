@@ -19,7 +19,7 @@ use lodestar_server::config::{AccessConfig, ManagedHost, OnlineSource, ServerCon
 use lodestar_server::db;
 use lodestar_server::mirror::Mirror;
 use lodestar_server::poller::poll_once;
-use lodestar_server::state::AppState;
+use lodestar_server::state::{AppState, host_view};
 use lodestar_server::tailscale::{Identity, OnlineProvider, PeerInfo, StaticOnline};
 use serde::Deserialize;
 
@@ -142,6 +142,7 @@ fn agent_status(running: &str, apply: Option<ApplyRecord>) -> AgentStatus {
             flake_path: None,
         },
         apply,
+        versions: Default::default(),
     }
 }
 
@@ -274,6 +275,32 @@ async fn poll_saves_status_and_ingests_activations_once() {
         }
         other => panic!("unexpected {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn host_view_versions_are_replaced_by_each_status() {
+    let fake = Shared::default();
+    let with_versions = |versions: &[(&str, &str)]| {
+        let mut status = agent_status(OLD, None);
+        status.versions = versions
+            .iter()
+            .map(|(name, version)| (name.to_string(), version.to_string()))
+            .collect();
+        status
+    };
+    fake.lock().unwrap().status = Some(with_versions(&[("tailscale", "1.98.10")]));
+    let addr = fake_agent(fake.clone()).await;
+    let environment = env(addr, None).await;
+
+    poll_once(&environment.state).await;
+    let view = host_view(&environment.state, &host()).await;
+    assert_eq!(view.versions.len(), 1, "{:?}", view.versions);
+    assert_eq!(view.versions["tailscale"], "1.98.10");
+
+    fake.lock().unwrap().status = Some(with_versions(&[]));
+    poll_once(&environment.state).await;
+    let view = host_view(&environment.state, &host()).await;
+    assert!(view.versions.is_empty(), "{:?}", view.versions);
 }
 
 #[tokio::test]

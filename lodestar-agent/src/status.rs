@@ -7,6 +7,7 @@ use lodestar_proto::{AgentStatus, CheckoutStatus};
 use crate::apply::latest_record;
 use crate::config::AgentConfig;
 use crate::git::Git;
+use crate::versions::read_versions;
 
 fn revision_argv(config: &AgentConfig) -> Option<Vec<String>> {
     if let Some(command) = &config.revision_command {
@@ -63,5 +64,6 @@ pub fn collect(config: &AgentConfig, git: &Git) -> AgentStatus {
             flake_path: Some(config.flake_path.display().to_string()),
         },
         apply: latest_record(config),
+        versions: read_versions(&config.versions_file),
     }
 }

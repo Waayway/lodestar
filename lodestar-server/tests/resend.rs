@@ -29,6 +29,7 @@ fn status(running: &str, apply: Option<(&str, ApplyState)>) -> AgentStatus {
             started_at: None,
             finished_at: None,
         }),
+        versions: Default::default(),
     }
 }
 

@@ -40,6 +40,7 @@ function host(over: Partial<HostView>): HostView {
     last_apply: null,
     desired_apply_id: null,
     last_activation: null,
+    versions: {},
     ...over,
   };
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -82,6 +82,7 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
                 script: demo_host.script,
                 generation: 40 + 7 * index as u64,
                 activated_at: start - (2 + index as i64) * 3600,
+                versions: demo_versions(index),
             };
             let (addr, task) = agents::serve(Arc::new(SimAgent::new(setup, speed))).await?;
             tasks.push(task);
@@ -165,4 +166,14 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         tasks: Tasks(tasks),
         _tmp: temporary_dir,
     })
+}
+
+/// Demo software versions: the first host is current, the second one behind.
+fn demo_versions(index: usize) -> BTreeMap<String, String> {
+    let version = match index {
+        0 => "1.104.2",
+        1 => "1.98.10",
+        _ => return BTreeMap::new(),
+    };
+    BTreeMap::from([("tailscale".to_string(), version.to_string())])
 }

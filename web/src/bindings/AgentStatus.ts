@@ -2,4 +2,8 @@
 import type { ApplyRecord } from "./ApplyRecord";
 import type { CheckoutStatus } from "./CheckoutStatus";
 
-export type AgentStatus = { host: string, os: string, agent_version: string, running: string, checkout: CheckoutStatus, apply: ApplyRecord | null, };
+export type AgentStatus = { host: string, os: string, agent_version: string, running: string, checkout: CheckoutStatus, apply: ApplyRecord | null, 
+/**
+ * Tracked software versions (name to version); absent from old agents.
+ */
+versions: { [key in string]?: string }, };

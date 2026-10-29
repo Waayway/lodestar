@@ -145,6 +145,7 @@ async fn status_roundtrip_json() {
             flake_path: None,
         },
         apply: Some(record("a1", ApplyState::Ok)),
+        versions: Default::default(),
     };
     db::save_status(&connection, "h1", &agent_status, 1234)
         .await

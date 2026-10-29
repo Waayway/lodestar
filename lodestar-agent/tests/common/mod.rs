@@ -84,6 +84,7 @@ pub fn fixture() -> Fixture {
         launcher: Launcher::Inline,
         agent_exe: None,
         os: "linux".into(),
+        versions_file: temporary_dir.path().join("versions.json"),
     };
     Fixture {
         _tmp: temporary_dir,

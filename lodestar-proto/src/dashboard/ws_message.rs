@@ -35,6 +35,7 @@ mod tests {
             last_apply: None,
             desired_apply_id: None,
             last_activation: None,
+            versions: Default::default(),
         };
         let json = serde_json::to_string(&WsMessage::HostUpdated(Box::new(host_view))).unwrap();
         assert!(json.contains("\"type\":\"host_updated\""), "{json}");

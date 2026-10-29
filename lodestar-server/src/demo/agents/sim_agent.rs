@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -30,6 +30,7 @@ pub struct SimAgent {
     pub(super) name: String,
     pub(super) os: String,
     pub(super) script: Script,
+    versions: BTreeMap<String, String>,
     speed: f64,
     pub(super) inner: Mutex<Inner>,
 }
@@ -62,6 +63,7 @@ impl SimAgent {
             name: setup.name,
             os: setup.os,
             script: setup.script,
+            versions: setup.versions,
             speed,
             inner: Mutex::new(Inner {
                 running: setup.running,
@@ -83,6 +85,7 @@ impl SimAgent {
             running: inner.running.clone(),
             checkout: inner.checkout.clone(),
             apply: inner.applies.back().map(|apply| apply.record.clone()),
+            versions: self.versions.clone(),
         }
     }
 

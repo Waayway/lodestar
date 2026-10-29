@@ -468,6 +468,7 @@ in
           else
             { kind = "tailscale"; };
         tailscale_bin = lib.getExe' config.services.tailscale.package "tailscale";
+        nix_bin = "${config.nix.package}/bin/nix";
         updates = {
           inherit (cfg.updates) channel;
           interval_secs = cfg.updates.intervalSecs;

@@ -92,6 +92,10 @@ let
       what = "config.json carries updates with the defaults";
     }
     {
+      ok = lib.hasSuffix "/bin/nix" (serverJson plain).nix_bin;
+      what = "config.json carries nix_bin";
+    }
+    {
       ok = !((serverJson plain) ? metrics);
       what = "no metrics key while metrics.address is null";
     }

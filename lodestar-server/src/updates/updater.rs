@@ -35,14 +35,28 @@ pub fn commit_message(input: &str, changes: &[VersionChange]) -> String {
 /// Runs every input that some tracked software uses, one after the other. Refuses (without
 /// waiting) when another run is in progress.
 pub async fn run_all(state: &AppState) -> Result<Vec<UpdateRun>, AlreadyRunning> {
-    let Ok(_running) = state.updates.running.try_lock() else {
-        return Err(AlreadyRunning);
-    };
+    let running = state
+        .updates
+        .running
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| AlreadyRunning)?;
+    Ok(run_all_locked(state, running).await)
+}
+
+/// [`run_all`] for a caller that already took `state.updates.running` (the API takes it
+/// before answering, so a status read right after sees the run). The guard is held until
+/// every input is done.
+pub async fn run_all_locked(
+    state: &AppState,
+    running: tokio::sync::OwnedMutexGuard<()>,
+) -> Vec<UpdateRun> {
     let mut runs = Vec::new();
     for (input, software) in state.config.updates.inputs() {
         runs.push(run_input(state, &input, &software).await);
     }
-    Ok(runs)
+    drop(running);
+    runs
 }
 
 /// One run for `input`; only `software` counts as a change. The result is recorded as an

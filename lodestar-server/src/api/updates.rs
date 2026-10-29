@@ -12,7 +12,7 @@ use crate::clock::now;
 use crate::db;
 use crate::state::AppState;
 use crate::updates::update_run::{UpdateOutcome, UpdateRun};
-use crate::updates::updater::run_all;
+use crate::updates::updater::run_all_locked;
 
 fn run_view(run: &UpdateRun) -> UpdateRunView {
     let (commit, changes, host) = match &run.outcome {
@@ -82,12 +82,11 @@ pub(super) async fn run_updates(
     State(state): State<AppState>,
     Extension(Actor(actor)): Extension<Actor>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    // Probe, then spawn: another request could start a run between the two. That loses
-    // nothing: `run_all` refuses without waiting and the spawned task just ends, so at most
-    // one run happens and the caller still sees a 202 for a run that is in progress.
-    if state.updates.running.try_lock().is_err() {
+    // Take the run lock before answering: a status read right after the 202 then sees
+    // `running`, and two requests cannot both start a run.
+    let Ok(running) = state.updates.running.clone().try_lock_owned() else {
         return Err(ApiError(StatusCode::CONFLICT, "already running".into()));
-    }
+    };
     if let Err(error) = db::insert_audit(
         &state.db,
         now(),
@@ -101,9 +100,7 @@ pub(super) async fn run_updates(
         eprintln!("lodestar-server: api: auditing update request: {error:#}");
     }
     tokio::spawn(async move {
-        if run_all(&state).await.is_err() {
-            eprintln!("lodestar-server: update request: a run was already in progress");
-        }
+        run_all_locked(&state, running).await;
     });
     Ok((StatusCode::ACCEPTED, Json(json!({}))))
 }

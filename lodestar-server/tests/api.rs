@@ -903,6 +903,10 @@ async fn updates_view_and_run_endpoint() {
     let run_url = format!("{url}/run");
     let response = http.post(&run_url).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
+    // No waiting: the lock is taken before the 202.
+    let view: lodestar_proto::UpdatesView =
+        http.get(&url).send().await.unwrap().json().await.unwrap();
+    assert!(view.running, "running right after the 202");
     entered.notified().await;
     let view: lodestar_proto::UpdatesView =
         http.get(&url).send().await.unwrap().json().await.unwrap();

@@ -6,8 +6,8 @@ use super::update_run::UpdateRun;
 
 #[derive(Default)]
 pub struct UpdatesState {
-    /// Held for a whole `run_all`; a second one fails with `AlreadyRunning`.
-    pub running: tokio::sync::Mutex<()>,
+    /// Held (as an owned guard) for a whole run; a second one fails with `AlreadyRunning`.
+    pub running: std::sync::Arc<tokio::sync::Mutex<()>>,
     /// Last run per flake input (restored from the audit log at start).
     pub last: std::sync::Mutex<BTreeMap<String, UpdateRun>>,
 }

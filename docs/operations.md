@@ -45,6 +45,7 @@ lodestar rebuild desktop --wait          # force rebuild: re-apply the channel h
 lodestar rebuild --channel stable --wait [--timeout 900]
 lodestar log desktop [APPLY_ID]          # default: the host's last apply
 lodestar promote [--yes]                 # shows the candidate; --yes moves the target channel
+lodestar updates [run [--wait]]          # tracked software; run the updater now
 lodestar audit --limit 20
 ```
 
@@ -215,6 +216,103 @@ failed".
 - Admin buttons disabled with "Only over Tailscale" while on the tailnet: the router
   did not set `X-Homelab-Via: tailnet` on that entrance.
 
+## Software updates
+
+The server can keep chosen software (first: Tailscale) current: it knows which version
+every host runs, which release is out upstream, and once a day it bumps the flake input
+that provides the software and pushes the new `flake.lock` when something got newer and
+everything still builds. It only moves inputs; it never overrides a package.
+
+```nix
+# every host: what it runs, by software name
+services.lodestar-agent.versions.tailscale = config.services.tailscale.package.version;
+
+# the server host
+services.lodestar-server = {
+  updates.software.tailscale = {
+    input = "nixpkgs-unstable";             # the flake input that provides it
+    upstream.github = "tailscale/tailscale";
+  };
+  updates.channel = "unstable";             # default; never the promote target
+  updates.intervalSecs = 86400;             # default: one run a day
+  updates.upstreamIntervalSecs = 21600;     # default: check releases every 6 h
+  metrics.address = "10.0.10.170";          # optional Prometheus listener, port 9466
+};
+```
+
+Pushing needs `pushUrl` and `deployKeyFile`, as for promote. `updates.software = { }`
+(the default) turns the updater and the upstream checks off; that is also how to stop it
+(switch the server host; the card disappears and `lodestar updates run` answers 409
+`updater off`).
+
+### A run
+
+One run at a time, for every input that some tracked software uses, one after the other:
+
+1. A scratch worktree of the channel's head under `/var/lib/lodestar-server/updater/<input>`
+   (removed afterwards).
+2. Every host's `versions` at the current lock (`nix eval`).
+3. `nix flake update <input>`; lock unchanged: `no-change`.
+4. The versions again; nothing tracked got newer on any host (or something got older):
+   `no-change`, nothing is committed.
+5. Build every Linux host whose tracked versions changed (darwin hosts are evaluated
+   only).
+6. Commit `flake.lock` only, as `Lodestar <lodestar@vanwaaij.com>`, message
+   `chore(<input>): bump for tailscale 1.98.10 -> 1.104.2`, and push fast-forward only,
+   if the channel's head is still the one from step 1.
+
+The first scheduled run is one interval after a fresh server starts (never at boot);
+after that the next run is one interval after the newest finished run, also across
+restarts (an overdue run starts at once). A run started with "Check now" or `lodestar
+updates run` counts. Every run is an `update` audit event.
+
+```sh
+lodestar updates                         # software, latest release, input, last result, age
+lodestar updates run                     # start a run now (409 while one is running)
+lodestar updates run --wait [--timeout 7200]   # exit 0 only if every input ended pushed or no-change
+```
+
+The dashboard's **Software updates** card (shown only while software is tracked) has the
+same and a **Check now** button; the fleet table shows each host's versions, marked when
+behind the latest release.
+
+### Results
+
+- **pushed**: a bump is on the channel; hosts get it through the normal apply (and
+  servers through promote).
+- **no-change**: the lock did not move, or it moved but no tracked version got newer
+  (or one got older, noted as `downgrade` in the audit event). Nothing to do.
+- **eval-failed**: reading a host's versions failed (the host is named), or the input
+  could not be updated or left no `flake.lock` (no host). A host or input problem:
+  run the `nix eval` of that host on the channel's head, fix it in the repository; the
+  next run retries.
+- **build-failed**: a changed host did not build with the new lock; nothing was pushed.
+  `lodestar updates` and the audit event name the host, the event holds the log tail
+  (`lodestar audit`, dashboard audit log). Fix the host or wait for upstream; the next
+  run retries.
+- **push-failed**: the worktree could not be made or the push did not happen. "channel
+  moved" means someone pushed to the channel during the run: nothing was forced, and the
+  next run starts from the new head. Any other reason (key, network, remote refusal)
+  needs a look at `journalctl -u lodestar-server` and `deployKeyFile`.
+
+### Metrics
+
+With `metrics.address` set, `GET http://<address>:9466/metrics` (no identity check;
+the module does not open the port, open it to your Prometheus only):
+
+| Metric | Labels | Value |
+|---|---|---|
+| `lodestar_software_running_info` | `host`, `software`, `version` | 1 |
+| `lodestar_software_latest_info` | `software`, `version` | 1 |
+| `lodestar_software_up_to_date` | `host`, `software` | 1 up to date, 0 behind; absent when unknown |
+| `lodestar_software_latest_checked_timestamp_seconds` | `software` | unix time of the last successful upstream check |
+| `lodestar_software_latest_check_errors_total` | `software` | counter of failed upstream checks since start |
+| `lodestar_update_last_run_timestamp_seconds` | `input` | unix time of the last finished run |
+| `lodestar_update_last_result` | `input`, `result` | 1 for the last run's result |
+
+A failed upstream check (GitHub rate limit, error, no stable release) keeps the last
+known version and does not advance the checked timestamp.
+
 ## Where things are
 
 Agent (every enrolled host):
@@ -232,12 +330,14 @@ Agent (every enrolled host):
 - NixOS: `systemctl status lodestar-agent`, applies run as transient units
   `lodestar-apply-<id>` (`journalctl -u 'lodestar-apply-*'`)
 - darwin: launchd label `org.lodestar.agent`, log `/var/log/lodestar-agent.log`
+- tracked versions: `/etc/lodestar/versions.json` (from `versions`)
 
 Server:
 
 - config: `/etc/lodestar-server/config.json`, hosts: `/etc/lodestar-server/hosts.json`,
   service links: `/etc/lodestar-server/links.json`
-- state: `/var/lib/lodestar-server/` (`lodestar.db`, `mirror.git`, ssh `known_hosts`)
+- state: `/var/lib/lodestar-server/` (`lodestar.db`, `mirror.git`, ssh `known_hosts`,
+  `updater/<input>` while an updater run works on that input)
 - `systemctl status lodestar-server`, runs as user `lodestar-server`
 
 Every activation of an enrolled host (applies, manual `nixos-rebuild` /
@@ -267,7 +367,9 @@ dashboard's audit log, with `SUDO_USER` for manual switches.
   prompts once more (old entries in System Settings → Privacy & Security can be
   removed). Automatic granting needs an MDM PPPC profile (not supported).
 - **Promote fails with a push error**: the server needs `deployKeyFile` with
-  write access to `pushUrl`, readable by the `lodestar-server` user.
+  write access to `pushUrl`, readable by the `lodestar-server` user. The updater's
+  `push-failed` (other than "channel moved") has the same causes.
+- **Updater results**: see "Software updates" above.
 
 ## Developing
 

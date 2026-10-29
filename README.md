@@ -39,6 +39,12 @@ nix run github:Waayway/lodestar#lodestar-demo   # dashboard against simulated ho
   (`lodestar.links`), each with a live HTTP check and the state of its machine.
 - **Public URL** (optional): a second listener behind your reverse proxy, with login
   through Kanidm (OpenID Connect); see `docs/operations.md` "Public URL".
+- **Software updates** (optional): the server tracks versions of software you name
+  (e.g. Tailscale) per host and upstream, bumps the flake input that provides it once a
+  day when a newer version is out, and pushes the build-checked `flake.lock` to a channel
+  (default `unstable`, never the promote target). A Prometheus `/metrics` listener shows
+  what runs where and whether it is up to date; see `docs/operations.md` "Software
+  updates".
 - Nothing changes on a host until someone presses apply (or runs
   `lodestar rebuild`). Every activation, including manual `nixos-rebuild` /
   `darwin-rebuild` runs and boots, lands in the audit log.
@@ -148,6 +154,7 @@ no `specialArgs`.
 | `binaryPath` | `/var/lib/lodestar-agent/bin/lodestar-agent` | fixed path the agent is copied to on activation (when `package` changed); the daemon and the apply wrapper run from here |
 | `installCli` | `true` | put `lodestar` on the PATH, with `LODESTAR_SERVER` set to `serverUrl` |
 | `serverUrl` | `null` = `http://<managerHost>:8080` (the local `listenPort` on the server's host) | where the CLI finds the server; set it if the server uses another port |
+| `versions` | `{}` | software name → version on this host (e.g. `{ tailscale = config.services.tailscale.package.version; }`), written to `/etc/lodestar/versions.json` and reported in the agent's status; the names are the server's `updates.software` keys |
 | `rebuildCommand`, `revisionCommand` | `null` | tests only |
 
 nix-darwin only:
@@ -174,12 +181,23 @@ nix-darwin only:
 | `allowedTags` | `[]` | Tailscale device tags allowed in |
 | `agentPort` | the agent's `port`, else `7461` | one port for all agents: keep `services.lodestar-agent.port` the same everywhere |
 | `promote` | `{ from = "unstable"; to = "stable"; }` | `null` disables promote |
+| `updates.software.<name>.input` | (required) | flake input that provides `<name>` (`[A-Za-z0-9_-]+`); `<name>` is `[a-z0-9_-]+` and matches the agents' `versions` keys |
+| `updates.software.<name>.upstream.github` | (required) | `owner/repo` whose latest release (not draft, not prerelease) is "latest" |
+| `updates.software` | `{}` | empty turns the updater and the upstream checks off |
+| `updates.channel` | `"unstable"` | channel the updater pushes `flake.lock` bumps to; must not be the promote target (`stable` when `promote = null`) |
+| `updates.intervalSecs` | `86400` | seconds between updater runs, counted from the last finished run |
+| `updates.upstreamIntervalSecs` | `21600` | seconds between upstream release checks |
+| `metrics.address` | `null` | address of the Prometheus `/metrics` listener; null runs none. Not opened in the firewall: open it to your scraper yourself |
+| `metrics.port` | `9466` | |
 | `package` | this flake's | |
 | `testing.*` | | tests only |
 
 The server needs `services.tailscale` on its host; the module makes the
 `lodestar-server` user a Tailscale operator (`--operator`) so it can run
-`tailscale status` and `tailscale whois`.
+`tailscale status` and `tailscale whois`. It also writes `nix_bin` (the host's
+`nix.package`) into the server's config, which the updater uses for `nix flake update`,
+`nix eval` and `nix build`; pushing a bump needs `pushUrl` and `deployKeyFile` like
+promote.
 
 ## macOS permissions
 
@@ -265,6 +283,8 @@ lodestar rebuild <host> [--wait] [--timeout 900]
 lodestar rebuild --channel <channel> [--wait]
 lodestar log <host> [apply-id]
 lodestar promote [--yes]
+lodestar updates
+lodestar updates run [--wait] [--timeout 7200]
 lodestar audit [--limit 20]
 ```
 
@@ -276,7 +296,9 @@ server = "http://manager:8080"
 ```
 
 `rebuild --wait` keeps retrying while the server is restarting (e.g. when the
-apply switched the server's own host).
+apply switched the server's own host). `updates` lists the tracked software, its latest
+release and the last updater result per flake input; `updates run --wait` starts a run
+and exits 0 only when every input ended `pushed` or `no-change`.
 
 ## Promote
 

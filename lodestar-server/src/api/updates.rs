@@ -82,6 +82,9 @@ pub(super) async fn run_updates(
     State(state): State<AppState>,
     Extension(Actor(actor)): Extension<Actor>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if state.config.updates.software.is_empty() {
+        return Err(ApiError(StatusCode::CONFLICT, "updater off".into()));
+    }
     // Take the run lock before answering: a status read right after the 202 then sees
     // `running`, and two requests cannot both start a run.
     let Ok(running) = state.updates.try_start() else {

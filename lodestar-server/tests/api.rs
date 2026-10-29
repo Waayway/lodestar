@@ -942,3 +942,32 @@ async fn updates_view_and_run_endpoint() {
     let response = http.post(&run_url).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
 }
+
+#[tokio::test]
+async fn run_endpoint_is_refused_when_the_updater_is_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    origin.commit("first", "unstable");
+    let agent = fake_agent(Shared::default()).await;
+    let environment = env_build(
+        dir,
+        origin.bare.to_str().unwrap(),
+        agent,
+        vec![host("H1", "unstable")],
+        AccessConfig::Disabled,
+        Vec::new(),
+        UpdatesConfig::default(),
+        None,
+    )
+    .await;
+    let http = dashboard_client();
+    let response = http
+        .post(format!("{}/api/updates/run", environment.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body, json!({"error": "updater off"}));
+    assert!(!environment.state.updates.is_running());
+}

@@ -336,7 +336,8 @@ async fn only_missing_hosts_are_built() {
     let state = &fixture.state;
     state
         .builds
-        .record(
+        .record_built(
+            state,
             &fixture.commit,
             BTreeMap::from([("a".to_string(), ok("a"))]),
         )
@@ -353,14 +354,87 @@ async fn only_missing_hosts_are_built() {
     );
     assert_eq!(result.hosts.keys().collect::<Vec<_>>(), vec!["a", "b"]);
     assert_eq!(result.hosts["a"].built_at, 1, "existing entry kept");
-    // Only the new path was published, with the channel index.
+    // Each call published only its new path, with the channel index.
     let published = builder.published.lock().unwrap();
-    assert_eq!(published.len(), 1);
+    let index = serde_json::json!({ "unstable": { "current": fixture.commit, "previous": null } });
+    assert_eq!(published.len(), 2);
     assert_eq!(published[0].0, fixture.commit);
-    assert_eq!(published[0].1, vec![store_path("b")]);
+    assert_eq!(published[0].1, vec![store_path("a")]);
+    assert_eq!(published[0].2, index);
+    assert_eq!(published[1].1, vec![store_path("b")]);
+    assert_eq!(published[1].2, index);
+}
+
+#[tokio::test]
+async fn recorded_commits_are_published_once() {
+    let mut fixture = fixture().await;
+    let builder = fixture.install(FakeBuilder::default());
+    let state = &fixture.state;
+    let results = state
+        .builds
+        .build_dir(
+            state,
+            &fixture.origin.work,
+            &[host("a", "linux"), host("b", "linux"), host("c", "darwin")],
+        )
+        .await;
+    assert_eq!(results.keys().collect::<Vec<_>>(), vec!["a", "b"]);
+    let recorded = state
+        .builds
+        .record_built(state, &fixture.commit, results)
+        .await
+        .unwrap();
+    assert!(recorded.failed_hosts(&linux_hosts()).is_empty());
+    {
+        let published = builder.published.lock().unwrap();
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].1, vec![store_path("a"), store_path("b")]);
+        assert_eq!(
+            published[0].2,
+            serde_json::json!({ "unstable": { "current": fixture.commit, "previous": null } })
+        );
+    }
+    assert_eq!(builder.count(), 1);
+    let result = state
+        .builds
+        .ensure_built(state, &fixture.commit, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(result, recorded);
+    assert_eq!(builder.count(), 1, "nothing built again");
     assert_eq!(
-        published[0].2,
-        serde_json::json!({ "unstable": { "current": fixture.commit, "previous": null } })
+        builder.published.lock().unwrap().len(),
+        1,
+        "nothing published again"
+    );
+
+    // A failing publish fails the recorded hosts.
+    let failing = fixture.install(FakeBuilder {
+        publish_error: Some("publishing failed: disk full".into()),
+        ..Default::default()
+    });
+    let state = &fixture.state;
+    let other = "a".repeat(40);
+    let result = state
+        .builds
+        .record_built(state, &other, BTreeMap::from([("a".to_string(), ok("a"))]))
+        .await
+        .unwrap();
+    assert_eq!(failing.published.lock().unwrap().len(), 1);
+    assert_eq!(result.failed_hosts(&linux_hosts()), vec!["a"]);
+    assert!(
+        result.hosts["a"]
+            .log_tail
+            .as_deref()
+            .unwrap()
+            .starts_with("publish failed: ")
+    );
+    assert!(
+        state
+            .builds
+            .record_built(state, "--x", BTreeMap::new())
+            .await
+            .is_err()
     );
 }
 
@@ -379,17 +453,13 @@ async fn no_partial_result_on_error() {
         panics: true,
         ..Default::default()
     });
-    let state = fixture.state.clone();
-    let commit = fixture.commit.clone();
-    let error = tokio::spawn(async move {
-        state
-            .builds
-            .ensure_built(&state, &commit, &linux_hosts())
-            .await
-    })
-    .await
-    .unwrap_err();
-    assert!(error.is_panic());
+    let state = &fixture.state;
+    let error = state
+        .builds
+        .ensure_built(state, &fixture.commit, &linux_hosts())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("builder panicked"), "{error:#}");
     assert_eq!(panicking.count(), 1);
     assert!(!result_path.exists());
     assert!(lock_is_free(&lock_path));
@@ -551,31 +621,104 @@ async fn atomic_write() {
     assert!(state.builds.read("../escape").is_none());
 }
 
+fn read_index(fixture: &Fixture) -> serde_json::Value {
+    serde_json::from_str(
+        &std::fs::read_to_string(fixture.builds_dir().join("channels.json")).unwrap(),
+    )
+    .unwrap()
+}
+
+/// A new commit on the mirror's `unstable`.
+async fn next_commit(fixture: &Fixture, subject: &str) -> String {
+    let commit = fixture.origin.commit(subject, "unstable");
+    fixture.state.mirror.fetch().await.unwrap();
+    commit
+}
+
 #[tokio::test]
 async fn channel_index_tracks_current_and_previous() {
     let mut fixture = fixture().await;
     let builder = fixture.install(FakeBuilder::default());
-    let state = &fixture.state;
+    let state = fixture.state.clone();
+    let good = fixture.commit.clone();
     state
         .builds
-        .ensure_built(state, &fixture.commit, &linux_hosts())
+        .ensure_built(&state, &good, &linux_hosts())
         .await
         .unwrap();
-    let second = fixture.origin.commit("second", "unstable");
-    state.mirror.fetch().await.unwrap();
+
+    // A failed build does not advance the channel.
+    let failed = next_commit(&fixture, "failed").await;
+    fixture.install(FakeBuilder {
+        fail_all: Some("error: builder for a failed".into()),
+        ..Default::default()
+    });
     state
         .builds
-        .ensure_built(state, &second, &linux_hosts())
+        .ensure_built(&fixture.state, &failed, &linux_hosts())
         .await
         .unwrap();
-    let index: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(fixture.builds_dir().join("channels.json")).unwrap(),
+    assert_eq!(
+        read_index(&fixture),
+        serde_json::json!({ "unstable": { "current": good, "previous": null } })
+    );
+
+    // Neither does a failed publish.
+    let unpublished = next_commit(&fixture, "unpublished").await;
+    fixture.install(FakeBuilder {
+        publish_error: Some("builder unreachable: ssh: connect refused".into()),
+        ..Default::default()
+    });
+    state
+        .builds
+        .ensure_built(&fixture.state, &unpublished, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(
+        read_index(&fixture),
+        serde_json::json!({ "unstable": { "current": good, "previous": null } })
+    );
+
+    // The next good build moves the last good one to previous.
+    let second = next_commit(&fixture, "second").await;
+    fixture.state.builder = builder.clone();
+    state
+        .builds
+        .ensure_built(&fixture.state, &second, &linux_hosts())
+        .await
+        .unwrap();
+    let expected = serde_json::json!({ "unstable": { "current": second, "previous": good } });
+    assert_eq!(read_index(&fixture), expected);
+    assert_eq!(builder.published.lock().unwrap()[1].2, expected);
+
+    // Rebuilding the previous commit after a retry does not move the channel back.
+    let mut result = state.builds.read(&good).unwrap();
+    result.hosts.get_mut("b").unwrap().ok = false;
+    std::fs::write(
+        fixture.builds_dir().join(format!("{good}.json")),
+        serde_json::to_vec(&result).unwrap(),
     )
     .unwrap();
-    let expected =
-        serde_json::json!({ "unstable": { "current": second, "previous": fixture.commit } });
-    assert_eq!(index, expected);
-    assert_eq!(builder.published.lock().unwrap()[1].2, expected);
+    assert_eq!(state.builds.retry(&good).await.unwrap(), vec!["b"]);
+    state
+        .builds
+        .ensure_built(&fixture.state, &good, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(builder.count(), 3);
+    assert_eq!(read_index(&fixture), expected);
+
+    // A corrupt index fails before anything is built.
+    std::fs::write(fixture.builds_dir().join("channels.json"), "{").unwrap();
+    let third = next_commit(&fixture, "third").await;
+    let error = state
+        .builds
+        .ensure_built(&fixture.state, &third, &linux_hosts())
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("channels.json"), "{error:#}");
+    assert_eq!(builder.count(), 3);
+    assert!(state.builds.read(&third).is_none());
 }
 
 #[tokio::test]
@@ -596,7 +739,7 @@ async fn old_results_are_cleaned() {
     for name in [&old, &kept, &recent, &locked, &previous] {
         state
             .builds
-            .record(name, BTreeMap::from([("a".to_string(), ok("a"))]))
+            .record_built(state, name, BTreeMap::from([("a".to_string(), ok("a"))]))
             .await
             .unwrap();
     }

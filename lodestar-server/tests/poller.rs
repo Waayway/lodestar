@@ -777,3 +777,46 @@ async fn poll_resend_builds_first_without_blocking_the_poller() {
     );
     assert_eq!(builder.calls(), vec![(commit, vec!["H1".to_string()])]);
 }
+
+#[tokio::test]
+async fn poll_resend_backs_off_while_the_builder_is_unreachable() {
+    let fake = Shared::default();
+    fake.lock().unwrap().status = Some(agent_status(OLD, Some(record("a0", OLD, ApplyState::Ok))));
+    let addr = fake_agent(fake.clone()).await;
+    let builder = Arc::new(FakeBuilder::default());
+    builder.set_unreachable(true);
+    let (mut environment, commit) = gated_env(addr, builder.clone()).await;
+    {
+        let state = &environment.state;
+        desire(state, "a1", &commit).await;
+        poll_once(state).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !state.build_backoff.waiting("main", &commit) {
+            assert!(tokio::time::Instant::now() < deadline, "never failed");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(builder.calls().len(), 1);
+        // Backing off: the next polls build nothing.
+        poll_once(state).await;
+        poll_once(state).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(builder.calls().len(), 1);
+        assert!(fake.lock().unwrap().applied.is_empty());
+        assert!(state.builds.read(&commit).is_none());
+    }
+
+    // The backoff passed and the builder is back: the re-send builds and goes out.
+    environment.state.build_backoff = Arc::new(lodestar_server::builds::BuildBackoff::new(
+        Duration::ZERO,
+        Duration::ZERO,
+    ));
+    builder.set_unreachable(false);
+    let state = &environment.state;
+    poll_once(state).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while fake.lock().unwrap().applied.is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "never re-sent");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(builder.calls().len(), 2);
+}

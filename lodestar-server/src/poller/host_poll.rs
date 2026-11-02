@@ -121,7 +121,11 @@ async fn handle_status(state: &AppState, host: &ManagedHost, base: &str, status:
         match known {
             Some(failed) if failed.is_empty() => resend(state, name, base, &request).await,
             Some(failed) => refuse_resend(state, name, &request, &failed),
-            None => spawn_gated_resend(state, host, base, request),
+            // A build that could not run (builder unreachable) is tried again after a backoff.
+            None if state.build_backoff.ready(&host.channel, &request.commit) => {
+                spawn_gated_resend(state, host, base, request)
+            }
+            None => {}
         }
     }
 }

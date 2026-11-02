@@ -7,7 +7,7 @@ use tokio::sync::broadcast;
 
 use crate::agent_client::AgentClient;
 use crate::auth::AuthState;
-use crate::builds::{BuildGate, Builder, PrebuildQueue, RemoteBuilder};
+use crate::builds::{BuildBackoff, BuildGate, Builder, PrebuildQueue, RemoteBuilder};
 use crate::config::{Link, ManagedHost, ServerConfig};
 use crate::mirror::Mirror;
 use crate::tailscale::OnlineProvider;
@@ -55,6 +55,9 @@ pub struct AppState {
     pub building: Arc<Mutex<BTreeMap<String, String>>>,
     /// How long the last build the gate ran took, per channel (seconds); for the metrics.
     pub build_durations: Arc<Mutex<BTreeMap<String, f64>>>,
+    /// When the prebuild and the re-send may try again a build that could not run (tests set
+    /// shorter pauses).
+    pub build_backoff: Arc<BuildBackoff>,
     /// Prebuilds of new channel heads: one at a time, the last-seen heads.
     pub(crate) prebuilds: Arc<PrebuildQueue>,
     /// `(host, apply_id)` re-sends waiting for their commit's build.
@@ -107,6 +110,7 @@ impl AppState {
             builds,
             building: Arc::default(),
             build_durations: Arc::default(),
+            build_backoff: Arc::default(),
             prebuilds: Arc::default(),
             resend_builds: Arc::default(),
             resend_refused: Arc::default(),

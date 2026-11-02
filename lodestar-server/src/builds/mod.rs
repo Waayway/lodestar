@@ -1,5 +1,6 @@
 //! Building every Linux host's system on the builder and publishing it to the cache.
 
+mod build_backoff;
 mod build_metric;
 mod builder;
 mod building_guard;
@@ -10,6 +11,7 @@ mod gate;
 mod prebuild;
 mod result_file;
 
+pub use build_backoff::BuildBackoff;
 pub use build_metric::BuildMetric;
 pub use builder::{Builder, HostBuild, RemoteBuilder};
 pub use channel_build::{build_metrics, channel_build};

@@ -60,8 +60,9 @@ pub fn spawn_prebuild(state: &AppState, channel: &str, head: &str) -> Option<Joi
 }
 
 /// After a mirror fetch: queues a prebuild for every gated channel whose head differs from the one
-/// it had at the previous call (the first call, at server start, prebuilds every head once).
-/// Returns the tasks it spawned; none while builds are off.
+/// it had at the previous call (the first call, at server start, prebuilds every head once), and
+/// for every head whose last build could not run once its backoff has passed (30 s doubling to
+/// 10 min, checked at each fetch). Returns the tasks it spawned; none while builds are off.
 pub async fn prebuild_new_heads(state: &AppState) -> Vec<JoinHandle<()>> {
     if !state.config.builds.enable {
         return Vec::new();
@@ -85,7 +86,10 @@ pub async fn prebuild_new_heads(state: &AppState) -> Vec<JoinHandle<()>> {
             .insert(channel.to_string(), head.clone())
             .as_ref()
             != Some(&head);
-        if moved {
+        // A head whose build could not run is tried again once its backoff has passed.
+        let due = state.build_backoff.waiting(channel, &head)
+            && state.build_backoff.ready(channel, &head);
+        if moved || due {
             tasks.extend(spawn_prebuild(state, channel, &head));
         }
     }

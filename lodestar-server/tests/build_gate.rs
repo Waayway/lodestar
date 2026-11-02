@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use lodestar_server::builds::{
-    BuildGate, Builder, HostBuild, HostResult, prebuild_new_heads, spawn_prebuild,
+    BuildBackoff, BuildGate, Builder, HostBuild, HostResult, prebuild_new_heads, spawn_prebuild,
 };
 use lodestar_server::config::{AccessConfig, ManagedHost, OnlineSource, ServerConfig};
 use lodestar_server::db;
@@ -1161,4 +1161,65 @@ async fn a_prebuild_after_the_index_was_removed_republishes_the_heads() {
         read_index(&fixture),
         serde_json::json!({ "unstable": { "current": commit, "previous": null } })
     );
+}
+
+// ---- builds that could not run back off (I1) ----
+
+#[test]
+fn backoff_doubles_from_30_seconds_to_10_minutes() {
+    let backoff = BuildBackoff::default();
+    let commit = "1".repeat(40);
+    assert!(backoff.ready_at("stable", &commit, 0));
+    assert!(!backoff.waiting("stable", &commit));
+    let mut now = 1_000;
+    for delay in [30, 60, 120, 240, 480, 600, 600] {
+        backoff.failed_at("stable", &commit, now);
+        assert!(backoff.waiting("stable", &commit));
+        assert!(
+            !backoff.ready_at("stable", &commit, now + delay - 1),
+            "{delay}"
+        );
+        assert!(backoff.ready_at("stable", &commit, now + delay), "{delay}");
+        now += delay;
+    }
+    // Per channel and commit.
+    assert!(backoff.ready_at("unstable", &commit, now));
+    assert!(backoff.ready_at("stable", &"2".repeat(40), now));
+    backoff.succeeded("stable", &commit);
+    assert!(!backoff.waiting("stable", &commit));
+    assert!(backoff.ready_at("stable", &commit, 0));
+}
+
+#[tokio::test]
+async fn an_unreachable_prebuild_backs_off_then_retries() {
+    let mut fixture = fixture().await;
+    let builder = Arc::new(CommitBuilder::default());
+    builder.set_unreachable(true);
+    fixture.state.builder = builder.clone();
+    let commit = fixture.commit.clone();
+    {
+        let state = &fixture.state;
+        state.mirror.fetch().await.unwrap();
+        await_all(prebuild_new_heads(state).await).await;
+        assert_eq!(builder.calls().len(), 1);
+        assert!(state.builds.read(&commit).is_none());
+        assert!(state.build_backoff.waiting("unstable", &commit));
+        // The head did not move and the backoff has not passed: no new attempt.
+        state.mirror.fetch().await.unwrap();
+        assert!(prebuild_new_heads(state).await.is_empty());
+        assert_eq!(builder.calls().len(), 1);
+    }
+
+    // Without a delay the next fetch retries the head; once it builds, the backoff ends.
+    fixture.state.build_backoff = Arc::new(BuildBackoff::new(Duration::ZERO, Duration::ZERO));
+    let state = &fixture.state;
+    state.build_backoff.failed("unstable", &commit);
+    builder.set_unreachable(false);
+    let handles = prebuild_new_heads(state).await;
+    assert_eq!(handles.len(), 1);
+    await_all(handles).await;
+    assert_eq!(builder.calls().len(), 2);
+    assert!(state.builds.read(&commit).unwrap().hosts["a"].ok);
+    assert!(!state.build_backoff.waiting("unstable", &commit));
+    assert!(prebuild_new_heads(state).await.is_empty());
 }

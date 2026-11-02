@@ -43,8 +43,23 @@ pub fn known_failures(state: &AppState, channel: &str, commit: &str) -> Option<V
 /// Builds `commit` for `channel` through the gate (waiting for it) and returns the failed hosts,
 /// sorted; empty when all are built or the gate does not apply. The channel shows as building
 /// meanwhile. The work runs in a task of its own, so a caller that goes away does not end the
-/// building state while the build goes on.
+/// building state while the build goes on. An error (the build could not run: builder
+/// unreachable, publish failed) starts or extends the channel's backoff for the commit; any
+/// answer ends it.
 pub async fn build_channel(
+    state: &AppState,
+    channel: &str,
+    commit: &str,
+) -> anyhow::Result<Vec<String>> {
+    let outcome = gate_channel(state, channel, commit).await;
+    match &outcome {
+        Ok(_) => state.build_backoff.succeeded(channel, commit),
+        Err(_) => state.build_backoff.failed(channel, commit),
+    }
+    outcome
+}
+
+async fn gate_channel(
     state: &AppState,
     channel: &str,
     commit: &str,

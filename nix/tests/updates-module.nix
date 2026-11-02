@@ -108,6 +108,24 @@ let
       what = "config.json carries the builds options in snake_case";
     }
     {
+      ok =
+        lib.all
+          (
+            store:
+            failedOf (mkSystem {
+              services.lodestar-server.builds = builds // {
+                inherit store;
+              };
+            }) == [ ]
+          )
+          [
+            "ssh-ng://lodestar@10.0.10.171"
+            "ssh://builder"
+            "ssh-ng://lodestar@cache.example:2222"
+          ];
+      what = "user@host[:port] stores pass";
+    }
+    {
       ok = failedOf withBuilds == [ ];
       what = "a complete enabled builds config passes";
     }
@@ -115,7 +133,13 @@ let
       ok = lib.all buildsFail [
         { store = ""; }
         { store = "https://cache"; }
+        { store = "ssh-ng://-oProxyCommand=x"; }
+        { store = "ssh-ng://"; }
+        { store = "ssh-ng://lodestar@host name"; }
+        { store = "ssh-ng://host?remote-program=x"; }
+        { store = "ssh-ng://host/path"; }
         { publishCommand = [ ]; }
+        { publishCommand = [ "" ]; }
       ];
       what = "enabled builds with an empty or non-ssh store or empty publishCommand fail an assertion";
     }

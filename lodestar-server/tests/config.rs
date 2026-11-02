@@ -153,6 +153,25 @@ fn builds_check_rejects_invalid_when_enabled() {
     ] {
         assert!(with_builds(bad).builds.check().is_err(), "{bad}");
     }
+    for store in [
+        "ssh-ng://lodestar@10.0.10.171",
+        "ssh://builder",
+        "ssh-ng://lodestar@cache.example:2222",
+    ] {
+        let json = format!(r#"{{"enable":true,"store":"{store}"}}"#);
+        with_builds(&json).builds.check().unwrap();
+    }
+    for store in [
+        "ssh-ng://-oProxyCommand=x",
+        "ssh-ng://",
+        "ssh-ng://lodestar@host name",
+        "ssh-ng://host?remote-program=x",
+        "ssh-ng://host/path",
+        "ssh-ng://-o@host",
+    ] {
+        let json = format!(r#"{{"enable":true,"store":"{store}"}}"#);
+        assert!(with_builds(&json).builds.check().is_err(), "{store}");
+    }
     // Disabled configs are never checked.
     with_builds(r#"{"enable":false,"store":"x","timeout_secs":0}"#)
         .builds

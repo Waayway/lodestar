@@ -411,14 +411,18 @@ in
         message = "services.lodestar-server.builds.store must be set while builds.enable is true.";
       }
       {
+        # The server's `valid_store`: scheme, then [user@]host[:port], host not starting with `-`.
         assertion =
           !cfg.builds.enable
-          || lib.hasPrefix "ssh-ng://" cfg.builds.store
-          || lib.hasPrefix "ssh://" cfg.builds.store;
-        message = "services.lodestar-server.builds.store = \"${cfg.builds.store}\" must start with ssh-ng:// or ssh://.";
+          ||
+            builtins.match "ssh(-ng)?://([A-Za-z0-9._-]+@)?[A-Za-z0-9.][A-Za-z0-9.-]*(:[0-9]+)?" cfg.builds.store
+            != null;
+        message = "services.lodestar-server.builds.store = \"${cfg.builds.store}\" must be ssh-ng://[user@]host[:port] (or ssh://).";
       }
       {
-        assertion = !cfg.builds.enable || cfg.builds.publishCommand != [ ];
+        assertion =
+          !cfg.builds.enable
+          || (cfg.builds.publishCommand != [ ] && lib.head cfg.builds.publishCommand != "");
         message = "services.lodestar-server.builds.publishCommand must not be empty while builds.enable is true.";
       }
     ]

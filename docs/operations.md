@@ -46,6 +46,8 @@ lodestar rebuild --channel stable --wait [--timeout 900]
 lodestar log desktop [APPLY_ID]          # default: the host's last apply
 lodestar promote [--yes]                 # shows the candidate; --yes moves the target channel
 lodestar updates [run [--wait]]          # tracked software; run the updater now
+lodestar build status                    # each channel's build on the builder (build gate)
+lodestar build retry <commit>            # build the failed hosts of <commit> again
 lodestar audit --limit 20
 ```
 
@@ -328,28 +330,105 @@ independently from whichever substituter has it.
 - **Publish** (`cache-publish <commit> <store-path>…`, run by the server after a build,
   channel index JSON on stdin): validates the arguments like the server (40-hex commit,
   plain store paths) and the index, takes `<cacheDir>/.lock`, keeps the closure's
-  `ultimate` paths (built on this host), and for each one not yet in the cache signs it
+  paths that are `ultimate` (built on this host) or signed with the cache's own key
+  (substituted back from this cache after a store GC), and for each one not yet in the cache signs it
   in the local store (`nix store sign`), writes `nar/<filehash>.nar.zst` and
   `<hash>.narinfo` (both via temp file and rename). It does not use `nix copy`: a file
   cache refuses a path whose references it lacks. Then it **merges** the paths into
   `.roots/<commit>` (a commit is published in several calls when hosts are built in
-  different rounds, e.g. `--retry`), writes the index to `.roots/channels.json` and prunes.
-- **Prune** (`cache-prune [dir]`, after every publish and daily via
+  different rounds, e.g. after `lodestar build retry`), writes the index to
+  `.roots/channels.json` and prunes, keeping `<commit>` as well.
+- **Prune** (`cache-prune [dir [keep-commit]]`, after every publish and daily via
   `lodestar-cache-prune.timer`): the keep set is the union of `.roots/<commit>` for the
-  `current` and `previous` commit of every channel in `channels.json`. Every other
+  `current` and `previous` commit of every channel in `channels.json` (and
+  `keep-commit`, which `cache-publish` passes). Every other
   narinfo is deleted with its NAR (only plain files under `nar/`, never a NAR a kept
   narinfo also names), then the `.roots` files of unkept commits. A missing or
   unreadable index, an invalid commit in it, or a kept commit without a roots file
-  deletes nothing. A publish of a commit the index does not keep (a failed or blocked
-  build) is pruned right away; that is intended.
+  deletes nothing. The paths of a commit the index does not keep (an older commit built
+  for a re-send, a bump whose other channel is not built yet) stay until the next
+  publish of another commit; that is intended.
 - **Where**: `cacheDir` (`nix-cache-info`, `*.narinfo`, `nar/`, `.roots/`),
   `journalctl -u lodestar-cache-prune`; publish output lands in the server's build log.
 - **Recovery**: the cache is rebuildable. If it is lost or corrupt, empty `cacheDir`
-  (keep the mount) and publish again (`lodestar build <commit> --retry`, or the next
-  build); clients build or use cache.nixos.org meanwhile. A narinfo whose NAR is
-  missing: delete the narinfo, the next publish of that commit rewrites it. A new
-  signing key: replace `signingKeyFile`, empty the cache, update the clients'
-  `trusted-public-keys`.
+  (keep the mount), then on the server remove the gate's index and restart:
+  `systemctl stop lodestar-server; rm /var/lib/lodestar-server/builds/channels.json;
+  systemctl start lodestar-server`. The prebuild at start finds every channel head
+  built but not in the index, advances the channel and republishes all its paths
+  (nothing is built again unless the builder's store lost them; then they are rebuilt
+  there). Each channel's `previous` commit is gone until its next head. Clients build or
+  use cache.nixos.org meanwhile. A narinfo whose NAR is missing: delete the narinfo, the
+  same recovery (or the next advance of that channel) rewrites it. A new signing key:
+  replace `signingKeyFile`, empty the cache, update the clients' `trusted-public-keys`,
+  recover as above.
+
+## Build gate
+
+With `services.lodestar-server.builds.enable`, every Linux host's system for a commit is
+built once on the builder (`builds.store`, ssh-ng as the cache host's `lodestar` user) and
+published to its cache before any agent may apply that commit; darwin hosts are never
+built here (they build themselves, and their applies never wait). Every path to building
+goes through the gate:
+
+- **Prebuild**: after each mirror fetch (and once at server start) every channel whose
+  head moved is built in the background, one at a time.
+- **Apply** (dashboard, `lodestar rebuild`, host or channel): the server waits for the
+  build of the channel's head for **every Linux host of the channel**, then records and
+  sends the apply. `lodestar rebuild` prints `waiting for the build of <commit> on the
+  builder…` meanwhile and waits up to two hours for the answer.
+- **Re-send** of a desired apply the agent never got: built first, in the background.
+- **Updater**: builds the changed Linux hosts on the builder before it pushes and records
+  the results for the pushed commit.
+
+States of a channel's head (`lodestar build status`, dashboard channel card,
+`GET /api/builds`):
+
+- **building**: the gate is building it for this channel right now.
+- **ok**: every Linux host of the channel built.
+- **failed**: at least one Linux host failed to build (the hosts are listed). Results are
+  final: an apply of that commit on that channel is refused with HTTP 409 `build of
+  <commit> failed on the builder: <host>, …` and an `apply-refused` audit event (with
+  `commit`, `channel`, `failed_hosts`), and nothing is sent to any agent. Fix the config
+  and push, or, for a failure that was not the commit's fault (out of disk, a flaky
+  download), `lodestar build retry <commit>` (audit `build-retry`): the failed hosts are
+  forgotten and, when the commit is a channel head, rebuilt at once; otherwise at the next
+  apply.
+- no state: the head has no complete result yet (not built, or its build could not run).
+
+A build that **could not run** is not a result: when the builder does not answer (the
+cache VM reboots, ssh fails) or the publish fails, nothing is recorded for those hosts
+and an apply is refused with 409 `build of <commit> failed: builder unreachable: …` or
+`build of <commit> failed: publish failed: …` (audit `apply-refused` with `error`). Just
+apply again once the builder is back; no retry is needed. The prebuild and the re-send
+try such a commit again on their own after a pause per channel and commit that doubles
+from 30 s to 10 min (checked at each mirror fetch and poll).
+
+The channel index (what the cache keeps) moves to a commit only when it is the channel's
+current head and every Linux host of the channel is ok there; each move publishes every
+path of the channel again, so the cache has the whole head even when its hosts were
+built in several rounds (an updater bump, a retry).
+
+Files in `/var/lib/lodestar-server/builds/`:
+
+- `<commit>.json`: the result per host (`ok`, store `path`, `log_tail` of a failure,
+  `built_at`), written atomically after build and publish.
+- `<commit>.lock`: the commit's lock (`flock`), held for check, build, publish and write;
+  a second caller waits on it. Released by the kernel if the server dies.
+- `channels.json` (+ `channels.lock`): the index, `{ <channel>: { current, previous } }`,
+  sent with every publish; results older than 30 days that it does not name are deleted.
+- `work/<commit>`: the worktree of a build in progress; removed after the build and at
+  server start.
+
+Metrics (with `metrics.address`), per channel with a complete result for its head:
+
+| Metric | Labels | Value |
+|---|---|---|
+| `lodestar_build_last_result` | `channel`, `result` | 1 for `ok` or `failed` |
+| `lodestar_build_last_timestamp_seconds` | `channel` | unix time the last host result of the head was recorded |
+| `lodestar_build_duration_seconds` | `channel` | seconds the last build the server ran for the channel took (absent until one ran since start) |
+
+Build logs: `journalctl -u lodestar-server` (prebuild and re-send failures,
+`apply refused` lines) and the `log_tail` in the result file.
 
 ## Where things are
 
@@ -375,7 +454,8 @@ Server:
 - config: `/etc/lodestar-server/config.json`, hosts: `/etc/lodestar-server/hosts.json`,
   service links: `/etc/lodestar-server/links.json`
 - state: `/var/lib/lodestar-server/` (`lodestar.db`, `mirror.git`, ssh `known_hosts`,
-  `updater/<input>` while an updater run works on that input)
+  `updater/<input>` while an updater run works on that input, `builds/` for the build
+  gate)
 - `systemctl status lodestar-server`, runs as user `lodestar-server`
 
 Every activation of an enrolled host (applies, manual `nixos-rebuild` /

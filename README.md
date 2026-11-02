@@ -189,6 +189,11 @@ nix-darwin only:
 | `updates.upstreamIntervalSecs` | `21600` | seconds between upstream release checks |
 | `metrics.address` | `null` | address of the Prometheus `/metrics` listener; null runs none. Not opened in the firewall: open it to your scraper yourself |
 | `metrics.port` | `9466` | |
+| `builds.enable` | `false` | the build gate: every Linux host's system is built once on the builder and published to its cache before any agent may apply the commit (`docs/operations.md` "Build gate"); off, applies never wait |
+| `builds.store` | `""` | the builder's store, `ssh-ng://[user@]host[:port]` (or `ssh://`); required while enabled |
+| `builds.sshKeyFile` | `null` | SSH key for the builder, readable by `lodestar-server` (outside the store, like `deployKeyFile`) |
+| `builds.publishCommand` | `[ "cache-publish" ]` | run on the builder over ssh as `<command…> <commit> <store-path>…` with the channel index on stdin (`services.lodestar-cache` provides `cache-publish`) |
+| `builds.timeoutSecs` | `7200` | seconds before a build of one commit (evaluation and build of all its hosts) or a publish is given up |
 | `package` | this flake's | |
 | `testing.*` | | tests only |
 
@@ -298,6 +303,8 @@ lodestar log <host> [apply-id]
 lodestar promote [--yes]
 lodestar updates
 lodestar updates run [--wait] [--timeout 7200]
+lodestar build status
+lodestar build retry <commit>
 lodestar audit [--limit 20]
 ```
 
@@ -309,7 +316,10 @@ server = "http://manager:8080"
 ```
 
 `rebuild --wait` keeps retrying while the server is restarting (e.g. when the
-apply switched the server's own host). `updates` lists the tracked software, its latest
+apply switched the server's own host). With the build gate on, `rebuild` waits (up to two
+hours) for the server to build the channel's head first and says so
+(`waiting for the build of <commit> on the builder…`). `build status` shows each channel's
+build; `build retry <commit>` lets the failed hosts of a commit be built again. `updates` lists the tracked software, its latest
 release and the last updater result per flake input; `updates run --wait` starts a run
 and exits 0 only when every input ended `pushed` or `no-change`.
 

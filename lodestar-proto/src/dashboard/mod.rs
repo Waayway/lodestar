@@ -1,6 +1,7 @@
 //! Types the server sends to the dashboard.
 
 mod audit_event;
+mod channel_build_view;
 mod channel_view;
 mod host_view;
 mod me;
@@ -13,6 +14,7 @@ mod updates_view;
 mod ws_message;
 
 pub use audit_event::AuditEvent;
+pub use channel_build_view::ChannelBuildView;
 pub use channel_view::ChannelView;
 pub use host_view::{HostView, OnlineState};
 pub use me::{ActDenied, Me};

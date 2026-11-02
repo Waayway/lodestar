@@ -53,6 +53,8 @@ pub struct AppState {
     pub builds: Arc<BuildGate>,
     /// The commit the gate is building for each channel right now (prebuild, apply or re-send).
     pub building: Arc<Mutex<BTreeMap<String, String>>>,
+    /// How long the last build the gate ran took, per channel (seconds); for the metrics.
+    pub build_durations: Arc<Mutex<BTreeMap<String, f64>>>,
     /// Prebuilds of new channel heads: one at a time, the last-seen heads.
     pub(crate) prebuilds: Arc<PrebuildQueue>,
     /// `(host, apply_id)` re-sends waiting for their commit's build.
@@ -104,6 +106,7 @@ impl AppState {
             builder,
             builds,
             building: Arc::default(),
+            build_durations: Arc::default(),
             prebuilds: Arc::default(),
             resend_builds: Arc::default(),
             resend_refused: Arc::default(),

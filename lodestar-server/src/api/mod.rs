@@ -7,6 +7,7 @@
 mod app;
 mod apply_request;
 mod audit;
+mod builds;
 mod channels;
 mod csrf;
 mod error;

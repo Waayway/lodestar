@@ -69,6 +69,7 @@ describe("ChannelCard", () => {
     name: "unstable",
     head: REV,
     head_subject: "fix(users): linger",
+    build: null,
     ...over,
   });
 
@@ -107,8 +108,8 @@ describe("PromoteDialog", () => {
     const actions = fakeActions();
     const pair = { from: "unstable", to: "stable" };
     const channels: ChannelView[] = [
-      { name: "unstable", head: REV, head_subject: "first" },
-      { name: "stable", head: "f".repeat(40), head_subject: "old" },
+      { name: "unstable", head: REV, head_subject: "first", build: null },
+      { name: "stable", head: "f".repeat(40), head_subject: "old", build: null },
     ];
     const ui = (candidate: string) =>
       withActions(actions, <PromoteDialog candidate={candidate} pair={pair} channels={channels} />);
@@ -122,9 +123,9 @@ describe("PromoteDialog", () => {
 });
 
 describe("action buttons by viewer", () => {
-  const channel: ChannelView = { name: "unstable", head: REV, head_subject: "s" };
+  const channel: ChannelView = { name: "unstable", head: REV, head_subject: "s", build: null };
   const pair = { from: "unstable", to: "stable" };
-  const channels: ChannelView[] = [channel, { name: "stable", head: "f".repeat(40), head_subject: "old" }];
+  const channels: ChannelView[] = [channel, { name: "stable", head: "f".repeat(40), head_subject: "old", build: null }];
   const cases: [string, (a: ReturnType<typeof fakeActions>, v: typeof viewers.admin) => unknown, string, string][] = [
     [
       "HostRow",

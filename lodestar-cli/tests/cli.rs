@@ -1,6 +1,6 @@
 //! Runs the CLI library against the real server in demo mode.
 
-use lodestar_cli::{Client, Command, run};
+use lodestar_cli::{BuildAction, Client, Command, run};
 use lodestar_server::demo::{self, DemoHandle};
 use std::time::Duration;
 
@@ -398,4 +398,147 @@ fn updates_run_waits_two_hours_by_default() {
         .to_string();
     assert!(help.contains("[default: 7200]"), "{help}");
     assert!(help.contains("builds can take"), "{help}");
+}
+
+fn channel_view(
+    name: &str,
+    build: Option<lodestar_proto::ChannelBuildView>,
+) -> lodestar_proto::ChannelView {
+    lodestar_proto::ChannelView {
+        name: name.into(),
+        head: Some("abcdef0123456789abcdef0123456789abcdef01".into()),
+        head_subject: Some("subject".into()),
+        build,
+    }
+}
+
+/// A server with `GET /api/builds` and `POST /api/builds/{commit}/retry` (answering `retry`).
+/// Returns its client and the commits retried.
+async fn builds_server(
+    channels: Vec<lodestar_proto::ChannelView>,
+    retry: (u16, serde_json::Value),
+) -> (Client, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::sync::{Arc, Mutex};
+    let retried = Arc::new(Mutex::new(Vec::new()));
+    let seen = retried.clone();
+    let app = axum::Router::new()
+        .route(
+            "/api/builds",
+            axum::routing::get(move || {
+                let channels = channels.clone();
+                async move { axum::Json(channels) }
+            }),
+        )
+        .route(
+            "/api/builds/{commit}/retry",
+            axum::routing::post(
+                move |axum::extract::Path(commit): axum::extract::Path<String>| {
+                    seen.lock().unwrap().push(commit);
+                    let (status, body) = retry.clone();
+                    async move {
+                        (
+                            axum::http::StatusCode::from_u16(status).unwrap(),
+                            axum::Json(body),
+                        )
+                    }
+                },
+            ),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (Client::new(&format!("http://{addr}")), retried)
+}
+
+#[tokio::test]
+async fn build_status_prints_a_table() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let (client, _) = builds_server(
+        vec![
+            channel_view(
+                "stable",
+                Some(lodestar_proto::ChannelBuildView {
+                    commit: "abcdef0123456789abcdef0123456789abcdef01".into(),
+                    state: "failed".into(),
+                    failed_hosts: vec!["manager".into(), "prod".into()],
+                    finished_at: Some(now - 2 * 3600),
+                }),
+            ),
+            channel_view("unstable", None),
+        ],
+        (200, serde_json::json!({})),
+    )
+    .await;
+    let (code, out) = go(
+        &client,
+        Command::Build {
+            action: BuildAction::Status,
+        },
+    )
+    .await;
+    assert_eq!(code, 0, "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[0].split_whitespace().collect::<Vec<_>>(),
+        ["CHANNEL", "COMMIT", "STATE", "FAILED", "HOSTS", "AGE"]
+    );
+    assert_eq!(
+        lines[1].split_whitespace().collect::<Vec<_>>(),
+        ["stable", "abcdef0", "failed", "manager,", "prod", "2h"],
+        "{out}"
+    );
+    assert_eq!(
+        lines[2].split_whitespace().collect::<Vec<_>>(),
+        ["unstable", "abcdef0", "-", "-", "-"],
+        "{out}"
+    );
+}
+
+#[tokio::test]
+async fn build_retry_reports_the_hosts() {
+    let commit = "a".repeat(40);
+    let (client, retried) = builds_server(
+        Vec::new(),
+        (200, serde_json::json!({ "retried": ["prod"] })),
+    )
+    .await;
+    let (code, out) = go(
+        &client,
+        Command::Build {
+            action: BuildAction::Retry {
+                commit: commit.clone(),
+            },
+        },
+    )
+    .await;
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("retrying prod"), "{out}");
+    assert_eq!(*retried.lock().unwrap(), vec![commit]);
+}
+
+#[tokio::test]
+async fn build_retry_of_an_unknown_commit_fails() {
+    let (client, _) = builds_server(
+        Vec::new(),
+        (
+            404,
+            serde_json::json!({ "error": "no build result for that commit" }),
+        ),
+    )
+    .await;
+    let mut out = Vec::new();
+    let result = run(
+        &client,
+        Command::Build {
+            action: BuildAction::Retry {
+                commit: "b".repeat(40),
+            },
+        },
+        &mut out,
+    )
+    .await;
+    assert!(result.is_err());
 }

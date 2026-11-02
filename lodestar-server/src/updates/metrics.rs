@@ -5,6 +5,8 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
+use crate::builds::BuildMetric;
+
 use super::update_run::UpdateRun;
 use super::upstream::LatestVersion;
 use super::version::compare_versions;
@@ -17,6 +19,8 @@ pub struct MetricsInput {
     pub latest: BTreeMap<String, LatestVersion>,
     /// Flake input -> the updater's last run.
     pub last_runs: BTreeMap<String, UpdateRun>,
+    /// Channel -> the recorded build of its head.
+    pub builds: BTreeMap<String, BuildMetric>,
 }
 
 /// Escapes a label value: `\`, `"` and newline.
@@ -159,6 +163,41 @@ pub fn render(input: &MetricsInput) -> String {
         "lodestar_update_last_result",
         "1 for the result of the updater's last run for a flake input.",
         last_result,
+    );
+    let mut build_result = Vec::new();
+    let mut build_timestamp = Vec::new();
+    let mut build_duration = Vec::new();
+    for (channel, build) in &input.builds {
+        let channel = escape(channel);
+        build_result.push((
+            format!(r#"channel="{channel}",result="{}""#, escape(&build.result)),
+            "1".to_string(),
+        ));
+        build_timestamp.push((
+            format!(r#"channel="{channel}""#),
+            build.finished_at.to_string(),
+        ));
+        if let Some(seconds) = build.duration_seconds {
+            build_duration.push((format!(r#"channel="{channel}""#), seconds.to_string()));
+        }
+    }
+    family(
+        &mut out,
+        "lodestar_build_last_result",
+        "1 for the result of the last build of a channel's head on the builder.",
+        build_result,
+    );
+    family(
+        &mut out,
+        "lodestar_build_last_timestamp_seconds",
+        "Unix time the last build of a channel's head finished.",
+        build_timestamp,
+    );
+    family(
+        &mut out,
+        "lodestar_build_duration_seconds",
+        "Seconds the last build the server ran for a channel took.",
+        build_duration,
     );
     out
 }

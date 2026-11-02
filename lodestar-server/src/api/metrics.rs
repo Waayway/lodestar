@@ -6,6 +6,7 @@ use axum::extract::State;
 use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 
+use crate::builds::build_metrics;
 use crate::state::AppState;
 use crate::updates::metrics::{MetricsInput, render};
 
@@ -26,10 +27,12 @@ pub async fn get_metrics(State(state): State<AppState>) -> Response {
         .map(|(software, latest)| (software.clone(), latest.clone()))
         .collect();
     let last_runs = state.updates.last.lock().unwrap().clone();
+    let builds = build_metrics(&state).await;
     let body = render(&MetricsInput {
         running,
         latest,
         last_runs,
+        builds,
     });
     (
         [(

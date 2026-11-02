@@ -75,6 +75,8 @@ export type Actions = {
   promote: (commit: string, pair: PromoteChannels) => Promise<boolean>;
   /** Starts an updater run ("Check now") and refreshes the updates panel; toasts a failure. */
   runUpdates: () => Promise<void>;
+  /** Retries the failed hosts of a commit's build on the builder; toasts the outcome. */
+  retryBuild: (commit: string) => Promise<void>;
   /** Opens the apply log sheet on one apply and fetches its log. */
   showLog: (host: string, applyId: string) => void;
   closeLog: () => void;
@@ -417,6 +419,16 @@ export function ConnectionProvider({ children }: { children: ComponentChildren }
           if (!(e instanceof client.ApiError && e.status === 409)) fail("Update check failed", e);
         }
         await loadUpdates();
+      },
+      async retryBuild(commit) {
+        try {
+          const r = await client.retryBuild(commit);
+          toast.success(
+            r.retried.length > 0 ? `Retrying the build on ${r.retried.join(", ")}` : "No failed build to retry",
+          );
+        } catch (e) {
+          fail("Retry build failed", e);
+        }
       },
       showLog(host, applyId) {
         const rec = snapRef.current?.hosts.find((h) => h.name === host)?.last_apply;

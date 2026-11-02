@@ -6,6 +6,7 @@ use lodestar_proto::{ChannelView, Snapshot};
 use super::AppState;
 use super::host_view::host_view_with;
 use super::service_view::service_views;
+use crate::builds::channel_build;
 
 /// One view per channel used by a managed host, sorted by name.
 pub async fn channels(state: &AppState) -> Vec<ChannelView> {
@@ -20,10 +21,12 @@ pub async fn channels(state: &AppState) -> Vec<ChannelView> {
             Some(commit) => state.mirror.subject(commit).await,
             None => None,
         };
+        let build = channel_build(state, name, head.as_deref());
         ChannelView {
             name: name.to_string(),
             head,
             head_subject,
+            build,
         }
     }))
     .await

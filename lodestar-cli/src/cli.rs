@@ -48,6 +48,11 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<UpdatesAction>,
     },
+    /// The builder's build of each channel's newest commit; `build retry` rebuilds failed hosts.
+    Build {
+        #[command(subcommand)]
+        action: BuildAction,
+    },
     /// Recent audit events.
     Audit {
         #[arg(long, default_value_t = 20)]
@@ -67,5 +72,16 @@ pub enum UpdatesAction {
         /// on on the server after the CLI gives up).
         #[arg(long, default_value_t = 7200)]
         timeout: u64,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum BuildAction {
+    /// Table of each channel's build state.
+    Status,
+    /// Remove the failed hosts from a commit's build result so they are built again.
+    Retry {
+        /// The full 40-character commit.
+        commit: String,
     },
 }

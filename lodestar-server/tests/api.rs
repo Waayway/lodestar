@@ -1392,3 +1392,167 @@ async fn a_channel_that_keeps_moving_is_refused() {
     assert_eq!(refused[0].details["reason"], "channel kept moving");
     assert_eq!(refused[0].details["commit"], last.as_str());
 }
+
+async fn snapshot_channels(environment: &Env) -> Vec<lodestar_proto::ChannelView> {
+    let snapshot: lodestar_proto::Snapshot = dashboard_client()
+        .get(format!("{}/api/snapshot", environment.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    snapshot.channels
+}
+
+#[tokio::test]
+async fn the_channel_shows_building_then_ok_in_snapshot_and_builds() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    let head = origin.commit("main one", "main");
+    let agent = fake_agent(Shared::default()).await;
+    let hold = Arc::new(tokio::sync::Semaphore::new(0));
+    let builder = Arc::new(FakeBuilder::held(hold.clone()));
+    let environment = gated_env(
+        dir,
+        &origin,
+        agent,
+        vec![host("H1", "main")],
+        builder.clone(),
+        true,
+    )
+    .await;
+    let http = dashboard_client();
+    assert_eq!(snapshot_channels(&environment).await[0].build, None);
+
+    let request = tokio::spawn(
+        http.post(format!("{}/api/hosts/H1/apply", environment.base))
+            .send(),
+    );
+    builder.entered.notified().await;
+    let build = snapshot_channels(&environment).await[0].build.clone();
+    assert_eq!(
+        build,
+        Some(lodestar_proto::ChannelBuildView {
+            commit: head.clone(),
+            state: "building".into(),
+            failed_hosts: Vec::new(),
+            finished_at: None,
+        })
+    );
+    hold.add_permits(1);
+    request.await.unwrap().unwrap();
+
+    let build = snapshot_channels(&environment).await[0]
+        .build
+        .clone()
+        .unwrap();
+    assert_eq!(
+        (build.commit.as_str(), build.state.as_str()),
+        (head.as_str(), "ok")
+    );
+    assert!(build.failed_hosts.is_empty() && build.finished_at.is_some());
+    let listed: Vec<lodestar_proto::ChannelView> = http
+        .get(format!("{}/api/builds", environment.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed[0].name, "main");
+    assert_eq!(listed[0].build, Some(build));
+}
+
+#[tokio::test]
+async fn a_failed_channel_build_is_visible_and_retry_rebuilds_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    let head = origin.commit("main one", "main");
+    let agent = fake_agent(Shared::default()).await;
+    let builder = Arc::new(FakeBuilder::failing(&["H2"]));
+    let hosts = vec![host("H1", "main"), host("H2", "main")];
+    let environment = gated_env(dir, &origin, agent, hosts, builder.clone(), true).await;
+    let http = dashboard_client();
+    let retry_url = format!("{}/api/builds/{head}/retry", environment.base);
+
+    // No result yet: 404.
+    let response = http.post(&retry_url).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = http
+        .post(format!("{}/api/channels/main/apply", environment.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let build = snapshot_channels(&environment).await[0]
+        .build
+        .clone()
+        .unwrap();
+    assert_eq!(build.state, "failed");
+    assert_eq!(build.failed_hosts, names(&["H2"]));
+
+    // The metrics carry the failed build.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let metrics_addr = listener.local_addr().unwrap();
+    let metrics_app = lodestar_server::api::metrics_app(environment.state.clone());
+    tokio::spawn(async move { axum::serve(listener, metrics_app).await.unwrap() });
+    let metrics = reqwest::get(format!("http://{metrics_addr}/metrics"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        metrics.contains("lodestar_build_last_result{channel=\"main\",result=\"failed\"} 1\n"),
+        "{metrics}"
+    );
+    assert!(
+        metrics.contains("lodestar_build_last_timestamp_seconds{channel=\"main\"} "),
+        "{metrics}"
+    );
+    assert!(
+        metrics.contains("lodestar_build_duration_seconds{channel=\"main\"} "),
+        "{metrics}"
+    );
+
+    // A malformed commit is a 400.
+    let response = http
+        .post(format!("{}/api/builds/nope/retry", environment.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // The builder works again; retry drops the failure and the channel is rebuilt.
+    builder.fail.lock().unwrap().clear();
+    let response = http.post(&retry_url).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body, json!({ "retried": ["H2"] }));
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
+    let retried = audit_kinds(&audit, "build-retry");
+    assert_eq!(retried.len(), 1, "{audit:?}");
+    assert_eq!(retried[0].actor, "dev");
+    assert_eq!(
+        retried[0].details,
+        json!({ "commit": head, "hosts": ["H2"] })
+    );
+
+    // The retry kicked a prebuild of the head: no apply needed.
+    for _ in 0..100 {
+        let build = snapshot_channels(&environment).await[0].build.clone();
+        if build.as_ref().is_some_and(|build| build.state == "ok") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let build = snapshot_channels(&environment).await[0]
+        .build
+        .clone()
+        .unwrap();
+    assert_eq!(build.state, "ok", "{build:?}");
+    assert_eq!(builder.calls().len(), 2);
+    assert_eq!(builder.calls()[1].1, names(&["H2"]));
+}

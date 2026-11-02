@@ -85,6 +85,11 @@ export async function runUpdates(): Promise<void> {
   await request("POST", "/api/updates/run");
 }
 
+/** Removes the failed hosts from a commit's build result so they are built again. */
+export async function retryBuild(commit: string): Promise<{ retried: string[] }> {
+  return (await request("POST", `/api/builds/${enc(commit)}/retry`)).json();
+}
+
 export async function getApplyLog(host: string, applyId: string): Promise<string> {
   return (await request("GET", `/api/hosts/${enc(host)}/applies/${enc(applyId)}/log`)).text();
 }

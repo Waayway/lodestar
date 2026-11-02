@@ -59,10 +59,16 @@ pub async fn build_channel(
     let (channel, commit) = (channel.to_string(), commit.to_string());
     let task = tokio::spawn(async move {
         let _building = BuildingGuard::start(&task_state, &channel, &commit);
+        let started = std::time::Instant::now();
         let result = task_state
             .builds
             .ensure_built(&task_state, &commit, &hosts)
             .await?;
+        task_state
+            .build_durations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(channel.clone(), started.elapsed().as_secs_f64());
         Ok(sorted(result.failed_hosts(&hosts)))
     });
     match task.await {

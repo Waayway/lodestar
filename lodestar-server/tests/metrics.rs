@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use lodestar_server::builds::BuildMetric;
 use lodestar_server::config::{
     AccessConfig, MetricsConfig, OnlineSource, ServerConfig, SoftwareConfig, UpdatesConfig,
     Upstream,
@@ -47,6 +48,7 @@ fn upstream_check_errors_are_a_counter() {
         running: BTreeMap::new(),
         latest: known,
         last_runs: BTreeMap::new(),
+        builds: BTreeMap::new(),
     });
     assert!(
         out.contains("# TYPE lodestar_software_latest_check_errors_total counter\n"),
@@ -61,6 +63,7 @@ fn upstream_check_errors_are_a_counter() {
         running: BTreeMap::new(),
         latest: latest(Some("1.104.2"), Some(1)),
         last_runs: BTreeMap::new(),
+        builds: BTreeMap::new(),
     });
     assert!(
         out.contains("lodestar_software_latest_check_errors_total{software=\"tailscale\"} 0\n"),
@@ -78,6 +81,7 @@ fn renders_running_latest_and_up_to_date() {
         ]),
         latest: latest(Some("1.104.2"), Some(1234)),
         last_runs: BTreeMap::new(),
+        builds: BTreeMap::new(),
     });
     for line in [
         r#"lodestar_software_running_info{host="a",software="tailscale",version="1.104.2"} 1"#,
@@ -107,6 +111,7 @@ fn newer_than_latest_counts_as_up_to_date() {
         running: running(&[("a", "tailscale", "1.105.0")]),
         latest: latest(Some("1.104.2"), Some(1)),
         last_runs: BTreeMap::new(),
+        builds: BTreeMap::new(),
     });
     assert!(out.contains(r#"up_to_date{host="a",software="tailscale"} 1"#));
 }
@@ -117,6 +122,7 @@ fn unknown_latest_gives_running_lines_only() {
         running: running(&[("a", "tailscale", "1.104.2")]),
         latest: latest(None, None),
         last_runs: BTreeMap::new(),
+        builds: BTreeMap::new(),
     });
     assert!(out.contains("lodestar_software_running_info{"));
     assert!(!out.contains("lodestar_software_up_to_date{"));
@@ -130,6 +136,7 @@ fn checked_timestamp_only_when_checked() {
         running: BTreeMap::new(),
         latest: latest(Some("1.0"), None),
         last_runs: BTreeMap::new(),
+        builds: BTreeMap::new(),
     });
     assert!(out.contains(r#"latest_info{software="tailscale",version="1.0"} 1"#));
     assert!(!out.contains("latest_checked_timestamp_seconds{"));
@@ -141,6 +148,7 @@ fn label_values_are_escaped() {
         running: running(&[("a\"b", "tailscale", "1\\2\n3")]),
         latest: BTreeMap::new(),
         last_runs: BTreeMap::new(),
+        builds: BTreeMap::new(),
     });
     assert!(
         out.contains(r#"host="a\"b",software="tailscale",version="1\\2\n3""#),
@@ -185,6 +193,7 @@ fn renders_last_update_run_per_input() {
                 },
             ),
         ]),
+        builds: BTreeMap::new(),
     });
     for line in [
         r#"lodestar_update_last_result{input="nixpkgs-unstable",result="pushed"} 1"#,
@@ -202,6 +211,46 @@ fn renders_last_update_run_per_input() {
         2,
         "{out}"
     );
+}
+
+#[test]
+fn renders_the_build_families() {
+    let out = render(&MetricsInput {
+        running: BTreeMap::new(),
+        latest: BTreeMap::new(),
+        last_runs: BTreeMap::new(),
+        builds: BTreeMap::from([
+            (
+                "stable".to_string(),
+                BuildMetric {
+                    result: "ok".into(),
+                    finished_at: 1700,
+                    duration_seconds: Some(42.5),
+                },
+            ),
+            (
+                "unstable".to_string(),
+                BuildMetric {
+                    result: "failed".into(),
+                    finished_at: 1800,
+                    duration_seconds: None,
+                },
+            ),
+        ]),
+    });
+    for line in [
+        r#"lodestar_build_last_result{channel="stable",result="ok"} 1"#,
+        r#"lodestar_build_last_result{channel="unstable",result="failed"} 1"#,
+        r#"lodestar_build_last_timestamp_seconds{channel="stable"} 1700"#,
+        r#"lodestar_build_last_timestamp_seconds{channel="unstable"} 1800"#,
+        r#"lodestar_build_duration_seconds{channel="stable"} 42.5"#,
+        "# TYPE lodestar_build_last_result gauge",
+        "# TYPE lodestar_build_last_timestamp_seconds gauge",
+        "# TYPE lodestar_build_duration_seconds gauge",
+    ] {
+        assert!(out.lines().any(|l| l == line), "missing {line}\n{out}");
+    }
+    assert_eq!(out.matches("lodestar_build_duration_seconds{").count(), 1);
 }
 
 #[tokio::test]

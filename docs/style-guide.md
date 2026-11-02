@@ -200,7 +200,10 @@ Components take typed props (types from `bindings/`); data and actions come only
   one number of the fleet summary.
 - **ChannelCard** `{ channel: ChannelView, hosts: HostView[], role: ChannelRole }`: head
   commit and subject, machine count with how many are behind, "Apply newest to all on …"
-  (disabled without a head or machines).
+  (disabled without a head or machines). When `channel.build` is set, a line with the head's
+  build (`buildStyle` in `lib/tones.ts`): icon and text, never colour alone ("Building on the
+  builder…", "Built", "Build failed: hosts"), and an outline `Retry build` button behind
+  `ActGate` when it failed.
 - **PromoteCard** `{ candidate, pair: PromoteChannels, channels }`: between the pair's
   cards, solid accent border; opens **PromoteDialog**, which pins the commit it showed when
   it opened.

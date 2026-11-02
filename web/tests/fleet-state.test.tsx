@@ -15,8 +15,8 @@ import { host, me } from "./helpers";
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   hosts: [host({ name: "desktop" })],
   channels: [
-    { name: "unstable", head: "a".repeat(40), head_subject: "a" },
-    { name: "stable", head: "b".repeat(40), head_subject: "b" },
+    { name: "unstable", head: "a".repeat(40), head_subject: "a", build: null },
+    { name: "stable", head: "b".repeat(40), head_subject: "b", build: null },
   ],
   promote_candidate: null,
   promote: { from: "unstable", to: "stable" },
@@ -43,7 +43,7 @@ describe("reduceSnapshot", () => {
   });
   it("replaces channels and the candidate, keeping the rest", () => {
     const s = snap();
-    const ch: ChannelView[] = [{ name: "unstable", head: null, head_subject: null }];
+    const ch: ChannelView[] = [{ name: "unstable", head: null, head_subject: null, build: null }];
     expect(reduceSnapshot(s, { type: "channels", data: ch })).toEqual({ ...s, channels: ch });
     expect(reduceSnapshot(s, { type: "candidate", data: "c".repeat(40) })).toEqual({
       ...s,
@@ -136,8 +136,8 @@ describe("ConnectionProvider", () => {
   });
 
   const heads = (u: string, s: string): ChannelView[] => [
-    { name: "unstable", head: u.repeat(40), head_subject: null },
-    { name: "stable", head: s.repeat(40), head_subject: null },
+    { name: "unstable", head: u.repeat(40), head_subject: null, build: null },
+    { name: "stable", head: s.repeat(40), head_subject: null, build: null },
   ];
 
   it("asks for the candidate when heads change, and keeps only the newest answer", async () => {

@@ -164,3 +164,10 @@ export function updateResultStyle(result: string): StateStyle & { icon: Icon } {
   if (result === "no-change") return { tone: "neutral", icon: Idle };
   return { tone: "bad", icon: Failed };
 }
+
+/** A channel head's build on the builder (ChannelCard): text and an icon, never colour alone. */
+export const buildStyle: Record<"building" | "ok" | "failed", StateStyle & { icon: Icon }> = {
+  building: { tone: "info", icon: Building, spin: true },
+  ok: { tone: "ok", icon: Applied },
+  failed: { tone: "bad", icon: Failed },
+};

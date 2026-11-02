@@ -82,6 +82,7 @@ export function fakeActions(): Actions & { [K in keyof Actions]: ReturnType<type
     applyChannel: vi.fn(async () => {}),
     promote: vi.fn(async () => true),
     runUpdates: vi.fn(async () => {}),
+    retryBuild: vi.fn(async () => {}),
     showLog: vi.fn(),
     closeLog: vi.fn(),
     fetchLog: vi.fn(),

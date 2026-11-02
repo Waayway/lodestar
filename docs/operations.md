@@ -329,11 +329,15 @@ independently from whichever substituter has it.
   `nix-cache-info` says `Priority: 50`, so clients try cache.nixos.org (40) first.
 - **Publish** (`cache-publish <commit> <store-path>…`, run by the server after a build,
   channel index JSON on stdin): validates the arguments like the server (40-hex commit,
-  plain store paths) and the index, takes `<cacheDir>/.lock`, keeps the closure's
+  plain store paths) and the index, takes `<cacheDir>/.lock`. A given path whose narinfo
+  the cache has already is not looked up in the local store at all (the builder may have
+  collected it): it and the closure the cache has of it (the narinfos' `References`)
+  go into the roots as they are. For the other paths it keeps the closure's
   paths that are `ultimate` (built on this host) or signed with the cache's own key
   (substituted back from this cache after a store GC), and for each one not yet in the cache signs it
   in the local store (`nix store sign`), writes `nar/<filehash>.nar.zst` and
-  `<hash>.narinfo` (both via temp file and rename). It does not use `nix copy`: a file
+  `<hash>.narinfo` (both via temp file and rename; the given paths last, so a top-level
+  narinfo exists only with its built-here closure). It does not use `nix copy`: a file
   cache refuses a path whose references it lacks. Then it **merges** the paths into
   `.roots/<commit>` (a commit is published in several calls when hosts are built in
   different rounds, e.g. after `lodestar build retry`), writes the index to
@@ -351,19 +355,17 @@ independently from whichever substituter has it.
 - **Where**: `cacheDir` (`nix-cache-info`, `*.narinfo`, `nar/`, `.roots/`),
   `journalctl -u lodestar-cache-prune`; publish output lands in the server's build log.
 - **Recovery**: the cache is rebuildable. If it is lost or corrupt, empty `cacheDir`
-  (keep the mount), then on the server remove the gate's index and results and restart:
-  `systemctl stop lodestar-server; rm /var/lib/lodestar-server/builds/*.json;
-  systemctl start lodestar-server`. The prebuild at start builds every channel head on
-  the builder again (instant for what its store still has, real builds for what its GC
-  removed), advances each channel and publishes all its paths. Each channel's `previous`
-  commit is not kept until its next head, and earlier failed results are forgotten (an
-  apply of such a commit builds it again). Clients build or use cache.nixos.org
-  meanwhile. Removing only `channels.json` also republishes every head, without building,
-  but only while the builder's store still has the heads' paths (`cache-publish` fails
-  with "path … is not valid" otherwise, and the prebuild retries with backoff). A narinfo
-  whose NAR is missing: delete the narinfo and recover as above. A new signing key:
-  replace `signingKeyFile`, empty the cache, update the clients' `trusted-public-keys`,
-  recover as above.
+  (keep the mount), then on the server remove the gate's index and restart:
+  `systemctl stop lodestar-server; rm /var/lib/lodestar-server/builds/channels.json;
+  systemctl start lodestar-server`. The prebuild at start finds each channel head built
+  but not in the index, realises every host of the channel on the builder again
+  (instant for what its store still has, rebuilt for what its GC removed), advances the
+  channel and publishes all its paths. A restart alone republishes nothing: the index
+  still names the heads, so the gate has nothing to advance. Each channel's `previous`
+  commit is not kept until its next head. Clients build or use cache.nixos.org
+  meanwhile. A narinfo whose NAR is missing: delete the narinfo and recover as above. A
+  new signing key: replace `signingKeyFile`, empty the cache, update the clients'
+  `trusted-public-keys`, recover as above.
 
 ## Build gate
 
@@ -401,15 +403,23 @@ States of a channel's head (`lodestar build status`, dashboard channel card,
 A build that **could not run** is not a result: when the builder does not answer (the
 cache VM reboots, ssh fails) or the publish fails, nothing is recorded for those hosts
 and an apply is refused with 409 `build of <commit> failed: builder unreachable: …` or
-`build of <commit> failed: publish failed: …` (audit `apply-refused` with `error`). Just
-apply again once the builder is back; no retry is needed. The prebuild and the re-send
-try such a commit again on their own after a pause per channel and commit that doubles
-from 30 s to 10 min (checked at each mirror fetch and poll).
+`build of <commit> failed: publish failed: …` (audit `apply-refused` with `error`). No
+`lodestar build retry` is needed: the next apply builds and publishes those hosts again,
+and the prebuild and the re-send try such a commit again on their own after a pause per
+channel and commit that doubles from 30 s to 10 min (checked at each mirror fetch and
+poll).
 
 The channel index (what the cache keeps) moves to a commit only when it is the channel's
 current head and every Linux host of the channel is ok there; each move publishes every
 path of the channel again, so the cache has the whole head even when its hosts were
-built in several rounds (an updater bump, a retry).
+built in several rounds (an updater bump, a retry, a channel reset to an earlier
+commit). The builder keeps no GC roots for published paths, so before such a move the
+gate **realises every host of the channel again** on the builder, in the same call as
+any host still to build (instant for what its store still has, a rebuild or a
+substitution from the cache otherwise), and only then publishes. That call counts like
+a build: an unreachable builder records nothing and the channel does not move (409,
+backoff as above); a host that fails now is recorded as failed. Once the index names the
+commit, later prebuilds and applies of it neither build nor publish.
 
 Files in `/var/lib/lodestar-server/builds/`:
 

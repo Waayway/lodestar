@@ -118,6 +118,7 @@ pub async fn start(
     let proxy = config.proxy.clone();
     let metrics = config.metrics.clone();
     let mut state = AppState::new(Arc::new(config), connection, mirror, online, hosts)?;
+    state.builds.clear_stale_work(&state.mirror).await;
     state.links = Arc::new(links);
     state.demo = demo;
     if let Some(proxy) = &proxy {

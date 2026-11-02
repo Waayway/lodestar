@@ -1223,3 +1223,24 @@ async fn an_unreachable_prebuild_backs_off_then_retries() {
     assert!(!state.build_backoff.waiting("unstable", &commit));
     assert!(prebuild_new_heads(state).await.is_empty());
 }
+
+#[tokio::test]
+async fn stale_build_worktrees_are_removed_at_start() {
+    let fixture = fixture().await;
+    let state = &fixture.state;
+    let work = fixture.builds_dir().join("work");
+    // A server killed mid-build leaves its worktree (registered in the mirror) and stray files.
+    state
+        .mirror
+        .worktree_at(&fixture.commit, &work.join(&fixture.commit))
+        .await
+        .unwrap();
+    std::fs::create_dir_all(work.join("junk")).unwrap();
+    let mirror = state.config.state_dir.join("mirror.git");
+    let worktrees = || git(&mirror, &["worktree", "list", "--porcelain"]);
+    assert!(worktrees().contains(&fixture.commit));
+
+    state.builds.clear_stale_work(&state.mirror).await;
+    assert!(!work.exists() || std::fs::read_dir(&work).unwrap().next().is_none());
+    assert!(!worktrees().contains(&fixture.commit), "{}", worktrees());
+}

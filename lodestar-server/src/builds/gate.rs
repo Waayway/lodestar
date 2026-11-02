@@ -17,6 +17,7 @@ use super::channel_heads::ChannelHeads;
 use super::result_file::{BuildResult, HostResult, is_built_here};
 use crate::clock;
 use crate::config::ManagedHost;
+use crate::mirror::Mirror;
 use crate::state::AppState;
 
 /// How long a result file is kept after it was last written, unless a channel still points at it.
@@ -331,6 +332,22 @@ impl BuildGate {
             self.write_result(&result)?;
         }
         Ok(failed)
+    }
+
+    /// At server start, before any build: removes what a server that died mid-build left in
+    /// `builds/work/` and prunes the mirror's registrations of those worktrees. Errors are
+    /// logged; this is cleanup.
+    pub async fn clear_stale_work(&self, mirror: &Mirror) {
+        let work = self.dir.join("work");
+        match std::fs::remove_dir_all(&work) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => eprintln!(
+                "lodestar-server: removing stale build worktrees in {}: {error}",
+                work.display()
+            ),
+        }
+        mirror.prune_worktrees().await;
     }
 
     /// The recorded result of `commit`, if there is a readable one.

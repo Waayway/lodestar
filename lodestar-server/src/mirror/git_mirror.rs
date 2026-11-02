@@ -411,6 +411,12 @@ impl Mirror {
         self.remove_worktree_locked(dir).await;
     }
 
+    /// Forgets worktrees whose directories are gone (`git worktree prune`). Errors are ignored.
+    pub async fn prune_worktrees(&self) {
+        let _guard = self.write_lock.lock().await;
+        let _ = self.git(["worktree", "prune"]).await;
+    }
+
     async fn remove_worktree_locked(&self, dir: &Path) {
         let _ = self
             .git([

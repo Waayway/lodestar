@@ -351,14 +351,17 @@ independently from whichever substituter has it.
 - **Where**: `cacheDir` (`nix-cache-info`, `*.narinfo`, `nar/`, `.roots/`),
   `journalctl -u lodestar-cache-prune`; publish output lands in the server's build log.
 - **Recovery**: the cache is rebuildable. If it is lost or corrupt, empty `cacheDir`
-  (keep the mount), then on the server remove the gate's index and restart:
-  `systemctl stop lodestar-server; rm /var/lib/lodestar-server/builds/channels.json;
-  systemctl start lodestar-server`. The prebuild at start finds every channel head
-  built but not in the index, advances the channel and republishes all its paths
-  (nothing is built again unless the builder's store lost them; then they are rebuilt
-  there). Each channel's `previous` commit is gone until its next head. Clients build or
-  use cache.nixos.org meanwhile. A narinfo whose NAR is missing: delete the narinfo, the
-  same recovery (or the next advance of that channel) rewrites it. A new signing key:
+  (keep the mount), then on the server remove the gate's index and results and restart:
+  `systemctl stop lodestar-server; rm /var/lib/lodestar-server/builds/*.json;
+  systemctl start lodestar-server`. The prebuild at start builds every channel head on
+  the builder again (instant for what its store still has, real builds for what its GC
+  removed), advances each channel and publishes all its paths. Each channel's `previous`
+  commit is not kept until its next head, and earlier failed results are forgotten (an
+  apply of such a commit builds it again). Clients build or use cache.nixos.org
+  meanwhile. Removing only `channels.json` also republishes every head, without building,
+  but only while the builder's store still has the heads' paths (`cache-publish` fails
+  with "path … is not valid" otherwise, and the prebuild retries with backoff). A narinfo
+  whose NAR is missing: delete the narinfo and recover as above. A new signing key:
   replace `signingKeyFile`, empty the cache, update the clients' `trusted-public-keys`,
   recover as above.
 

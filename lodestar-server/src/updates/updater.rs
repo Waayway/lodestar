@@ -11,6 +11,7 @@ use super::run_guard::RunGuard;
 use super::update_run::{UpdateOutcome, UpdateRun, VersionChange};
 use super::updates_state::AlreadyRunning;
 use super::version::compare_versions;
+use crate::builds::is_built_here;
 use crate::clock;
 use crate::config::ManagedHost;
 use crate::db::{insert_audit, recent_audit_of_kind};
@@ -55,7 +56,7 @@ pub async fn run_all_locked(state: &AppState, running: RunGuard) -> Vec<UpdateRu
 /// One run for `input`; only `software` counts as a change. The result is recorded as an
 /// audit event and as the input's last run. The worktree is removed afterwards.
 pub async fn run_input(state: &AppState, input: &str, software: &[String]) -> UpdateRun {
-    let (outcome, note) = if valid_input(input) {
+    let (outcome, extra) = if valid_input(input) {
         let dir = state.config.state_dir.join("updater").join(input);
         let result = attempt(state, input, software, &dir).await;
         state.mirror.remove_worktree(&dir).await;
@@ -76,8 +77,8 @@ pub async fn run_input(state: &AppState, input: &str, software: &[String]) -> Up
         outcome,
     };
     let mut details = run.details();
-    if let Some(note) = note {
-        details["note"] = note.into();
+    if let Some((key, value)) = extra {
+        details[key] = value.into();
     }
     eprintln!("lodestar-server: update {input}: {}", run.outcome.result());
     if let Err(error) = insert_audit(
@@ -139,13 +140,13 @@ fn valid_host_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
-/// Steps 1-6 in the worktree at `dir`; the second value is an audit note.
+/// Steps 1-6 in the worktree at `dir`; the second value is an extra audit detail (key, value).
 async fn attempt(
     state: &AppState,
     input: &str,
     software: &[String],
     dir: &Path,
-) -> (UpdateOutcome, Option<&'static str>) {
+) -> (UpdateOutcome, Option<(&'static str, &'static str)>) {
     let channel = &state.config.updates.channel;
     // 1. Fresh worktree of the channel head (the mirror fetches first).
     if let Some(parent) = dir.parent()
@@ -201,13 +202,38 @@ async fn attempt(
     };
     let comparison = compare(&state.hosts, &before, &after, software);
     if comparison.downgrade {
-        return (UpdateOutcome::NoChange, Some("downgrade"));
+        return (UpdateOutcome::NoChange, Some(("note", "downgrade")));
     }
     if comparison.changes.is_empty() {
         return (UpdateOutcome::NoChange, None);
     }
-    // 5. Build every host whose tracked versions changed.
+    // 5. Build every host whose tracked versions changed. With the build gate the Linux hosts
+    // build on the builder in one call (darwin hosts are only evaluated here); the results are
+    // recorded for the pushed commit below.
+    let gated = state.config.builds.enable;
+    let mut built = BTreeMap::new();
+    if gated {
+        let linux: Vec<ManagedHost> = comparison
+            .changed_hosts
+            .iter()
+            .filter(|host| is_built_here(host))
+            .map(|host| (*host).clone())
+            .collect();
+        built = state.builds.build_dir(state, dir, &linux).await;
+        // BTreeMap order: the first failed host by name.
+        if let Some((host, result)) = built.iter().find(|(_, result)| !result.ok) {
+            let log = result.log_tail.clone().unwrap_or_default();
+            let outcome = UpdateOutcome::BuildFailed {
+                host: host.clone(),
+                log: log_tail(&log),
+            };
+            return (outcome, None);
+        }
+    }
     for host in &comparison.changed_hosts {
+        if gated && is_built_here(host) {
+            continue;
+        }
         if let Err(log) = state.nix.build(dir, host).await {
             let outcome = UpdateOutcome::BuildFailed {
                 host: host.name.clone(),
@@ -230,7 +256,30 @@ async fn attempt(
             reason: format!("push failed: {error}"),
         },
     };
-    (outcome, None)
+    let mut extra = None;
+    if gated
+        && !built.is_empty()
+        && let UpdateOutcome::Pushed { commit, .. } = &outcome
+    {
+        // The commit is on the remote already: a failed record keeps the outcome and shows in
+        // the audit; the next prebuild or apply of the commit refuses, `build --retry` recovers.
+        let names: Vec<String> = built.keys().cloned().collect();
+        match state.builds.record_built(state, commit, built).await {
+            Ok(result)
+                if names
+                    .iter()
+                    .all(|name| result.hosts.get(name).is_some_and(|h| h.ok)) => {}
+            Ok(_) => {
+                eprintln!("lodestar-server: update {input}: publishing {commit} failed");
+                extra = Some(("publish", "failed"));
+            }
+            Err(error) => {
+                eprintln!("lodestar-server: update {input}: recording {commit}: {error:#}");
+                extra = Some(("publish", "failed"));
+            }
+        }
+    }
+    (outcome, extra)
 }
 
 /// Tracked versions (only `software`) of every host; the first failing host stops it.

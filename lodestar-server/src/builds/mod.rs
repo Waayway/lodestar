@@ -13,4 +13,5 @@ pub use channel_gate::{build_channel, known_failures, skips_gate};
 pub use channel_heads::ChannelHeads;
 pub use gate::BuildGate;
 pub use prebuild::{PrebuildQueue, prebuild_new_heads, spawn_prebuild};
+pub(crate) use result_file::is_built_here;
 pub use result_file::{BuildResult, HostResult};

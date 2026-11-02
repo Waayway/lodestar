@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use lodestar_server::builds::{Builder, HostBuild};
 use lodestar_server::config::{
     AccessConfig, ManagedHost, OnlineSource, ServerConfig, SoftwareConfig, UpdatesConfig, Upstream,
 };
@@ -133,6 +134,10 @@ impl Fixture {
 }
 
 async fn fixture() -> Fixture {
+    fixture_with(false).await
+}
+
+async fn fixture_with(builds: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let origin = Origin::new(dir.path());
     std::fs::write(origin.work.join("flake.lock"), OLD_LOCK).unwrap();
@@ -166,7 +171,10 @@ async fn fixture() -> Fixture {
             )]),
             ..Default::default()
         },
-        builds: Default::default(),
+        builds: lodestar_server::config::BuildsConfig {
+            enable: builds,
+            ..Default::default()
+        },
         metrics: None,
         nix_bin: "nix".into(),
     };
@@ -699,5 +707,141 @@ fn audit_details_round_trip() {
     assert_eq!(
         UpdateRun::from_details(1, &serde_json::json!({"input": INPUT, "result": "other"})),
         None
+    );
+}
+
+// ---- builds.enable: the updater builds through the gate ----
+
+fn bumped(failing: &[&str]) -> FakeNix {
+    FakeNix {
+        new_lock: Some(NEW_LOCK.into()),
+        before: before(),
+        after: HashMap::from([
+            ("a".into(), Ok(versions(&[("tailscale", "1.104.2")]))),
+            ("b".into(), Ok(versions(&[("tailscale", "1.104.2")]))),
+        ]),
+        failing_builds: failing.iter().map(|name| name.to_string()).collect(),
+        ..Default::default()
+    }
+}
+
+/// Wraps the support fake; publishing can be made to fail.
+struct PublishFails(support::FakeBuilder);
+
+#[async_trait]
+impl Builder for PublishFails {
+    async fn build(&self, dir: &Path, hosts: &[ManagedHost]) -> BTreeMap<String, HostBuild> {
+        self.0.build(dir, hosts).await
+    }
+
+    async fn publish(
+        &self,
+        _commit: &str,
+        _paths: &[String],
+        _channels: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("cache unreachable")
+    }
+}
+
+#[tokio::test]
+async fn enabled_builds_changed_linux_hosts_through_the_gate_and_records_the_push() {
+    let mut fixture = fixture_with(true).await;
+    let nix = install(&mut fixture, bumped(&[]));
+    let builder = Arc::new(support::FakeBuilder::default());
+    fixture.state.builder = builder.clone();
+    let run = run_input(&fixture.state, INPUT, &software()).await;
+    let UpdateOutcome::Pushed { commit, .. } = &run.outcome else {
+        panic!("expected Pushed, got {:?}", run.outcome);
+    };
+    // Linux through the gate in one call, darwin through the eval-only build.
+    let calls = builder.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1, vec!["a".to_string()]);
+    assert_eq!(*nix.built.lock().unwrap(), vec!["b".to_string()]);
+    // The pushed commit has its result, so nothing builds it again.
+    let result = fixture.state.builds.read(commit).expect("result recorded");
+    assert!(result.hosts["a"].ok);
+    assert!(!result.hosts.contains_key("b"));
+    let hosts = fixture.state.hosts.clone();
+    fixture
+        .state
+        .builds
+        .ensure_built(&fixture.state, commit, &hosts)
+        .await
+        .unwrap();
+    assert_eq!(builder.calls().len(), 1);
+    let audits = update_audits(&fixture.state).await;
+    assert!(audits[0].get("publish").is_none());
+}
+
+#[tokio::test]
+async fn enabled_failed_linux_host_pushes_and_records_nothing() {
+    let mut fixture = fixture_with(true).await;
+    install(&mut fixture, bumped(&[]));
+    fixture.state.builder = Arc::new(support::FakeBuilder::failing(&["a"]));
+    let run = run_input(&fixture.state, INPUT, &software()).await;
+    assert_eq!(
+        run.outcome,
+        UpdateOutcome::BuildFailed {
+            host: "a".into(),
+            log: "error: builder said no".into()
+        }
+    );
+    assert_eq!(fixture.remote_head(), fixture.base);
+    let builds = fixture.state_dir().join("builds");
+    let recorded = std::fs::read_dir(&builds)
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        })
+        .unwrap_or(false);
+    assert!(!recorded);
+}
+
+#[tokio::test]
+async fn enabled_failed_darwin_eval_still_blocks_the_push() {
+    let mut fixture = fixture_with(true).await;
+    let nix = install(&mut fixture, bumped(&["b"]));
+    fixture.state.builder = Arc::new(support::FakeBuilder::default());
+    let run = run_input(&fixture.state, INPUT, &software()).await;
+    assert!(matches!(
+        run.outcome,
+        UpdateOutcome::BuildFailed { ref host, .. } if host == "b"
+    ));
+    assert_eq!(*nix.built.lock().unwrap(), vec!["b".to_string()]);
+    assert_eq!(fixture.remote_head(), fixture.base);
+}
+
+#[tokio::test]
+async fn enabled_publish_failure_keeps_pushed_and_marks_the_audit() {
+    let mut fixture = fixture_with(true).await;
+    install(&mut fixture, bumped(&[]));
+    fixture.state.builder = Arc::new(PublishFails(support::FakeBuilder::default()));
+    let run = run_input(&fixture.state, INPUT, &software()).await;
+    let UpdateOutcome::Pushed { commit, .. } = &run.outcome else {
+        panic!("expected Pushed, got {:?}", run.outcome);
+    };
+    assert_eq!(&fixture.remote_head(), commit);
+    let audits = update_audits(&fixture.state).await;
+    assert_eq!(audits[0]["result"], "pushed");
+    assert_eq!(audits[0]["publish"], "failed");
+    let result = fixture.state.builds.read(commit).expect("result recorded");
+    assert!(!result.hosts["a"].ok);
+}
+
+#[tokio::test]
+async fn disabled_never_touches_the_builder() {
+    let mut fixture = fixture().await;
+    let nix = install(&mut fixture, bumped(&[]));
+    let builder = Arc::new(support::FakeBuilder::default());
+    fixture.state.builder = builder.clone();
+    let run = run_input(&fixture.state, INPUT, &software()).await;
+    assert!(matches!(run.outcome, UpdateOutcome::Pushed { .. }));
+    assert!(builder.calls().is_empty());
+    assert_eq!(
+        *nix.built.lock().unwrap(),
+        vec!["a".to_string(), "b".to_string()]
     );
 }

@@ -12,21 +12,13 @@ pub struct ChannelHeads {
 
 impl ChannelHeads {
     /// The entry after `commit` became the channel's newest good build: the old current commit
-    /// moves to previous. `None` when `commit` is already current or previous (a retry's rebuild
-    /// does not move the channel).
-    pub fn advance(heads: Option<&ChannelHeads>, commit: &str) -> Option<ChannelHeads> {
-        match heads {
-            Some(heads) if heads.current == commit || heads.previous.as_deref() == Some(commit) => {
-                None
-            }
-            Some(heads) => Some(ChannelHeads {
-                current: commit.to_string(),
-                previous: Some(heads.current.clone()),
-            }),
-            None => Some(ChannelHeads {
-                current: commit.to_string(),
-                previous: None,
-            }),
+    /// moves to previous (also when `commit` was the previous one: the channel went back).
+    pub fn advance(heads: Option<&ChannelHeads>, commit: &str) -> ChannelHeads {
+        ChannelHeads {
+            current: commit.to_string(),
+            previous: heads
+                .map(|heads| heads.current.clone())
+                .filter(|current| current != commit),
         }
     }
 }

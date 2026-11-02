@@ -262,7 +262,8 @@ async fn attempt(
         && let UpdateOutcome::Pushed { commit, .. } = &outcome
     {
         // The commit is on the remote already: a failed record keeps the outcome and shows in
-        // the audit; the next prebuild or apply of the commit refuses, `build --retry` recovers.
+        // the audit. A failed publish records nothing, so the next prebuild (or apply) of the
+        // commit builds it again (already on the builder store) and publishes it.
         let names: Vec<String> = built.keys().cloned().collect();
         match state.builds.record_built(state, commit, built).await {
             Ok(result)

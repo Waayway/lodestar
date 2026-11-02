@@ -1,7 +1,7 @@
 //! The build gate: one build per commit, guarded by `state_dir/builds/<commit>.lock` and recorded
 //! in `state_dir/builds/<commit>.json`.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
 use std::os::unix::fs::MetadataExt;
@@ -12,6 +12,7 @@ use anyhow::{Context, bail};
 use lodestar_proto::is_commit_hash;
 use tokio::task::JoinHandle;
 
+use super::builder::is_unreachable;
 use super::channel_heads::ChannelHeads;
 use super::result_file::{BuildResult, HostResult, is_built_here};
 use crate::clock;
@@ -31,6 +32,10 @@ type ChannelIndex = BTreeMap<String, ChannelHeads>;
 /// the updater, `build_dir` + `record_built`). The lock is an exclusive `flock`, so a server that dies
 /// mid-build releases it with the process; results are written atomically after build and
 /// publish returned, so a crash leaves either no result or a complete one.
+///
+/// A channel's entry in the index (`channels.json`, what the cache keeps) only ever moves to the
+/// channel's current mirror head, once every Linux host of the channel is built there; whenever it
+/// moves, every path of the channel at that commit is published again.
 #[derive(Clone, Debug)]
 pub struct BuildGate {
     /// `state_dir/builds`.
@@ -90,8 +95,13 @@ impl BuildGate {
             .read(commit)
             .unwrap_or_else(|| BuildResult::empty(commit));
         let missing = result.missing(hosts);
+        let channels = channels_of(hosts);
         if missing.is_empty() {
-            return Ok(result);
+            // Built already; the channel may still have to advance to it (it became the head
+            // after it was recorded, or an earlier publish failed).
+            return self
+                .publish_and_write(state, result, BTreeMap::new(), &channels)
+                .await;
         }
         // A corrupt index would fail the publish step; fail before spending a build on it.
         self.read_index()?;
@@ -114,9 +124,16 @@ impl BuildGate {
             Err(error) if error.is_panic() => bail!("builder panicked while building {commit}"),
             Err(error) => bail!("build of {commit} was cancelled: {error}"),
         };
+        // Not reaching the builder says nothing about the commit: those hosts stay missing, so
+        // the next call builds them again.
+        let unreachable = builds
+            .values()
+            .find(|build| is_unreachable(build))
+            .and_then(|build| build.log_tail.clone());
         let built_at = clock::now();
         let built: BTreeMap<String, HostResult> = missing
             .iter()
+            .filter(|host| !builds.get(&host.name).is_some_and(is_unreachable))
             .map(|host| {
                 let result = match builds.get(&host.name) {
                     Some(build) if build.ok && build.path.is_none() => {
@@ -133,69 +150,89 @@ impl BuildGate {
                 (host.name.clone(), result)
             })
             .collect();
-        self.publish_and_write(state, result, built, hosts).await
+        let result = self
+            .publish_and_write(state, result, built, &channels)
+            .await?;
+        match unreachable {
+            Some(reason) => Err(anyhow::Error::msg(reason)),
+            None => Ok(result),
+        }
     }
 
-    /// Under the commit's lock: publishes the ok paths of the hosts in `built` that `result`
-    /// has no entry for yet (recorded results are final), merges them into `result` (a failed
-    /// publish turns them into failures) and writes it. The channel of `hosts` advances to the
-    /// commit only when every one of them is ok and the publish succeeded.
+    /// Under the commit's lock: merges the hosts in `built` that `result` has no entry for yet
+    /// (recorded results are final) into `result`, advances every channel in `channels` whose
+    /// Linux hosts are all ok at the commit when the commit is that channel's mirror head and
+    /// not its current build yet, and publishes the new ok paths plus every ok path of the
+    /// advanced channels (the cache may have pruned them). Writes the result and the index only
+    /// after the publish succeeded; a failed publish records nothing and is an error.
     async fn publish_and_write(
         &self,
         state: &AppState,
         mut result: BuildResult,
         mut built: BTreeMap<String, HostResult>,
-        hosts: &[ManagedHost],
+        channels: &BTreeSet<String>,
     ) -> anyhow::Result<BuildResult> {
         let commit = result.commit.clone();
         built.retain(|name, _| !result.hosts.contains_key(name));
         let _index_lock = self.lock(self.dir.join(INDEX_LOCK_FILE)).await?;
         let mut index = self.read_index()?;
-        let all_ok = hosts.iter().all(|host| {
-            result
-                .hosts
-                .get(&host.name)
-                .or_else(|| built.get(&host.name))
-                .is_some_and(|host_result| host_result.ok)
-        });
-        let advanced = single_channel(hosts)
-            .filter(|_| all_ok)
-            .and_then(|channel| {
-                ChannelHeads::advance(index.get(channel), &commit)
-                    .map(|heads| (channel.to_string(), heads))
-            });
-        if let Some((channel, heads)) = &advanced {
-            index.insert(channel.clone(), heads.clone());
-        }
-        let paths: Vec<String> = built
+        result.hosts.extend(built.clone());
+
+        let mut paths: BTreeSet<String> = built
             .values()
             .filter(|host_result| host_result.ok)
             .filter_map(|host_result| host_result.path.clone())
             .collect();
-        let mut published = false;
+        let mut advanced = false;
+        for channel in channels {
+            let channel_hosts: Vec<&ManagedHost> = state
+                .hosts
+                .iter()
+                .filter(|host| &host.channel == channel && is_built_here(host))
+                .collect();
+            let all_ok = !channel_hosts.is_empty()
+                && channel_hosts.iter().all(|host| {
+                    result
+                        .hosts
+                        .get(&host.name)
+                        .is_some_and(|host_result| host_result.ok)
+                });
+            if !all_ok
+                || index
+                    .get(channel)
+                    .is_some_and(|heads| heads.current == commit)
+            {
+                continue;
+            }
+            if state.mirror.head(channel).await.as_deref() != Some(commit.as_str()) {
+                continue;
+            }
+            let heads = ChannelHeads::advance(index.get(channel), &commit);
+            index.insert(channel.clone(), heads);
+            advanced = true;
+            paths.extend(
+                channel_hosts
+                    .iter()
+                    .filter_map(|host| result.hosts.get(&host.name))
+                    .filter_map(|host_result| host_result.path.clone()),
+            );
+        }
         if !paths.is_empty() {
+            let paths: Vec<String> = paths.into_iter().collect();
             let channels = serde_json::to_value(&index)?;
-            match state.builder.publish(&commit, &paths, &channels).await {
-                Ok(()) => published = true,
-                Err(error) => {
-                    let reason = format!("publish failed: {error:#}");
-                    for host_result in built.values_mut().filter(|host_result| host_result.ok) {
-                        host_result.ok = false;
-                        host_result.log_tail = Some(reason.clone());
-                    }
-                }
+            if let Err(error) = state.builder.publish(&commit, &paths, &channels).await {
+                bail!("publish failed: {error:#}");
             }
         }
-        result.hosts.extend(built);
-        self.write_result(&result)?;
-        if published
-            && advanced.is_some()
-            && let Err(error) = write_atomically(
+        if !built.is_empty() {
+            self.write_result(&result)?;
+        }
+        if advanced {
+            write_atomically(
                 &self.dir.join(INDEX_FILE),
                 &serde_json::to_vec_pretty(&index)?,
             )
-        {
-            eprintln!("lodestar-server: writing the build channel index failed: {error:#}");
+            .context("writing the build channel index after publishing")?;
         }
         Ok(result)
     }
@@ -233,7 +270,8 @@ impl BuildGate {
 
     /// Records the updater's `build_dir` results for `commit` like `ensure_built` records its
     /// own: under the lock, hosts that have a result already keep it, the new ok paths are
-    /// published and the hosts' channel advances when all of them are ok.
+    /// published and each channel of the recorded hosts advances when the commit is its head and
+    /// all its Linux hosts are ok.
     ///
     /// The updater pushes the commit before calling this, so a prebuild after a mirror fetch in
     /// between may build the same commit once more; that is harmless (same derivations, already
@@ -257,19 +295,15 @@ impl BuildGate {
                 let result = gate
                     .read(&task_commit)
                     .unwrap_or_else(|| BuildResult::empty(&task_commit));
-                // The channel advances only when every recorded host is known and on one channel.
+                // Every channel of a recorded host may advance (an update bumps hosts of
+                // several channels at once).
                 let hosts: Vec<ManagedHost> = task_state
                     .hosts
                     .iter()
                     .filter(|host| results.contains_key(&host.name) && is_built_here(host))
                     .cloned()
                     .collect();
-                let hosts = if hosts.len() == results.len() {
-                    hosts
-                } else {
-                    Vec::new()
-                };
-                gate.publish_and_write(&task_state, result, results, &hosts)
+                gate.publish_and_write(&task_state, result, results, &channels_of(&hosts))
                     .await
             }),
         )
@@ -473,13 +507,13 @@ fn failed(reason: &str, built_at: i64) -> HostResult {
     }
 }
 
-/// The channel all `hosts` follow, when they share one.
-fn single_channel(hosts: &[ManagedHost]) -> Option<&str> {
-    let first = &hosts.first()?.channel;
+/// The channels of the Linux hosts among `hosts`.
+fn channels_of(hosts: &[ManagedHost]) -> BTreeSet<String> {
     hosts
         .iter()
-        .all(|host| &host.channel == first)
-        .then_some(first.as_str())
+        .filter(|host| is_built_here(host))
+        .map(|host| host.channel.clone())
+        .collect()
 }
 
 /// Awaits the locked work on `commit`; a panic there (its locks are released by then) is an

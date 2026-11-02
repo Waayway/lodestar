@@ -24,6 +24,16 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Nix's base-32 alphabet, which store path hashes use.
 const NIX_BASE32: &str = "0123456789abcdfghijklmnpqrsvwxyz";
 
+/// Whether `build` failed because the builder could not be reached (its store did not answer
+/// after the build failed), not because of the commit.
+pub(crate) fn is_unreachable(build: &HostBuild) -> bool {
+    !build.ok
+        && build
+            .log_tail
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with(UNREACHABLE))
+}
+
 /// The outcome of building one host's system.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostBuild {

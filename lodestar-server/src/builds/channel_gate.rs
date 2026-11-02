@@ -53,6 +53,11 @@ pub async fn build_channel(
         return Ok(Vec::new());
     };
     if let Some(failed) = known_failures(state, channel, commit) {
+        if failed.is_empty() {
+            // Built already: the gate still advances the channel to it (and publishes) when it
+            // is the head and the index lags behind; that needs no building state.
+            state.builds.ensure_built(state, commit, &hosts).await?;
+        }
         return Ok(failed);
     }
     let task_state = state.clone();

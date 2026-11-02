@@ -143,6 +143,23 @@ impl Fixture {
 }
 
 async fn fixture() -> Fixture {
+    fixture_with_hosts(vec![
+        host("a", "linux"),
+        host("b", "linux"),
+        host("c", "darwin"),
+    ])
+    .await
+}
+
+/// `host` on `channel`.
+fn on(channel: &str, host: ManagedHost) -> ManagedHost {
+    ManagedHost {
+        channel: channel.into(),
+        ..host
+    }
+}
+
+async fn fixture_with_hosts(hosts: Vec<ManagedHost>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let origin = Origin::new(dir.path());
     std::fs::write(origin.work.join("flake.lock"), "{}\n").unwrap();
@@ -177,7 +194,6 @@ async fn fixture() -> Fixture {
     let connection = db::connect(&config.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());
     let online = Arc::new(StaticOnline::new(&HashMap::new()).unwrap());
-    let hosts = vec![host("a", "linux"), host("b", "linux"), host("c", "darwin")];
     let state = AppState::new(Arc::new(config), connection, mirror, online, hosts).unwrap();
     Fixture {
         state,
@@ -213,9 +229,18 @@ fn lock_file(path: &Path) -> std::fs::File {
     file
 }
 
+/// Whether `path`'s lock can be taken within two seconds. Another test's child process may hold
+/// a copy of the descriptor for a moment between its fork and exec, so one attempt can fail.
 fn lock_is_free(path: &Path) -> bool {
     let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
-    file.try_lock().is_ok()
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while file.try_lock().is_err() {
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
 }
 
 fn set_age(path: &Path, now: i64, days: i64) {
@@ -359,14 +384,15 @@ async fn only_missing_hosts_are_built() {
     );
     assert_eq!(result.hosts.keys().collect::<Vec<_>>(), vec!["a", "b"]);
     assert_eq!(result.hosts["a"].built_at, 1, "existing entry kept");
-    // Each call published only its new path, with the channel index.
+    // The record published its new path (the channel still missed b); the build of b advanced
+    // the channel and published every host of it, with the channel index.
     let published = builder.published.lock().unwrap();
     let index = serde_json::json!({ "unstable": { "current": fixture.commit, "previous": null } });
     assert_eq!(published.len(), 2);
     assert_eq!(published[0].0, fixture.commit);
     assert_eq!(published[0].1, vec![store_path("a")]);
-    assert_eq!(published[0].2, index);
-    assert_eq!(published[1].1, vec![store_path("b")]);
+    assert_eq!(published[0].2, serde_json::json!({}));
+    assert_eq!(published[1].1, vec![store_path("a"), store_path("b")]);
     assert_eq!(published[1].2, index);
 }
 
@@ -413,27 +439,24 @@ async fn recorded_commits_are_published_once() {
         "nothing published again"
     );
 
-    // A failing publish fails the recorded hosts.
+    // A failing publish records nothing and is an error.
     let failing = fixture.install(FakeBuilder {
         publish_error: Some("publishing failed: disk full".into()),
         ..Default::default()
     });
     let state = &fixture.state;
     let other = "a".repeat(40);
-    let result = state
+    let error = state
         .builds
         .record_built(state, &other, BTreeMap::from([("a".to_string(), ok("a"))]))
         .await
-        .unwrap();
+        .unwrap_err();
     assert_eq!(failing.published.lock().unwrap().len(), 1);
-    assert_eq!(result.failed_hosts(&linux_hosts()), vec!["a"]);
     assert!(
-        result.hosts["a"]
-            .log_tail
-            .as_deref()
-            .unwrap()
-            .starts_with("publish failed: ")
+        format!("{error:#}").starts_with("publish failed: "),
+        "{error:#}"
     );
+    assert!(state.builds.read(&other).is_none());
     assert!(
         state
             .builds
@@ -476,13 +499,13 @@ async fn no_partial_result_on_error() {
             .exists()
     );
 
-    // A failing publish: the built hosts are recorded as failed.
+    // A failing publish: nothing is recorded, the hosts stay missing and the call is an error.
     let failing = fixture.install(FakeBuilder {
         publish_error: Some("builder unreachable: ssh: connect refused".into()),
         ..Default::default()
     });
     let state = &fixture.state;
-    let result = tokio::time::timeout(
+    let error = tokio::time::timeout(
         Duration::from_secs(10),
         state
             .builds
@@ -490,18 +513,27 @@ async fn no_partial_result_on_error() {
     )
     .await
     .unwrap()
-    .unwrap();
+    .unwrap_err();
     assert_eq!(failing.count(), 1);
-    assert_eq!(result.failed_hosts(&linux_hosts()), vec!["a", "b"]);
-    for name in ["a", "b"] {
-        let tail = result.hosts[name].log_tail.as_deref().unwrap();
-        assert!(tail.starts_with("publish failed: "), "{tail}");
-        assert!(tail.contains("builder unreachable"), "{tail}");
-    }
-    assert_eq!(
-        serde_json::to_value(state.builds.read(&fixture.commit).unwrap()).unwrap(),
-        serde_json::to_value(&result).unwrap()
+    let message = format!("{error:#}");
+    assert!(
+        message.starts_with("publish failed: builder unreachable"),
+        "{message}"
     );
+    assert!(!result_path.exists());
+    assert!(lock_is_free(&lock_path));
+
+    // Once publishing works again, the next call builds and records them.
+    let back = fixture.install(FakeBuilder::default());
+    let state = &fixture.state;
+    let result = state
+        .builds
+        .ensure_built(state, &fixture.commit, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(back.count(), 1);
+    assert!(result.failed_hosts(&linux_hosts()).is_empty());
+    assert!(result.missing(&linux_hosts()).is_empty());
 }
 
 #[tokio::test]
@@ -537,44 +569,36 @@ async fn darwin_hosts_are_never_built() {
 }
 
 #[tokio::test]
-async fn builder_unreachable_is_a_failure_for_every_host() {
+async fn builder_unreachable_is_not_recorded() {
     let mut fixture = fixture().await;
     let unreachable = fixture.install(FakeBuilder {
         fail_all: Some("builder unreachable: error: cannot connect to 'alice@example.com'".into()),
         ..Default::default()
     });
     let state = fixture.state.clone();
-    let result = state
+    let error = state
         .builds
         .ensure_built(&state, &fixture.commit, &linux_hosts())
         .await
-        .unwrap();
-    assert_eq!(result.failed_hosts(&linux_hosts()), vec!["a", "b"]);
-    for name in ["a", "b"] {
-        assert!(
-            result.hosts[name]
-                .log_tail
-                .as_deref()
-                .unwrap()
-                .starts_with("builder unreachable")
-        );
-    }
+        .unwrap_err();
+    assert_eq!(
+        format!("{error:#}"),
+        "builder unreachable: error: cannot connect to 'alice@example.com'"
+    );
+    assert!(state.builds.read(&fixture.commit).is_none());
     assert!(unreachable.published.lock().unwrap().is_empty());
 
-    // Results are final: calling again builds nothing.
-    state
-        .builds
-        .ensure_built(&state, &fixture.commit, &linux_hosts())
-        .await
-        .unwrap();
-    assert_eq!(unreachable.count(), 1);
-
-    // Retry removes the failed hosts; the next call builds them again.
-    assert_eq!(
-        state.builds.retry(&fixture.commit).await.unwrap(),
-        vec!["a", "b"]
+    // Not final: the next call tries again.
+    assert!(
+        state
+            .builds
+            .ensure_built(&state, &fixture.commit, &linux_hosts())
+            .await
+            .is_err()
     );
-    assert!(state.builds.read(&fixture.commit).unwrap().hosts.is_empty());
+    assert_eq!(unreachable.count(), 2);
+
+    // A real failure among them is recorded; the unreachable hosts stay missing.
     let back = fixture.install(FakeBuilder::default());
     let state = &fixture.state;
     let result = state
@@ -593,6 +617,41 @@ async fn builder_unreachable_is_a_failure_for_every_host() {
             .is_empty()
     );
     assert!(state.builds.retry("--force").await.is_err());
+}
+
+#[tokio::test]
+async fn build_failures_are_final_and_retry_rebuilds_them() {
+    let mut fixture = fixture().await;
+    let failing = fixture.install(FakeBuilder {
+        fail_all: Some("error: builder for '/nix/store/x.drv' failed".into()),
+        ..Default::default()
+    });
+    let state = fixture.state.clone();
+    let result = state
+        .builds
+        .ensure_built(&state, &fixture.commit, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(result.failed_hosts(&linux_hosts()), vec!["a", "b"]);
+    state
+        .builds
+        .ensure_built(&state, &fixture.commit, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(failing.count(), 1, "results are final");
+    assert_eq!(
+        state.builds.retry(&fixture.commit).await.unwrap(),
+        vec!["a", "b"]
+    );
+    let back = fixture.install(FakeBuilder::default());
+    let state = &fixture.state;
+    let result = state
+        .builds
+        .ensure_built(state, &fixture.commit, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(back.count(), 1);
+    assert!(result.failed_hosts(&linux_hosts()).is_empty());
 }
 
 #[tokio::test]
@@ -678,7 +737,7 @@ async fn channel_index_tracks_current_and_previous() {
         .builds
         .ensure_built(&fixture.state, &unpublished, &linux_hosts())
         .await
-        .unwrap();
+        .unwrap_err();
     assert_eq!(
         read_index(&fixture),
         serde_json::json!({ "unstable": { "current": good, "previous": null } })
@@ -766,8 +825,13 @@ async fn old_results_are_cleaned() {
     }
     drop(held);
 
-    // Every successful `ensure_built` cleans up too.
-    state.builds.cleanup(now).await.unwrap();
+    // Every successful `ensure_built` cleans up too. (A child process of another test may hold a
+    // copy of the dropped lock for a moment between fork and exec; cleanup skips it then.)
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while exists(&locked, "json") && std::time::Instant::now() < deadline {
+        state.builds.cleanup(now).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(!exists(&locked, "json"));
     set_age(&dir.join(format!("{recent}.json")), now, 40);
     state
@@ -851,4 +915,250 @@ async fn queued_prebuilds_collapse_to_the_newest_head() {
         .collect();
     assert_eq!(built, vec![first, third]);
     assert!(state.building.lock().unwrap().is_empty());
+}
+
+// ---- the channel index follows each channel's head (C1/I5) ----
+
+fn sorted_paths(names: &[&str]) -> Vec<String> {
+    let mut paths: Vec<String> = names.iter().map(|name| store_path(name)).collect();
+    paths.sort();
+    paths
+}
+
+fn sorted(mut paths: Vec<String>) -> Vec<String> {
+    paths.sort();
+    paths
+}
+
+#[tokio::test]
+async fn an_updater_record_spanning_two_channels_advances_each_at_its_head() {
+    let mut fixture = fixture_with_hosts(vec![
+        host("a", "linux"),
+        host("b", "linux"),
+        on("stable", host("s", "linux")),
+    ])
+    .await;
+    fixture.origin.push("stable");
+    fixture.state.mirror.fetch().await.unwrap();
+    let builder = Arc::new(CommitBuilder::default());
+    fixture.state.builder = builder.clone();
+    let state = &fixture.state;
+    let commit = fixture.commit.clone();
+
+    // The updater built the changed hosts a (unstable) and s (stable) at the pushed commit.
+    let results = state
+        .builds
+        .build_dir(
+            state,
+            &fixture.origin.work,
+            &[host("a", "linux"), on("stable", host("s", "linux"))],
+        )
+        .await;
+    state
+        .builds
+        .record_built(state, &commit, results)
+        .await
+        .unwrap();
+    // stable has every host built at its head; unstable still misses b.
+    assert_eq!(
+        read_index(&fixture),
+        serde_json::json!({ "stable": { "current": commit, "previous": null } })
+    );
+    let published = builder.published();
+    assert_eq!(published.len(), 1);
+    assert_eq!(sorted(published[0].1.clone()), sorted_paths(&["a", "s"]));
+
+    // The prebuild of unstable builds b and publishes every host of the channel.
+    state
+        .builds
+        .ensure_built(state, &commit, &[host("a", "linux"), host("b", "linux")])
+        .await
+        .unwrap();
+    assert_eq!(
+        read_index(&fixture),
+        serde_json::json!({
+            "stable": { "current": commit, "previous": null },
+            "unstable": { "current": commit, "previous": null },
+        })
+    );
+    let published = builder.published();
+    assert_eq!(published.len(), 2);
+    assert_eq!(published[1].0, commit);
+    assert_eq!(sorted(published[1].1.clone()), sorted_paths(&["a", "b"]));
+}
+
+#[tokio::test]
+async fn a_recorded_commit_advances_once_it_is_the_head() {
+    let mut fixture = fixture().await;
+    let builder = Arc::new(CommitBuilder::default());
+    fixture.state.builder = builder.clone();
+    let state = fixture.state.clone();
+    let first = fixture.commit.clone();
+    state
+        .builds
+        .ensure_built(&state, &first, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(
+        read_index(&fixture),
+        serde_json::json!({ "unstable": { "current": first, "previous": null } })
+    );
+
+    // Recorded before the mirror saw it: not the head, so the channel stays.
+    let second = fixture.origin.commit("second", "unstable");
+    state
+        .builds
+        .record_built(
+            &state,
+            &second,
+            BTreeMap::from([("a".to_string(), ok("a")), ("b".to_string(), ok("b"))]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        read_index(&fixture),
+        serde_json::json!({ "unstable": { "current": first, "previous": null } })
+    );
+    assert_eq!(builder.published().len(), 2);
+
+    // Once it is the head, the gate advances without building and publishes every host again.
+    state.mirror.fetch().await.unwrap();
+    state
+        .builds
+        .ensure_built(&state, &second, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(builder.calls().len(), 1, "nothing built");
+    let expected = serde_json::json!({ "unstable": { "current": second, "previous": first } });
+    assert_eq!(read_index(&fixture), expected);
+    let published = builder.published();
+    assert_eq!(published.len(), 3);
+    assert_eq!(published[2].0, second);
+    assert_eq!(sorted(published[2].1.clone()), sorted_paths(&["a", "b"]));
+
+    // Calling again changes and publishes nothing.
+    state
+        .builds
+        .ensure_built(&state, &second, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(builder.published().len(), 3);
+}
+
+#[tokio::test]
+async fn a_commit_that_is_not_the_head_never_advances() {
+    let mut fixture = fixture().await;
+    let builder = Arc::new(CommitBuilder::default());
+    fixture.state.builder = builder.clone();
+    let state = fixture.state.clone();
+    let first = fixture.commit.clone();
+    let older = fixture.origin.commit("older", "unstable");
+    let head = next_commit(&fixture, "head").await;
+
+    // A re-send of an older desired apply builds it; the channel does not move to it.
+    state
+        .builds
+        .ensure_built(&state, &older, &linux_hosts())
+        .await
+        .unwrap();
+    assert!(!fixture.builds_dir().join("channels.json").exists());
+    assert_eq!(builder.published().len(), 1, "its new paths are published");
+
+    state
+        .builds
+        .ensure_built(&state, &head, &linux_hosts())
+        .await
+        .unwrap();
+    let expected = serde_json::json!({ "unstable": { "current": head, "previous": null } });
+    assert_eq!(read_index(&fixture), expected);
+
+    // Older commits built later never push the head out.
+    for commit in [&first, &older] {
+        state
+            .builds
+            .ensure_built(&state, commit, &linux_hosts())
+            .await
+            .unwrap();
+    }
+    assert_eq!(read_index(&fixture), expected);
+}
+
+#[tokio::test]
+async fn a_retry_publishes_the_hosts_that_were_ok_before() {
+    let mut fixture = fixture().await;
+    let builder = Arc::new(CommitBuilder::failing(&["b"]));
+    fixture.state.builder = builder.clone();
+    let state = fixture.state.clone();
+    let commit = fixture.commit.clone();
+    let result = state
+        .builds
+        .ensure_built(&state, &commit, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(result.failed_hosts(&linux_hosts()), vec!["b"]);
+    assert_eq!(
+        builder.published(),
+        vec![(commit.clone(), vec![store_path("a")])]
+    );
+    assert!(!fixture.builds_dir().join("channels.json").exists());
+
+    assert_eq!(state.builds.retry(&commit).await.unwrap(), vec!["b"]);
+    builder.fail.lock().unwrap().clear();
+    state
+        .builds
+        .ensure_built(&state, &commit, &linux_hosts())
+        .await
+        .unwrap();
+    let published = builder.published();
+    assert_eq!(published.len(), 2);
+    assert_eq!(sorted(published[1].1.clone()), sorted_paths(&["a", "b"]));
+    assert_eq!(
+        read_index(&fixture),
+        serde_json::json!({ "unstable": { "current": commit, "previous": null } })
+    );
+}
+
+#[tokio::test]
+async fn a_failed_index_write_is_a_gate_error() {
+    let mut fixture = fixture().await;
+    let builder = Arc::new(CommitBuilder::default());
+    fixture.state.builder = builder.clone();
+    let state = fixture.state.clone();
+    // The index is written via `channels.json.tmp`; a directory there makes the write fail.
+    std::fs::create_dir_all(fixture.builds_dir().join("channels.json.tmp")).unwrap();
+    let error = state
+        .builds
+        .ensure_built(&state, &fixture.commit, &linux_hosts())
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("channels.json"), "{error:#}");
+    assert_eq!(builder.published().len(), 1);
+}
+
+#[tokio::test]
+async fn a_prebuild_after_the_index_was_removed_republishes_the_heads() {
+    let mut fixture = fixture().await;
+    let builder = Arc::new(CommitBuilder::default());
+    fixture.state.builder = builder.clone();
+    let state = &fixture.state;
+    let commit = fixture.commit.clone();
+    state
+        .builds
+        .ensure_built(state, &commit, &linux_hosts())
+        .await
+        .unwrap();
+    assert_eq!(builder.published().len(), 1);
+
+    // The cache was emptied: the operator removes the index and restarts the server, whose
+    // first prebuild round republishes every head without building.
+    std::fs::remove_file(fixture.builds_dir().join("channels.json")).unwrap();
+    await_all(prebuild_new_heads(state).await).await;
+    assert_eq!(builder.calls().len(), 1, "nothing built");
+    let published = builder.published();
+    assert_eq!(published.len(), 2);
+    assert_eq!(sorted(published[1].1.clone()), sorted_paths(&["a", "b"]));
+    assert_eq!(
+        read_index(&fixture),
+        serde_json::json!({ "unstable": { "current": commit, "previous": null } })
+    );
 }

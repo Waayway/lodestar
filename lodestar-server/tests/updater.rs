@@ -827,8 +827,8 @@ async fn enabled_publish_failure_keeps_pushed_and_marks_the_audit() {
     let audits = update_audits(&fixture.state).await;
     assert_eq!(audits[0]["result"], "pushed");
     assert_eq!(audits[0]["publish"], "failed");
-    let result = fixture.state.builds.read(commit).expect("result recorded");
-    assert!(!result.hosts["a"].ok);
+    // Nothing recorded: the next prebuild or apply builds and publishes it again.
+    assert!(fixture.state.builds.read(commit).is_none());
 }
 
 #[tokio::test]

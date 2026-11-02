@@ -1190,6 +1190,75 @@ async fn a_gate_error_refuses_the_apply() {
     assert!(environment.state.building.lock().unwrap().is_empty());
 }
 
+/// Not reaching the builder, or not publishing, refuses the apply with the reason and records no
+/// result, so the next apply builds again.
+#[tokio::test]
+async fn an_unreachable_builder_or_failed_publish_refuses_without_a_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    let head = origin.commit("main one", "main");
+    let fake = Shared::default();
+    let agent = fake_agent(fake.clone()).await;
+    let builder = Arc::new(FakeBuilder::default());
+    builder.set_unreachable(true);
+    let environment = gated_env(
+        dir,
+        &origin,
+        agent,
+        vec![host("H1", "main")],
+        builder.clone(),
+        true,
+    )
+    .await;
+    let http = dashboard_client();
+    let apply = || async {
+        let response = http
+            .post(format!("{}/api/hosts/H1/apply", environment.base))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let body: Value = response.json().await.unwrap();
+        (
+            status,
+            body["error"].as_str().unwrap_or_default().to_string(),
+        )
+    };
+
+    let (status, message) = apply().await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        message.starts_with(&format!(
+            "build of {} failed: builder unreachable: ",
+            &head[..7]
+        )),
+        "{message}"
+    );
+    assert!(environment.state.builds.read(&head).is_none());
+
+    builder.set_unreachable(false);
+    *builder.publish_error.lock().unwrap() = Some("cache-publish: disk full".into());
+    let (status, message) = apply().await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        message,
+        format!(
+            "build of {} failed: publish failed: cache-publish: disk full",
+            &head[..7]
+        )
+    );
+    assert!(environment.state.builds.read(&head).is_none());
+    assert_eq!(builder.calls().len(), 2);
+
+    *builder.publish_error.lock().unwrap() = None;
+    let (status, message) = apply().await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{message}");
+    assert_eq!(builder.calls().len(), 3);
+    assert_eq!(fake.lock().unwrap().applied.len(), 1);
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
+    assert_eq!(audit_kinds(&audit, "apply-refused").len(), 2);
+}
+
 #[tokio::test]
 async fn a_darwin_only_channel_never_waits_on_the_gate() {
     let dir = tempfile::tempdir().unwrap();

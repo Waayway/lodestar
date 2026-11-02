@@ -42,6 +42,7 @@ async fn lock_commit_ignores_identity_from_the_environment() {
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
         updates: Default::default(),
+        builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
     };

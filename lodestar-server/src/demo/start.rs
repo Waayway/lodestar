@@ -131,6 +131,7 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
         updates: Default::default(),
+        builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
     };

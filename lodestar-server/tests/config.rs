@@ -111,3 +111,51 @@ fn inputs_group_software() {
     assert_eq!(inputs["nixpkgs"], vec!["caddy", "tailscale"]);
     assert_eq!(inputs["x"], vec!["other"]);
 }
+
+fn with_builds(builds: &str) -> ServerConfig {
+    parse(&format!(",\"builds\":{builds}"))
+}
+
+#[test]
+fn builds_nix_shape_parses() {
+    let config = with_builds(
+        r#"{"enable":true,"store":"ssh-ng://lodestar@10.0.10.171","ssh_key_file":"/k",
+        "publish_command":["cache-publish"],"timeout_secs":7200}"#,
+    );
+    assert!(config.builds.enable);
+    assert_eq!(config.builds.store, "ssh-ng://lodestar@10.0.10.171");
+    assert_eq!(config.builds.ssh_key_file, Some(PathBuf::from("/k")));
+    assert_eq!(config.builds.publish_command, vec!["cache-publish"]);
+    assert_eq!(config.builds.timeout_secs, 7200);
+    config.builds.check().unwrap();
+}
+
+#[test]
+fn absent_builds_default_disabled() {
+    let config = parse("");
+    assert!(!config.builds.enable);
+    assert_eq!(config.builds.store, "");
+    assert_eq!(config.builds.ssh_key_file, None);
+    assert_eq!(config.builds.publish_command, vec!["cache-publish"]);
+    assert_eq!(config.builds.timeout_secs, 7200);
+    config.builds.check().unwrap();
+}
+
+#[test]
+fn builds_check_rejects_invalid_when_enabled() {
+    let ok = r#""enable":true,"store":"ssh://b@h","publish_command":["p"],"timeout_secs":1"#;
+    with_builds(&format!("{{{ok}}}")).builds.check().unwrap();
+    for bad in [
+        r#"{"enable":true,"store":""}"#,
+        r#"{"enable":true,"store":"https://cache"}"#,
+        r#"{"enable":true,"store":"ssh-ng://b@h","publish_command":[]}"#,
+        r#"{"enable":true,"store":"ssh-ng://b@h","timeout_secs":0}"#,
+    ] {
+        assert!(with_builds(bad).builds.check().is_err(), "{bad}");
+    }
+    // Disabled configs are never checked.
+    with_builds(r#"{"enable":false,"store":"x","timeout_secs":0}"#)
+        .builds
+        .check()
+        .unwrap();
+}

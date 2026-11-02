@@ -170,6 +170,7 @@ async fn env_build(
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
         updates,
+        builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
     };

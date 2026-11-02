@@ -84,6 +84,7 @@ fn config(state_dir: &Path, repository_url: &str) -> ServerConfig {
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
         updates: Default::default(),
+        builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
     }

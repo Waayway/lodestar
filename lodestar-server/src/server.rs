@@ -111,6 +111,7 @@ pub async fn start(
     config.check_listen()?;
     config.check_proxy()?;
     config.check_updates()?;
+    config.builds.check()?;
     let connection = db::connect(&config.state_dir).await?;
     let mirror = Arc::new(Mirror::open_or_init(&config).await?);
     let listen = config.listen;

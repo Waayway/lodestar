@@ -166,6 +166,7 @@ async fn fixture() -> Fixture {
             )]),
             ..Default::default()
         },
+        builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
     };

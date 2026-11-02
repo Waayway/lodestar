@@ -237,6 +237,7 @@ async fn metrics_listener_serves_and_dashboard_does_not() {
             )]),
             ..Default::default()
         },
+        builds: Default::default(),
         metrics: Some(MetricsConfig {
             listen: "127.0.0.1:0".parse().unwrap(),
         }),

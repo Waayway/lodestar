@@ -301,6 +301,41 @@ in
       };
     };
 
+    builds = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Build every Linux host's system once on the builder (`store`) and publish it
+          before agents may apply. Off keeps the server building nothing.
+        '';
+      };
+      store = mkOption {
+        type = types.str;
+        default = "";
+        example = "ssh-ng://lodestar@10.0.10.171";
+        description = "The builder's store URL; `ssh-ng://` or `ssh://`. Required while enabled.";
+      };
+      sshKeyFile = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = ''
+          SSH key for the builder; a path outside the Nix store readable by the
+          `lodestar-server` user (see `deployKeyFile`).
+        '';
+      };
+      publishCommand = mkOption {
+        type = types.listOf types.str;
+        default = [ "cache-publish" ];
+        description = "Command (program and arguments) that publishes the built paths.";
+      };
+      timeoutSecs = mkOption {
+        type = types.ints.positive;
+        default = 7200;
+        description = "Seconds before a build of one commit is given up.";
+      };
+    };
+
     metrics = {
       address = mkOption {
         type = types.nullOr types.str;
@@ -370,6 +405,21 @@ in
       {
         assertion = cfg.updates.channel != promoteTarget;
         message = "services.lodestar-server.updates.channel must not be the promote target (${promoteTarget}).";
+      }
+      {
+        assertion = !cfg.builds.enable || cfg.builds.store != "";
+        message = "services.lodestar-server.builds.store must be set while builds.enable is true.";
+      }
+      {
+        assertion =
+          !cfg.builds.enable
+          || lib.hasPrefix "ssh-ng://" cfg.builds.store
+          || lib.hasPrefix "ssh://" cfg.builds.store;
+        message = "services.lodestar-server.builds.store = \"${cfg.builds.store}\" must start with ssh-ng:// or ssh://.";
+      }
+      {
+        assertion = !cfg.builds.enable || cfg.builds.publishCommand != [ ];
+        message = "services.lodestar-server.builds.publishCommand must not be empty while builds.enable is true.";
       }
     ]
     ++ lib.concatLists (
@@ -494,6 +544,14 @@ in
             };
           }) cfg.updates.software;
         };
+      }
+      // {
+        builds = {
+          inherit (cfg.builds) enable store;
+          publish_command = cfg.builds.publishCommand;
+          timeout_secs = cfg.builds.timeoutSecs;
+        }
+        // lib.optionalAttrs (cfg.builds.sshKeyFile != null) { ssh_key_file = cfg.builds.sshKeyFile; };
       }
       // lib.optionalAttrs (cfg.metrics.address != null) { metrics.listen = metricsListen; }
       // lib.optionalAttrs (cfg.testing.pollSecs != null) { poll_secs = cfg.testing.pollSecs; }

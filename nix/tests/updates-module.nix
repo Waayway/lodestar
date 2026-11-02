@@ -59,6 +59,17 @@ let
       port = 9000;
     };
   };
+  builds = {
+    enable = true;
+    store = "ssh-ng://lodestar@10.0.10.171";
+    sshKeyFile = "/run/keys/builder";
+  };
+  withBuilds = mkSystem { services.lodestar-server.builds = builds; };
+  buildsFail =
+    extra:
+    failedOf (mkSystem {
+      services.lodestar-server.builds = builds // extra;
+    }) != [ ];
   bad = mkSystem {
     services.lodestar-server.updates.software."Bad Name" = {
       input = "nix pkgs";
@@ -75,6 +86,48 @@ let
     lib.length failures == 1 && lib.hasInfix "updates.channel" (lib.head failures).message;
 
   checks = [
+    {
+      ok =
+        (serverJson plain).builds == {
+          enable = false;
+          store = "";
+          publish_command = [ "cache-publish" ];
+          timeout_secs = 7200;
+        };
+      what = "config.json carries builds off by default (no ssh_key_file)";
+    }
+    {
+      ok =
+        (serverJson withBuilds).builds == {
+          enable = true;
+          store = "ssh-ng://lodestar@10.0.10.171";
+          ssh_key_file = "/run/keys/builder";
+          publish_command = [ "cache-publish" ];
+          timeout_secs = 7200;
+        };
+      what = "config.json carries the builds options in snake_case";
+    }
+    {
+      ok = failedOf withBuilds == [ ];
+      what = "a complete enabled builds config passes";
+    }
+    {
+      ok = lib.all buildsFail [
+        { store = ""; }
+        { store = "https://cache"; }
+        { publishCommand = [ ]; }
+      ];
+      what = "enabled builds with an empty or non-ssh store or empty publishCommand fail an assertion";
+    }
+    {
+      ok =
+        failedOf (mkSystem {
+          services.lodestar-server.builds = {
+            store = "";
+          };
+        }) == [ ];
+      what = "disabled builds are not validated";
+    }
     {
       ok = etcText plain "lodestar/versions.json" == builtins.toJSON { tailscale = "1.104.2"; };
       what = "the agent writes versions.json from `versions`";

@@ -97,6 +97,7 @@ async fn state(fake: Fake) -> (AppState, tempfile::TempDir) {
             )]),
             ..Default::default()
         },
+        builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
     };

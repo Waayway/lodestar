@@ -91,6 +91,7 @@ fn server_config(dir: &Path, origin: &Origin, agent: SocketAddr) -> ServerConfig
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
         updates: Default::default(),
+        builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
     }

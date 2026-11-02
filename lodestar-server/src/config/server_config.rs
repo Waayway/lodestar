@@ -5,7 +5,7 @@ use anyhow::Context;
 use lodestar_proto::PromoteChannels;
 use serde::{Deserialize, Serialize};
 
-use super::{AccessConfig, MetricsConfig, OnlineSource, ProxyConfig, UpdatesConfig};
+use super::{AccessConfig, BuildsConfig, MetricsConfig, OnlineSource, ProxyConfig, UpdatesConfig};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ServerConfig {
@@ -37,6 +37,9 @@ pub struct ServerConfig {
     /// The software updater; absent means defaults with nothing tracked.
     #[serde(default)]
     pub updates: UpdatesConfig,
+    /// Building on a builder and publishing; absent means off.
+    #[serde(default)]
+    pub builds: BuildsConfig,
     /// Prometheus metrics listener; absent means none.
     #[serde(default)]
     pub metrics: Option<MetricsConfig>,

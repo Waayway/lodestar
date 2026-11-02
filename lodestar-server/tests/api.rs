@@ -16,9 +16,10 @@ use futures::StreamExt;
 use lodestar_proto::{
     ApplyRequest, AuditEvent, LogChunk, Me, Role, ServiceCheck, ServiceState, WsMessage,
 };
+use lodestar_server::builds::Builder;
 use lodestar_server::config::{
-    AccessConfig, Link, LinkCheck, ManagedHost, OnlineSource, ServerConfig, SoftwareConfig,
-    UpdatesConfig, Upstream,
+    AccessConfig, BuildsConfig, Link, LinkCheck, ManagedHost, OnlineSource, ServerConfig,
+    SoftwareConfig, UpdatesConfig, Upstream,
 };
 use lodestar_server::db;
 use lodestar_server::db::entities::applies;
@@ -30,7 +31,7 @@ use lodestar_server::updates::upstream::LatestVersion;
 use sea_orm::EntityTrait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use support::{Origin, git};
+use support::{FakeBuilder, Origin, git};
 
 /// A client that sends the header the dashboard sends (`X-Lodestar: 1`, CSRF guard).
 fn dashboard_client() -> reqwest::Client {
@@ -132,6 +133,7 @@ async fn env_with_links(
         links,
         Default::default(),
         None,
+        None,
     )
     .await
 }
@@ -146,6 +148,7 @@ async fn env_build(
     links: Vec<Link>,
     updates: UpdatesConfig,
     nix: Option<Arc<dyn NixRunner>>,
+    builder: Option<(Arc<dyn Builder>, bool)>,
 ) -> Env {
     let addresses: HashMap<String, String> = hosts
         .iter()
@@ -170,7 +173,10 @@ async fn env_build(
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
         updates,
-        builds: Default::default(),
+        builds: BuildsConfig {
+            enable: builder.as_ref().is_some_and(|(_, enable)| *enable),
+            ..Default::default()
+        },
         metrics: None,
         nix_bin: "nix".into(),
     };
@@ -181,6 +187,9 @@ async fn env_build(
     state.links = Arc::new(links);
     if let Some(nix) = nix {
         state.nix = nix;
+    }
+    if let Some((builder, _)) = builder {
+        state.builder = builder;
     }
     let app = lodestar_server::api::app(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -869,6 +878,7 @@ async fn updates_view_and_run_endpoint() {
         Vec::new(),
         updates,
         Some(nix),
+        None,
     )
     .await;
     environment.state.latest.lock().unwrap().insert(
@@ -960,6 +970,7 @@ async fn run_endpoint_is_refused_when_the_updater_is_off() {
         Vec::new(),
         UpdatesConfig::default(),
         None,
+        None,
     )
     .await;
     let http = dashboard_client();
@@ -972,4 +983,265 @@ async fn run_endpoint_is_refused_when_the_updater_is_off() {
     let body: Value = response.json().await.unwrap();
     assert_eq!(body, json!({"error": "updater off"}));
     assert!(!environment.state.updates.is_running());
+}
+
+fn darwin(name: &str, channel: &str) -> ManagedHost {
+    ManagedHost {
+        system: "aarch64-darwin".into(),
+        os: "darwin".into(),
+        ..host(name, channel)
+    }
+}
+
+/// The dashboard server with the build gate on (or off) and `builder` as its builder.
+async fn gated_env(
+    dir: tempfile::TempDir,
+    origin: &Origin,
+    agent: SocketAddr,
+    hosts: Vec<ManagedHost>,
+    builder: Arc<FakeBuilder>,
+    enable: bool,
+) -> Env {
+    env_build(
+        dir,
+        origin.bare.to_str().unwrap(),
+        agent,
+        hosts,
+        AccessConfig::Disabled,
+        Vec::new(),
+        Default::default(),
+        None,
+        Some((builder, enable)),
+    )
+    .await
+}
+
+fn names(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| name.to_string()).collect()
+}
+
+#[tokio::test]
+async fn applies_wait_for_the_gate_with_every_linux_host_of_the_channel() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    origin.commit("stable one", "stable");
+    let head = origin.commit("main two", "main");
+    let fake = Shared::default();
+    let agent = fake_agent(fake.clone()).await;
+    let hold = Arc::new(tokio::sync::Semaphore::new(0));
+    let builder = Arc::new(FakeBuilder::held(hold.clone()));
+    let hosts = vec![
+        host("H1", "main"),
+        host("H2", "stable"),
+        darwin("M1", "main"),
+        host("H3", "main"),
+    ];
+    let environment = gated_env(dir, &origin, agent, hosts, builder.clone(), true).await;
+    let http = dashboard_client();
+
+    let request = tokio::spawn(
+        http.post(format!("{}/api/hosts/H1/apply", environment.base))
+            .send(),
+    );
+    builder.entered.notified().await;
+    assert_eq!(
+        environment.state.building.lock().unwrap().get("main"),
+        Some(&head)
+    );
+    assert!(fake.lock().unwrap().applied.is_empty());
+    assert!(
+        db::desired(&environment.state.db, "H1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    hold.add_permits(1);
+    let response = request.await.unwrap().unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(builder.calls(), vec![(head.clone(), names(&["H1", "H3"]))]);
+    assert!(environment.state.building.lock().unwrap().is_empty());
+    assert_eq!(fake.lock().unwrap().applied.len(), 1);
+
+    // Already built: the channel apply goes straight through.
+    let response = http
+        .post(format!("{}/api/channels/main/apply", environment.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(builder.calls().len(), 1);
+    assert_eq!(fake.lock().unwrap().applied.len(), 4);
+
+    // A new head is built for the channel apply too.
+    let next = origin.commit("main three", "main");
+    hold.add_permits(1);
+    let response = http
+        .post(format!("{}/api/channels/main/apply", environment.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(builder.calls()[1], (next.clone(), names(&["H1", "H3"])));
+    let desired = db::desired(&environment.state.db, "M1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(desired.commit, next);
+}
+
+#[tokio::test]
+async fn a_failed_host_refuses_applies_for_the_whole_channel() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    let head = origin.commit("main one", "main");
+    let fake = Shared::default();
+    let agent = fake_agent(fake.clone()).await;
+    let builder = Arc::new(FakeBuilder::failing(&["H3", "H2"]));
+    let hosts = vec![host("H3", "main"), host("H1", "main"), host("H2", "main")];
+    let environment = gated_env(dir, &origin, agent, hosts, builder.clone(), true).await;
+    let http = dashboard_client();
+    let expected = format!("build of {} failed on the builder: H2, H3", &head[..7]);
+
+    let response = http
+        .post(format!("{}/api/hosts/H1/apply", environment.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"], expected.as_str(), "{body}");
+
+    let response = http
+        .post(format!("{}/api/channels/main/apply", environment.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"], expected.as_str(), "{body}");
+
+    assert_eq!(builder.calls().len(), 1, "results are final");
+    assert!(fake.lock().unwrap().applied.is_empty());
+    for name in ["H1", "H2", "H3"] {
+        assert!(
+            db::desired(&environment.state.db, name)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
+    assert!(audit_kinds(&audit, "apply_requested").is_empty());
+    let refused = audit_kinds(&audit, "apply-refused");
+    assert_eq!(refused.len(), 2, "{audit:?}");
+    assert!(refused.iter().all(|event| event.actor == "dev"));
+    let details = &refused[0].details;
+    assert_eq!(details["commit"], head.as_str());
+    assert_eq!(details["channel"], "main");
+    assert_eq!(details["failed_hosts"], json!(["H2", "H3"]));
+}
+
+#[tokio::test]
+async fn a_gate_error_refuses_the_apply() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    let head = origin.commit("main one", "main");
+    let fake = Shared::default();
+    let agent = fake_agent(fake.clone()).await;
+    let builder = Arc::new(FakeBuilder::default());
+    let environment = gated_env(
+        dir,
+        &origin,
+        agent,
+        vec![host("H1", "main")],
+        builder.clone(),
+        true,
+    )
+    .await;
+    let builds = environment.state.config.state_dir.join("builds");
+    std::fs::create_dir_all(&builds).unwrap();
+    std::fs::write(builds.join("channels.json"), "not json").unwrap();
+
+    let response = dashboard_client()
+        .post(format!("{}/api/hosts/H1/apply", environment.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: Value = response.json().await.unwrap();
+    let message = body["error"].as_str().unwrap();
+    assert!(
+        message.starts_with(&format!("build of {} failed: ", &head[..7])),
+        "{message}"
+    );
+    assert!(builder.calls().is_empty());
+    assert!(fake.lock().unwrap().applied.is_empty());
+    assert!(
+        db::desired(&environment.state.db, "H1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
+    let refused = audit_kinds(&audit, "apply-refused");
+    assert_eq!(refused.len(), 1, "{audit:?}");
+    assert_eq!(refused[0].host.as_deref(), Some("H1"));
+    assert!(refused[0].details["error"].is_string(), "{:?}", refused[0]);
+    assert!(environment.state.building.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_darwin_only_channel_never_waits_on_the_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    origin.commit("mac one", "mac");
+    let fake = Shared::default();
+    let agent = fake_agent(fake.clone()).await;
+    // Never released: a gate call would hang the apply.
+    let builder = Arc::new(FakeBuilder::held(Arc::new(tokio::sync::Semaphore::new(0))));
+    let hosts = vec![darwin("M1", "mac"), darwin("M2", "mac"), host("H1", "main")];
+    let environment = gated_env(dir, &origin, agent, hosts, builder.clone(), true).await;
+    let http = dashboard_client();
+
+    for path in ["hosts/M1/apply", "channels/mac/apply"] {
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            http.post(format!("{}/api/{path}", environment.base)).send(),
+        )
+        .await
+        .expect("a darwin-only apply waited")
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED, "{path}");
+    }
+    assert!(builder.calls().is_empty());
+    assert!(!environment.state.config.state_dir.join("builds").exists());
+    assert_eq!(fake.lock().unwrap().applied.len(), 3);
+}
+
+#[tokio::test]
+async fn builds_off_never_calls_the_builder() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    origin.commit("main one", "main");
+    let fake = Shared::default();
+    let agent = fake_agent(fake.clone()).await;
+    let builder = Arc::new(FakeBuilder::failing(&["H1"]));
+    let environment = gated_env(
+        dir,
+        &origin,
+        agent,
+        vec![host("H1", "main")],
+        builder.clone(),
+        false,
+    )
+    .await;
+
+    let response = dashboard_client()
+        .post(format!("{}/api/hosts/H1/apply", environment.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(builder.calls().is_empty());
+    assert_eq!(fake.lock().unwrap().applied.len(), 1);
 }

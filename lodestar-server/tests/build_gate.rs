@@ -9,13 +9,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
-use lodestar_server::builds::{BuildGate, Builder, HostBuild, HostResult};
+use lodestar_server::builds::{
+    BuildGate, Builder, HostBuild, HostResult, prebuild_new_heads, spawn_prebuild,
+};
 use lodestar_server::config::{AccessConfig, ManagedHost, OnlineSource, ServerConfig};
 use lodestar_server::db;
 use lodestar_server::mirror::Mirror;
 use lodestar_server::state::AppState;
 use lodestar_server::tailscale::StaticOnline;
-use support::{Origin, git};
+use support::{FakeBuilder as CommitBuilder, Origin, git};
 use tokio::sync::Semaphore;
 
 const DAY: i64 = 24 * 60 * 60;
@@ -165,7 +167,10 @@ async fn fixture() -> Fixture {
         promote: None,
         proxy: None,
         updates: Default::default(),
-        builds: Default::default(),
+        builds: lodestar_server::config::BuildsConfig {
+            enable: true,
+            ..Default::default()
+        },
         metrics: None,
         nix_bin: "nix".into(),
     };
@@ -772,4 +777,77 @@ async fn old_results_are_cleaned() {
         .unwrap();
     assert!(!exists(&recent, "json") && !exists(&recent, "lock"));
     assert!(exists(&kept, "json") && exists(&fixture.commit, "json"));
+}
+
+async fn await_all(handles: Vec<tokio::task::JoinHandle<()>>) {
+    for handle in handles {
+        handle.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn prebuild_runs_once_per_new_head() {
+    let mut fixture = fixture().await;
+    let builder = Arc::new(CommitBuilder::default());
+    fixture.state.builder = builder.clone();
+    let state = &fixture.state;
+    let linux = vec!["a".to_string(), "b".to_string()];
+
+    // Server start: every channel's current head once.
+    state.mirror.fetch().await.unwrap();
+    let handles = prebuild_new_heads(state).await;
+    assert_eq!(handles.len(), 1);
+    await_all(handles).await;
+    assert_eq!(
+        builder.calls(),
+        vec![(fixture.commit.clone(), linux.clone())]
+    );
+
+    // A fetch that moves nothing prebuilds nothing.
+    state.mirror.fetch().await.unwrap();
+    assert!(prebuild_new_heads(state).await.is_empty());
+
+    let next = fixture.origin.commit("next", "unstable");
+    state.mirror.fetch().await.unwrap();
+    let handles = prebuild_new_heads(state).await;
+    assert_eq!(handles.len(), 1);
+    await_all(handles).await;
+    state.mirror.fetch().await.unwrap();
+    assert!(prebuild_new_heads(state).await.is_empty());
+    assert_eq!(
+        builder.calls(),
+        vec![(fixture.commit.clone(), linux.clone()), (next, linux)]
+    );
+    assert!(state.building.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn queued_prebuilds_collapse_to_the_newest_head() {
+    let mut fixture = fixture().await;
+    let hold = Arc::new(Semaphore::new(0));
+    let builder = Arc::new(CommitBuilder::held(hold.clone()));
+    fixture.state.builder = builder.clone();
+    let first = fixture.commit.clone();
+    let second = fixture.origin.commit("second", "unstable");
+    let third = fixture.origin.commit("third", "unstable");
+    let state = &fixture.state;
+
+    let running = spawn_prebuild(state, "unstable", &first);
+    builder.entered.notified().await;
+    assert_eq!(state.building.lock().unwrap().get("unstable"), Some(&first));
+    let queued = [
+        spawn_prebuild(state, "unstable", &second),
+        spawn_prebuild(state, "unstable", &third),
+    ];
+    hold.add_permits(2);
+    running.await.unwrap();
+    await_all(queued.into()).await;
+
+    let built: Vec<String> = builder
+        .calls()
+        .into_iter()
+        .map(|(commit, _)| commit)
+        .collect();
+    assert_eq!(built, vec![first, third]);
+    assert!(state.building.lock().unwrap().is_empty());
 }

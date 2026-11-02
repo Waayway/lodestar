@@ -1,5 +1,7 @@
 //! Poller against in-process fake agents (axum on 127.0.0.1:0).
 
+mod support;
+
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -15,13 +17,17 @@ use lodestar_proto::{
     ActivationEvent, ActivationsResponse, AgentStatus, ApplyRecord, ApplyRequest, ApplyState,
     CheckoutStatus, LogChunk, OnlineState, WsMessage,
 };
-use lodestar_server::config::{AccessConfig, ManagedHost, OnlineSource, ServerConfig};
+use lodestar_server::builds::HostResult;
+use lodestar_server::config::{
+    AccessConfig, BuildsConfig, ManagedHost, OnlineSource, ServerConfig,
+};
 use lodestar_server::db;
 use lodestar_server::mirror::Mirror;
 use lodestar_server::poller::poll_once;
 use lodestar_server::state::{AppState, host_view};
 use lodestar_server::tailscale::{Identity, OnlineProvider, PeerInfo, StaticOnline};
 use serde::Deserialize;
+use support::{FakeBuilder, Origin};
 
 const OLD: &str = "0000000000000000000000000000000000000000";
 const NEW: &str = "1111111111111111111111111111111111111111";
@@ -201,6 +207,16 @@ struct Env {
 async fn env(agent: SocketAddr, online: Option<Arc<dyn OnlineProvider>>) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let origin = empty_origin(dir.path());
+    env_in(dir, origin, agent, online, false).await
+}
+
+async fn env_in(
+    dir: tempfile::TempDir,
+    origin: PathBuf,
+    agent: SocketAddr,
+    online: Option<Arc<dyn OnlineProvider>>,
+    builds: bool,
+) -> Env {
     let addresses = HashMap::from([("h1".to_string(), agent.to_string())]);
     let config = ServerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
@@ -221,7 +237,10 @@ async fn env(agent: SocketAddr, online: Option<Arc<dyn OnlineProvider>>) -> Env 
         promote: Some(lodestar_proto::PromoteChannels::default()),
         proxy: None,
         updates: Default::default(),
-        builds: Default::default(),
+        builds: BuildsConfig {
+            enable: builds,
+            ..Default::default()
+        },
         metrics: None,
         nix_bin: "nix".into(),
     };
@@ -668,4 +687,93 @@ async fn follow_log_continues_at_next_after_invalid_utf8() {
     .expect("log stored");
     assert_eq!(stored, "a\u{fffd}b\nmore\n");
     assert_eq!(fake.lock().unwrap().log_offsets, vec![0, 4]);
+}
+
+/// A poller env with the build gate on, `builder` as its builder and one commit on `main`.
+async fn gated_env(agent: SocketAddr, builder: Arc<FakeBuilder>) -> (Env, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    let commit = origin.commit("one", "main");
+    let bare = origin.bare.clone();
+    let mut environment = env_in(dir, bare, agent, None, true).await;
+    environment.state.builder = builder;
+    (environment, commit)
+}
+
+async fn desire(state: &AppState, id: &str, commit: &str) {
+    db::insert_apply(
+        &state.db,
+        "H1",
+        "alice",
+        1,
+        &record(id, commit, ApplyState::Idle),
+    )
+    .await
+    .unwrap();
+    db::set_desired(&state.db, "H1", id).await.unwrap();
+}
+
+#[tokio::test]
+async fn poll_does_not_resend_a_commit_whose_build_failed() {
+    let fake = Shared::default();
+    fake.lock().unwrap().status = Some(agent_status(OLD, Some(record("a0", OLD, ApplyState::Ok))));
+    let addr = fake_agent(fake.clone()).await;
+    let builder = Arc::new(FakeBuilder::default());
+    let (environment, commit) = gated_env(addr, builder.clone()).await;
+    let state = &environment.state;
+    let failed = HostResult {
+        ok: false,
+        path: None,
+        log_tail: Some("error: builder said no".into()),
+        built_at: 1,
+    };
+    state
+        .builds
+        .record_built(state, &commit, [("H1".to_string(), failed)].into())
+        .await
+        .unwrap();
+    desire(state, "a1", &commit).await;
+
+    poll_once(state).await;
+    poll_once(state).await;
+
+    assert!(fake.lock().unwrap().applied.is_empty());
+    assert!(builder.calls().is_empty());
+}
+
+#[tokio::test]
+async fn poll_resend_builds_first_without_blocking_the_poller() {
+    let fake = Shared::default();
+    fake.lock().unwrap().status = Some(agent_status(OLD, Some(record("a0", OLD, ApplyState::Ok))));
+    let addr = fake_agent(fake.clone()).await;
+    let hold = Arc::new(tokio::sync::Semaphore::new(0));
+    let builder = Arc::new(FakeBuilder::held(hold.clone()));
+    let (environment, commit) = gated_env(addr, builder.clone()).await;
+    let state = &environment.state;
+    desire(state, "a1", &commit).await;
+
+    tokio::time::timeout(Duration::from_secs(10), poll_once(state))
+        .await
+        .expect("the poller waited for the build");
+    builder.entered.notified().await;
+    assert_eq!(state.building.lock().unwrap().get("main"), Some(&commit));
+    tokio::time::timeout(Duration::from_secs(10), poll_once(state))
+        .await
+        .expect("the poller waited for the build");
+    assert!(fake.lock().unwrap().applied.is_empty());
+
+    hold.add_permits(1);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while fake.lock().unwrap().applied.is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "never re-sent");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        fake.lock().unwrap().applied,
+        vec![ApplyRequest {
+            apply_id: "a1".into(),
+            commit: commit.clone()
+        }]
+    );
+    assert_eq!(builder.calls(), vec![(commit, vec!["H1".to_string()])]);
 }

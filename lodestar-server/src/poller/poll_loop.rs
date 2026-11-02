@@ -5,9 +5,11 @@ use tokio::time::MissedTickBehavior;
 
 use super::host_poll::poll_once;
 use super::service_check::{CHECK_INTERVAL, Probers, check_round};
+use crate::builds::prebuild_new_heads;
 use crate::state::{AppState, channels};
 
-/// Background loops: mirror fetch every `mirror_fetch_secs` (then `ChannelsUpdated`) and
+/// Background loops: mirror fetch every `mirror_fetch_secs` (then prebuilds of moved channel
+/// heads, the first round of every head, and `ChannelsUpdated`) and
 /// agent polling every `poll_secs`, and service link checks every `CHECK_INTERVAL`. All run
 /// once immediately; the checks never wait for the host poller.
 pub fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
@@ -22,6 +24,7 @@ pub fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
             if let Err(error) = mirror_state.mirror.fetch().await {
                 eprintln!("lodestar-server: mirror fetch: {error:#}");
             }
+            prebuild_new_heads(&mirror_state).await;
             mirror_state.broadcast(WsMessage::ChannelsUpdated(channels(&mirror_state).await));
         }
     });

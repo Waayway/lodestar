@@ -7,7 +7,7 @@ use tokio::sync::broadcast;
 
 use crate::agent_client::AgentClient;
 use crate::auth::AuthState;
-use crate::builds::{BuildGate, Builder, RemoteBuilder};
+use crate::builds::{BuildGate, Builder, PrebuildQueue, RemoteBuilder};
 use crate::config::{Link, ManagedHost, ServerConfig};
 use crate::mirror::Mirror;
 use crate::tailscale::OnlineProvider;
@@ -51,6 +51,14 @@ pub struct AppState {
     pub builder: Arc<dyn Builder>,
     /// One build per commit: the lock and result files under `state_dir/builds`.
     pub builds: Arc<BuildGate>,
+    /// The commit the gate is building for each channel right now (prebuild, apply or re-send).
+    pub building: Arc<Mutex<BTreeMap<String, String>>>,
+    /// Prebuilds of new channel heads: one at a time, the last-seen heads.
+    pub(crate) prebuilds: Arc<PrebuildQueue>,
+    /// `(host, apply_id)` re-sends waiting for their commit's build.
+    pub(crate) resend_builds: Arc<Mutex<HashSet<(String, String)>>>,
+    /// `(host, apply_id)` re-sends refused for a failed build (logged once).
+    pub(crate) resend_refused: Arc<Mutex<HashSet<(String, String)>>>,
     /// `(host, apply_id)` pairs with a live log follower.
     pub(crate) followers: Arc<Mutex<HashSet<(String, String)>>>,
     /// Serialises dashboard actions (apply, promote) from mirror fetch to recorded result, so
@@ -95,6 +103,10 @@ impl AppState {
             nix,
             builder,
             builds,
+            building: Arc::default(),
+            prebuilds: Arc::default(),
+            resend_builds: Arc::default(),
+            resend_refused: Arc::default(),
             followers: Arc::default(),
             actions: Arc::default(),
             demo: false,

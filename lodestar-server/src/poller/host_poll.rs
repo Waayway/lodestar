@@ -8,6 +8,7 @@ use lodestar_proto::{AgentStatus, ApplyRequest, WsMessage};
 use super::activation_ingest::ingest_activations;
 use super::apply_recording::record_apply;
 use super::reachability::{agent_base, reachability_change};
+use crate::builds::{build_channel, known_failures};
 use crate::clock::now;
 use crate::config::ManagedHost;
 use crate::db;
@@ -111,15 +112,74 @@ async fn handle_status(state: &AppState, host: &ManagedHost, base: &str, status:
             apply_id: desired.apply_id.clone(),
             commit: desired.commit.clone(),
         };
-        if let Some(code) = log_err(
-            "re-sending desired apply",
-            name,
-            state.client.apply(base, &request).await,
-        ) {
-            eprintln!(
-                "lodestar-server: {name}: re-sent apply {} ({}): {code}",
-                request.apply_id, request.commit
-            );
+        match known_failures(state, &host.channel, &request.commit) {
+            Some(failed) if failed.is_empty() => resend(state, name, base, &request).await,
+            Some(failed) => refuse_resend(state, name, &request, &failed),
+            None => spawn_gated_resend(state, host, base, request),
         }
     }
+}
+
+async fn resend(state: &AppState, name: &str, base: &str, request: &ApplyRequest) {
+    if let Some(code) = log_err(
+        "re-sending desired apply",
+        name,
+        state.client.apply(base, request).await,
+    ) {
+        eprintln!(
+            "lodestar-server: {name}: re-sent apply {} ({}): {code}",
+            request.apply_id, request.commit
+        );
+    }
+}
+
+/// Logs (once per apply) that `request` is not re-sent because its build failed.
+fn refuse_resend(state: &AppState, name: &str, request: &ApplyRequest, failed: &[String]) {
+    let first = state
+        .resend_refused
+        .lock()
+        .unwrap()
+        .insert((name.to_string(), request.apply_id.clone()));
+    if first {
+        eprintln!(
+            "lodestar-server: {name}: not re-sending apply {}: build of {} failed on the builder: {}",
+            request.apply_id,
+            request.commit,
+            failed.join(", ")
+        );
+    }
+}
+
+/// Builds the desired apply's commit for the host's channel in the background (the poller never
+/// waits for a build), then re-sends it when the build is good and it is still the desired apply.
+/// At most one such task per apply.
+fn spawn_gated_resend(state: &AppState, host: &ManagedHost, base: &str, request: ApplyRequest) {
+    let key = (host.name.clone(), request.apply_id.clone());
+    if !state.resend_builds.lock().unwrap().insert(key.clone()) {
+        return;
+    }
+    let state = state.clone();
+    let (name, channel, base) = (host.name.clone(), host.channel.clone(), base.to_string());
+    tokio::spawn(async move {
+        match build_channel(&state, &channel, &request.commit).await {
+            Ok(failed) if failed.is_empty() => {
+                let still_desired = log_err(
+                    "loading desired apply",
+                    &name,
+                    db::desired(&state.db, &name).await,
+                )
+                .flatten()
+                .is_some_and(|desired| desired.apply_id == request.apply_id);
+                if still_desired {
+                    resend(&state, &name, &base, &request).await;
+                }
+            }
+            Ok(failed) => refuse_resend(&state, &name, &request, &failed),
+            Err(error) => eprintln!(
+                "lodestar-server: {name}: not re-sending apply {}: build of {} failed: {error:#}",
+                request.apply_id, request.commit
+            ),
+        }
+        state.resend_builds.lock().unwrap().remove(&key);
+    });
 }

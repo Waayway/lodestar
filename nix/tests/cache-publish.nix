@@ -111,7 +111,11 @@ pkgs.testers.runNixOSTest {
 
     with subtest("a path substituted from this cache stays in the roots"):
         cache.succeed(f"nix-store --delete {smoke}")
-        cache.succeed(f"nix copy --no-check-sigs --from file://${cacheDir} {smoke}")
+        # As on the cache host, which substitutes from its own cache (hello is still here).
+        cache.succeed(
+            f"nix-store --realise {smoke} --option substituters file://${cacheDir}"
+            f" --option trusted-public-keys '{public_key}'"
+        )
         info = json.loads(cache.succeed(f"nix path-info --json {smoke}"))
         entry = info[smoke] if isinstance(info, dict) else info[0]
         assert not entry.get("ultimate"), entry

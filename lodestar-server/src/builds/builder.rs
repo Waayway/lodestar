@@ -17,11 +17,12 @@ use crate::process::{RunError, log_tail, run};
 
 /// Prefix of every failure reason caused by not reaching the builder (the gate relies on it).
 const UNREACHABLE: &str = "builder unreachable: ";
-/// Text of Nix (and ssh through Nix) errors that mean the builder could not be reached.
-const UNREACHABLE_MARKERS: [&str; 3] =
-    ["cannot connect", "Connection refused", "Could not resolve"];
 /// ssh's own exit status for connection errors.
 const SSH_CONNECT_FAILED: i32 = 255;
+/// How long a reachability or path probe of the builder store may take.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Nix's base-32 alphabet, which store path hashes use.
+const NIX_BASE32: &str = "0123456789abcdfghijklmnpqrsvwxyz";
 
 /// The outcome of building one host's system.
 #[derive(Clone, Debug, PartialEq)]
@@ -91,23 +92,45 @@ fn valid_host_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
-/// `/nix/store/<name>` with only store-path characters in the name, so the remote shell that
-/// ssh hands the command to reads it as one plain word.
+/// `/nix/store/<32 base-32 chars>-<name>` with only `[A-Za-z0-9+._=-]` in the name (not
+/// starting with `.`), so the remote shell that ssh hands the command to reads it as one plain
+/// word.
 fn valid_store_path(path: &str) -> bool {
-    path.strip_prefix("/nix/store/").is_some_and(|name| {
-        !name.is_empty()
-            && !name.starts_with('.')
-            && name.chars().all(|c| {
-                c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.' | '_' | '?' | '=')
-            })
-    })
+    let Some((hash, name)) = path
+        .strip_prefix("/nix/store/")
+        .and_then(|rest| rest.split_once('-'))
+    else {
+        return false;
+    };
+    hash.len() == 32
+        && hash.chars().all(|c| NIX_BASE32.contains(c))
+        && !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.' | '_' | '='))
 }
 
-/// Whether `stderr` says the builder could not be reached.
-fn unreachable(stderr: &str) -> bool {
-    UNREACHABLE_MARKERS
-        .iter()
-        .any(|marker| stderr.contains(marker))
+/// Runs `command` for at most `limit`; a timeout is reported as `reported` (the budget the
+/// caller set, of which `limit` may be the rest).
+async fn run_limited(
+    program: &Path,
+    command: &mut Command,
+    stdin: Option<&[u8]>,
+    limit: Duration,
+    reported: Duration,
+) -> Result<Output, String> {
+    run(command, stdin, limit)
+        .await
+        .map_err(|error| match error {
+            RunError::Start(error) => format!("starting {}: {error}", program.display()),
+            RunError::Wait(error) => format!("running {}: {error}", program.display()),
+            RunError::Timeout => format!(
+                "{} timed out after {}s",
+                program.display(),
+                reported.as_secs()
+            ),
+        })
 }
 
 /// The stderr tail of a failed run, or its exit status when it logged nothing.
@@ -177,6 +200,7 @@ impl RemoteBuilder {
             "IdentitiesOnly=yes",
             "StrictHostKeyChecking=accept-new",
             "BatchMode=yes",
+            "ConnectTimeout=10",
         ] {
             options.push("-o".into());
             options.push(option.into());
@@ -195,7 +219,8 @@ impl RemoteBuilder {
         command
     }
 
-    /// Runs `command` until `deadline`; the output, or why there is none.
+    /// Runs `command` until `deadline` (part of the whole `timeout`); the output, or why there
+    /// is none.
     async fn run_until(
         &self,
         program: &Path,
@@ -204,17 +229,26 @@ impl RemoteBuilder {
         deadline: Instant,
     ) -> Result<Output, String> {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        run(command, stdin, remaining)
-            .await
-            .map_err(|error| match error {
-                RunError::Start(error) => format!("starting {}: {error}", program.display()),
-                RunError::Wait(error) => format!("running {}: {error}", program.display()),
-                RunError::Timeout => format!(
-                    "{} timed out after {}s",
-                    program.display(),
-                    self.timeout.as_secs()
-                ),
-            })
+        run_limited(program, command, stdin, remaining, self.timeout).await
+    }
+
+    /// Whether the builder store answers (`nix store info`); why not, when it doesn't.
+    async fn probe(&self, dir: &Path) -> Result<(), String> {
+        let mut command = self.nix(dir, &["store", "info", "--store", &self.store]);
+        command.env("NIX_SSHOPTS", self.nix_sshopts());
+        let output = run_limited(
+            &self.nix_bin,
+            &mut command,
+            None,
+            PROBE_TIMEOUT,
+            PROBE_TIMEOUT,
+        )
+        .await?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(failure("nix store info", &output))
+        }
     }
 
     /// The toplevel `outPath` of `host`, evaluated locally.
@@ -240,12 +274,16 @@ impl RemoteBuilder {
         }
     }
 
-    /// Whether `path` is valid in the builder store (built earlier, or before a failure of
-    /// another host made `nix build` exit before printing it).
+    /// Whether `path` is valid in the builder store (built earlier, or built although a failure
+    /// of another host made `nix build` exit without printing it). Gets at least
+    /// `PROBE_TIMEOUT`, even when a long build used up the deadline.
     async fn on_store(&self, dir: &Path, path: &str, deadline: Instant) -> bool {
         let mut command = self.nix(dir, &["path-info", "--store", &self.store, path]);
         command.env("NIX_SSHOPTS", self.nix_sshopts());
-        self.run_until(&self.nix_bin, &mut command, None, deadline)
+        let limit = deadline
+            .saturating_duration_since(Instant::now())
+            .max(PROBE_TIMEOUT);
+        run_limited(&self.nix_bin, &mut command, None, limit, limit)
             .await
             .is_ok_and(|output| output.status.success())
     }
@@ -331,15 +369,21 @@ impl Builder for RemoteBuilder {
         };
         let stdout = String::from_utf8_lossy(&output.stdout);
         let printed: HashSet<&str> = stdout.lines().map(str::trim).collect();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let reason = if unreachable(&stderr) {
-            format!("{UNREACHABLE}{}", log_tail(&stderr))
-        } else {
-            failure("nix build", &output)
-        };
+        // Build logs may contain any text (a test suite's "Connection refused"), so whether the
+        // builder was reachable is asked of the store, never read from the log.
+        if !output.status.success()
+            && let Err(probe) = self.probe(dir).await
+        {
+            let reason = format!("{UNREACHABLE}{probe}");
+            for (name, _, _) in wanted {
+                results.insert(name, HostBuild::failed(reason.clone()));
+            }
+            return results;
+        }
+        let reason = failure("nix build", &output);
         for (name, _, path) in wanted {
-            let built = printed.contains(path.as_str())
-                || (!unreachable(&stderr) && self.on_store(dir, &path, deadline).await);
+            let built =
+                printed.contains(path.as_str()) || self.on_store(dir, &path, deadline).await;
             let result = if built {
                 HostBuild::built(path)
             } else {
@@ -389,6 +433,8 @@ impl Builder for RemoteBuilder {
             return Ok(());
         }
         let reason = failure(program, &output);
+        // ssh exits 255 when it cannot connect; a remote command that itself exits 255 is
+        // reported as unreachable too.
         if output.status.code() == Some(SSH_CONNECT_FAILED) {
             anyhow::bail!("{UNREACHABLE}{reason}");
         }

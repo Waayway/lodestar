@@ -64,7 +64,8 @@ fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
 }
 
 /// The fake `nix`: `eval` prints the outPath of hosts a, b and c and fails for `broken`;
-/// `build` prints only a's path, logs 50 lines to stderr and fails; `path-info` knows c.
+/// `build` runs BUILD (like real Nix with a failed host: prints nothing, exits 1);
+/// `path-info` knows a and c; `store info` runs STORE.
 const NIX: &str = r#"
 dir=$(dirname "$0")
 case "$3" in
@@ -79,16 +80,25 @@ case "$3" in
   build)
     pwd > "$dir/build.cwd"
     printf '%s' "$NIX_SSHOPTS" > "$dir/build.sshopts"
-    echo /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-nixos-system-a
-    i=1; while [ $i -le 50 ]; do echo "log line $i" >&2; i=$((i+1)); done
-    exit 1 ;;
+    BUILD ;;
   path-info)
-    case "$*" in
-      *cccccccc*) echo /nix/store/cccccccccccccccccccccccccccccccc-nixos-system-c ;;
-      *) echo "error: path is not valid" >&2; exit 1 ;;
+    case "$6" in
+      *aaaaaaaa*|*cccccccc*) printf '%s\n' "$6" ;;
+      *) echo "error: path '$6' is not valid" >&2; exit 1 ;;
     esac ;;
+  store)
+    STORE ;;
 esac
 "#;
+
+/// A failed build of b: 50 log lines, nothing printed, exit 1.
+const BUILD_FAILS: &str =
+    r#"i=1; while [ $i -le 50 ]; do echo "log line $i" >&2; i=$((i+1)); done; exit 1"#;
+const STORE_ANSWERS: &str = "echo 'Store URL: ssh-ng://alice@example.com'";
+
+fn nix(build: &str, store: &str) -> String {
+    NIX.replace("BUILD", build).replace("STORE", store)
+}
 
 /// The fake `ssh`: stores its stdin.
 const SSH: &str = r#"
@@ -110,11 +120,25 @@ fn fixture_with(nix: &str, ssh: &str, timeout: Duration) -> Fixture {
 }
 
 fn fixture() -> Fixture {
-    fixture_with(NIX, SSH, Duration::from_secs(30))
+    fixture_with(
+        &nix(BUILD_FAILS, STORE_ANSWERS),
+        SSH,
+        Duration::from_secs(30),
+    )
+}
+
+/// The recorded invocations of `nix` whose subcommand is `subcommand`.
+fn nix_calls(fixture: &Fixture, subcommand: &str) -> Vec<String> {
+    fixture
+        .calls("nix")
+        .split("\n\n")
+        .filter(|call| call.lines().nth(2) == Some(subcommand))
+        .map(str::to_string)
+        .collect()
 }
 
 #[tokio::test]
-async fn printed_paths_map_to_hosts_and_missing_ones_fail_with_the_log_tail() {
+async fn built_hosts_are_found_on_the_store_and_failed_ones_get_the_log_tail() {
     let fixture = fixture();
     let results = fixture
         .builder
@@ -161,8 +185,11 @@ async fn printed_paths_map_to_hosts_and_missing_ones_fail_with_the_log_tail() {
     );
     assert_eq!(
         std::fs::read_to_string(fixture.path("build.sshopts")).unwrap(),
-        "-i /run/keys/builder -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+        "-i /run/keys/builder -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10"
     );
+    // Nix exited 1: the store was asked once whether it answers, then about each path.
+    assert_eq!(nix_calls(&fixture, "store").len(), 1);
+    assert_eq!(nix_calls(&fixture, "path-info").len(), 2);
     let flake = fixture.flake().canonicalize().unwrap();
     for cwd in ["eval.cwd", "build.cwd"] {
         let recorded = std::fs::read_to_string(fixture.path(cwd)).unwrap();
@@ -237,22 +264,63 @@ async fn invalid_and_darwin_hosts_fail_before_any_process_runs() {
 }
 
 #[tokio::test]
-async fn an_unreachable_builder_says_so() {
-    let nix = r#"
-case "$3" in
-  eval) printf '%s' /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-nixos-system-a ;;
-  build) echo "error: cannot connect to 'alice@example.com'" >&2; exit 1 ;;
-  *) exit 1 ;;
-esac
-"#;
-    let fixture = fixture_with(nix, SSH, Duration::from_secs(30));
+async fn connection_errors_in_a_build_log_do_not_make_the_builder_unreachable() {
+    let build = r#"echo "test_db: connect to 127.0.0.1 port 5432: Connection refused" >&2; echo "Could not resolve host: example.com" >&2; exit 1"#;
+    let fixture = fixture_with(&nix(build, STORE_ANSWERS), SSH, Duration::from_secs(30));
+    let results = fixture
+        .builder
+        .build(&fixture.flake(), &[host("a", "linux"), host("b", "linux")])
+        .await;
+    assert!(results["a"].ok);
+    assert_eq!(results["a"].path.as_deref(), Some(PATH_A));
+    let tail = results["b"].log_tail.as_deref().unwrap();
+    assert!(!results["b"].ok);
+    assert!(!tail.starts_with("builder unreachable"), "{tail}");
+    assert!(tail.contains("Connection refused"), "{tail}");
+}
+
+#[tokio::test]
+async fn a_store_that_does_not_answer_makes_every_host_unreachable() {
+    let store = r#"echo "error: cannot connect to 'alice@example.com'" >&2; exit 1"#;
+    let fixture = fixture_with(&nix(BUILD_FAILS, store), SSH, Duration::from_secs(30));
+    let results = fixture
+        .builder
+        .build(&fixture.flake(), &[host("a", "linux"), host("b", "linux")])
+        .await;
+    for name in ["a", "b"] {
+        assert!(!results[name].ok);
+        assert_eq!(
+            results[name].log_tail.as_deref(),
+            Some("builder unreachable: error: cannot connect to 'alice@example.com'")
+        );
+    }
+    let probe = nix_calls(&fixture, "store");
+    assert_eq!(probe.len(), 1);
+    assert_eq!(
+        probe[0].lines().collect::<Vec<_>>(),
+        [
+            "--extra-experimental-features",
+            "nix-command flakes",
+            "store",
+            "info",
+            "--store",
+            STORE
+        ]
+    );
+    assert!(nix_calls(&fixture, "path-info").is_empty());
+}
+
+#[tokio::test]
+async fn a_successful_build_needs_no_probe() {
+    let build = r#"echo /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-nixos-system-a"#;
+    let fixture = fixture_with(&nix(build, "exit 1"), SSH, Duration::from_secs(30));
     let results = fixture
         .builder
         .build(&fixture.flake(), &[host("a", "linux")])
         .await;
-    let tail = results["a"].log_tail.as_deref().unwrap();
-    assert!(!results["a"].ok);
-    assert!(tail.starts_with("builder unreachable: "), "{tail}");
+    assert!(results["a"].ok);
+    assert!(nix_calls(&fixture, "store").is_empty());
+    assert!(nix_calls(&fixture, "path-info").is_empty());
 }
 
 #[tokio::test]
@@ -313,6 +381,8 @@ async fn publish_runs_the_command_over_ssh_with_the_channels_on_stdin() {
             "StrictHostKeyChecking=accept-new",
             "-o",
             "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
             "-p",
             "2222",
             "--",
@@ -339,6 +409,13 @@ async fn publish_rejects_bad_arguments_before_running_ssh() {
         (COMMIT, "/etc/passwd"),
         (COMMIT, "/nix/store/x; rm -rf /"),
         (COMMIT, "/nix/store/../../etc"),
+        (COMMIT, "/nix/store/short-name"),
+        (COMMIT, "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-name"),
+        (COMMIT, "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-a?b"),
+        (
+            COMMIT,
+            "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-.hidden",
+        ),
     ] {
         let result = fixture
             .builder
@@ -355,7 +432,11 @@ async fn publish_with_ssh_unable_to_connect_is_builder_unreachable() {
 echo "ssh: connect to host example.com port 2222: Connection refused" >&2
 exit 255
 "#;
-    let fixture = fixture_with(NIX, ssh, Duration::from_secs(30));
+    let fixture = fixture_with(
+        &nix(BUILD_FAILS, STORE_ANSWERS),
+        ssh,
+        Duration::from_secs(30),
+    );
     let error = fixture
         .builder
         .publish(COMMIT, &[PATH_A.into()], &serde_json::json!({}))
@@ -371,7 +452,11 @@ async fn publish_failure_carries_the_log_tail() {
 echo "cache-publish: disk full" >&2
 exit 3
 "#;
-    let fixture = fixture_with(NIX, ssh, Duration::from_secs(30));
+    let fixture = fixture_with(
+        &nix(BUILD_FAILS, STORE_ANSWERS),
+        ssh,
+        Duration::from_secs(30),
+    );
     let error = fixture
         .builder
         .publish(COMMIT, &[PATH_A.into()], &serde_json::json!({}))

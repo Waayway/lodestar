@@ -21,18 +21,23 @@ pub struct PrebuildQueue {
     seen: Mutex<BTreeMap<String, String>>,
 }
 
-/// Queues a prebuild of `head` for `channel`. The returned task waits its turn, then builds the
-/// newest head queued for the channel by then, or does nothing when an earlier task took it.
-pub fn spawn_prebuild(state: &AppState, channel: &str, head: &str) -> JoinHandle<()> {
-    state
+/// Queues a prebuild of `head` for `channel`. A new task is spawned only when the channel had
+/// nothing queued (at most one waiting task per channel); otherwise the waiting task builds this
+/// newer head instead, and `None` is returned. The task waits its turn, then builds the newest
+/// head queued for the channel by then.
+pub fn spawn_prebuild(state: &AppState, channel: &str, head: &str) -> Option<JoinHandle<()>> {
+    let queued = state
         .prebuilds
         .pending
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(channel.to_string(), head.to_string());
+    if queued.is_some() {
+        return None;
+    }
     let state = state.clone();
     let channel = channel.to_string();
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let _run = state.prebuilds.run.lock().await;
         let head = state
             .prebuilds
@@ -51,12 +56,12 @@ pub fn spawn_prebuild(state: &AppState, channel: &str, head: &str) -> JoinHandle
             ),
             Err(error) => eprintln!("lodestar-server: prebuild of {channel} at {head}: {error:#}"),
         }
-    })
+    }))
 }
 
 /// After a mirror fetch: queues a prebuild for every gated channel whose head differs from the one
 /// it had at the previous call (the first call, at server start, prebuilds every head once).
-/// Returns the queued tasks; none while builds are off.
+/// Returns the tasks it spawned; none while builds are off.
 pub async fn prebuild_new_heads(state: &AppState) -> Vec<JoinHandle<()>> {
     if !state.config.builds.enable {
         return Vec::new();
@@ -81,7 +86,7 @@ pub async fn prebuild_new_heads(state: &AppState) -> Vec<JoinHandle<()>> {
             .as_ref()
             != Some(&head);
         if moved {
-            tasks.push(spawn_prebuild(state, channel, &head));
+            tasks.extend(spawn_prebuild(state, channel, &head));
         }
     }
     tasks

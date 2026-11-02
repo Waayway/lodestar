@@ -20,6 +20,12 @@ pub(crate) fn gated_hosts(state: &AppState, channel: &str) -> Option<Vec<Managed
     hosts.iter().any(is_built_here).then_some(hosts)
 }
 
+/// Whether an apply of `hosts` never waits on the gate: none of them is a Linux host (a
+/// darwin-only apply). Any Linux host among them gates the whole channel.
+pub fn skips_gate(hosts: &[&ManagedHost]) -> bool {
+    !hosts.iter().any(|host| is_built_here(host))
+}
+
 /// What is known about `commit` on `channel` without building or waiting: `Some` with the
 /// failed hosts (sorted; empty means ready, also when the gate does not apply) once every Linux
 /// host of the channel has a result, `None` while one is still missing.

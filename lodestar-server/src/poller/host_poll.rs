@@ -8,7 +8,7 @@ use lodestar_proto::{AgentStatus, ApplyRequest, WsMessage};
 use super::activation_ingest::ingest_activations;
 use super::apply_recording::record_apply;
 use super::reachability::{agent_base, reachability_change};
-use crate::builds::{build_channel, known_failures};
+use crate::builds::{build_channel, known_failures, skips_gate};
 use crate::clock::now;
 use crate::config::ManagedHost;
 use crate::db;
@@ -112,7 +112,13 @@ async fn handle_status(state: &AppState, host: &ManagedHost, base: &str, status:
             apply_id: desired.apply_id.clone(),
             commit: desired.commit.clone(),
         };
-        match known_failures(state, &host.channel, &request.commit) {
+        // A darwin host's re-send never waits on the gate.
+        let known = if skips_gate(&[host]) {
+            Some(Vec::new())
+        } else {
+            known_failures(state, &host.channel, &request.commit)
+        };
+        match known {
             Some(failed) if failed.is_empty() => resend(state, name, base, &request).await,
             Some(failed) => refuse_resend(state, name, &request, &failed),
             None => spawn_gated_resend(state, host, base, request),

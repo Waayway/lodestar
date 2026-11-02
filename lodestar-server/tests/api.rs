@@ -1245,3 +1245,150 @@ async fn builds_off_never_calls_the_builder() {
     assert!(builder.calls().is_empty());
     assert_eq!(fake.lock().unwrap().applied.len(), 1);
 }
+
+#[tokio::test]
+async fn a_darwin_apply_on_a_mixed_channel_skips_the_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    let head = origin.commit("main one", "main");
+    let fake = Shared::default();
+    let agent = fake_agent(fake.clone()).await;
+    // Never released: the Linux apply stays building throughout.
+    let builder = Arc::new(FakeBuilder::held(Arc::new(tokio::sync::Semaphore::new(0))));
+    let hosts = vec![host("H1", "main"), darwin("M1", "main")];
+    let environment = gated_env(dir, &origin, agent, hosts, builder.clone(), true).await;
+    let http = dashboard_client();
+
+    let linux = tokio::spawn(
+        http.post(format!("{}/api/hosts/H1/apply", environment.base))
+            .send(),
+    );
+    builder.entered.notified().await;
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        http.post(format!("{}/api/hosts/M1/apply", environment.base))
+            .send(),
+    )
+    .await
+    .expect("the darwin apply waited on the gate")
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let desired = db::desired(&environment.state.db, "M1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(desired.commit, head);
+    assert_eq!(fake.lock().unwrap().applied.len(), 1);
+    assert!(
+        db::desired(&environment.state.db, "H1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(builder.calls().len(), 1);
+    linux.abort();
+}
+
+#[tokio::test]
+async fn a_head_that_moves_during_the_build_is_built_before_it_is_desired() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    let first = origin.commit("main one", "main");
+    let fake = Shared::default();
+    let agent = fake_agent(fake.clone()).await;
+    let hold = Arc::new(tokio::sync::Semaphore::new(0));
+    let builder = Arc::new(FakeBuilder::held(hold.clone()));
+    let environment = gated_env(
+        dir,
+        &origin,
+        agent,
+        vec![host("H1", "main")],
+        builder.clone(),
+        true,
+    )
+    .await;
+
+    let request = tokio::spawn(
+        dashboard_client()
+            .post(format!("{}/api/hosts/H1/apply", environment.base))
+            .send(),
+    );
+    builder.entered.notified().await;
+    let second = origin.commit("main two", "main");
+    hold.add_permits(1);
+    builder.entered.notified().await;
+    assert!(
+        db::desired(&environment.state.db, "H1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    hold.add_permits(1);
+    let response = request.await.unwrap().unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let built: Vec<String> = builder
+        .calls()
+        .into_iter()
+        .map(|(commit, _)| commit)
+        .collect();
+    assert_eq!(built, vec![first, second.clone()]);
+    let desired = db::desired(&environment.state.db, "H1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(desired.commit, second);
+    assert_eq!(fake.lock().unwrap().applied.len(), 1);
+}
+
+#[tokio::test]
+async fn a_channel_that_keeps_moving_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = Origin::new(dir.path());
+    origin.commit("main zero", "main");
+    let fake = Shared::default();
+    let agent = fake_agent(fake.clone()).await;
+    let hold = Arc::new(tokio::sync::Semaphore::new(0));
+    let builder = Arc::new(FakeBuilder::held(hold.clone()));
+    let environment = gated_env(
+        dir,
+        &origin,
+        agent,
+        vec![host("H1", "main")],
+        builder.clone(),
+        true,
+    )
+    .await;
+
+    let request = tokio::spawn(
+        dashboard_client()
+            .post(format!("{}/api/hosts/H1/apply", environment.base))
+            .send(),
+    );
+    // Every build round sees the head move again.
+    let mut last = String::new();
+    for round in 0..3 {
+        builder.entered.notified().await;
+        last = origin.commit(&format!("main move {round}"), "main");
+        hold.add_permits(1);
+    }
+    let response = request.await.unwrap().unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(
+        body["error"], "channel main kept moving while its head was built; try again",
+        "{body}"
+    );
+    assert_eq!(builder.calls().len(), 3);
+    assert!(
+        db::desired(&environment.state.db, "H1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(fake.lock().unwrap().applied.is_empty());
+    let audit = db::recent_audit(&environment.state.db, 100).await.unwrap();
+    let refused = audit_kinds(&audit, "apply-refused");
+    assert_eq!(refused.len(), 1, "{audit:?}");
+    assert_eq!(refused[0].details["reason"], "channel kept moving");
+    assert_eq!(refused[0].details["commit"], last.as_str());
+}

@@ -9,7 +9,7 @@ mod prebuild;
 mod result_file;
 
 pub use builder::{Builder, HostBuild, RemoteBuilder};
-pub use channel_gate::{build_channel, known_failures};
+pub use channel_gate::{build_channel, known_failures, skips_gate};
 pub use channel_heads::ChannelHeads;
 pub use gate::BuildGate;
 pub use prebuild::{PrebuildQueue, prebuild_new_heads, spawn_prebuild};

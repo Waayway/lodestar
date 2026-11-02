@@ -832,16 +832,17 @@ async fn queued_prebuilds_collapse_to_the_newest_head() {
     let third = fixture.origin.commit("third", "unstable");
     let state = &fixture.state;
 
-    let running = spawn_prebuild(state, "unstable", &first);
+    let running = spawn_prebuild(state, "unstable", &first).unwrap();
     builder.entered.notified().await;
     assert_eq!(state.building.lock().unwrap().get("unstable"), Some(&first));
-    let queued = [
-        spawn_prebuild(state, "unstable", &second),
-        spawn_prebuild(state, "unstable", &third),
-    ];
+    let queued = spawn_prebuild(state, "unstable", &second).expect("nothing was waiting");
+    assert!(
+        spawn_prebuild(state, "unstable", &third).is_none(),
+        "one waiting task per channel"
+    );
     hold.add_permits(2);
     running.await.unwrap();
-    await_all(queued.into()).await;
+    queued.await.unwrap();
 
     let built: Vec<String> = builder
         .calls()

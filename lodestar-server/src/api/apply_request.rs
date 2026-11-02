@@ -7,7 +7,7 @@ use sea_orm::TransactionTrait;
 use serde_json::json;
 
 use super::error::{ApiError, internal};
-use crate::builds::{build_channel, known_failures};
+use crate::builds::{build_channel, known_failures, skips_gate};
 use crate::clock::now;
 use crate::config::ManagedHost;
 use crate::db;
@@ -125,15 +125,16 @@ pub(super) async fn send_apply(
     }
 }
 
-/// How often an apply resolves the head again after waiting for a build (the head moved while
-/// it was built).
+/// How often an apply waits for a build of the head and resolves it again (the head moved while
+/// it was built); one more check without a build follows the last round.
 const GATE_ROUNDS: usize = 3;
 
 /// Fetches the mirror, resolves `channel`'s head and records a new desired apply of it for
 /// each host, once the head's build for the channel is done and good (the build gate; refused
-/// with 409 otherwise, recording nothing). Records under the action lock, so of two overlapping
-/// presses the later one always records the newer head; a build is waited for outside it, then
-/// the head is resolved again. Returns the commit and the new apply ids.
+/// with 409 otherwise, recording nothing). Applies of darwin hosts only skip the gate. Records
+/// under the action lock, so of two overlapping presses the later one always records the newer
+/// head; a build is waited for outside it, then the head is resolved again. Returns the commit
+/// and the new apply ids.
 pub(super) async fn request_applies(
     state: &AppState,
     actor: &str,
@@ -145,34 +146,51 @@ pub(super) async fn request_applies(
         [host] => Some(host.name.as_str()),
         _ => None,
     };
-    for _ in 0..GATE_ROUNDS {
+    let gated = !skips_gate(hosts);
+    for round in 0..=GATE_ROUNDS {
         let commit = {
             let _action = state.actions.lock().await;
             fetch_mirror(state).await?;
             let commit = channel_head(state, channel).await?;
-            if let Some(failed) = known_failures(state, channel, &commit) {
-                if !failed.is_empty() {
+            let known = if gated {
+                known_failures(state, channel, &commit)
+            } else {
+                Some(Vec::new())
+            };
+            match known {
+                Some(failed) if !failed.is_empty() => {
                     let outcome = Ok(failed);
                     return Err(refuse(state, actor, audit_host, channel, &commit, outcome).await);
                 }
-                let ids = create_applies(state, actor, hosts, &commit)
-                    .await
-                    .map_err(internal)?;
-                return Ok((commit, ids));
+                Some(_) => {
+                    let ids = create_applies(state, actor, hosts, &commit)
+                        .await
+                        .map_err(internal)?;
+                    return Ok((commit, ids));
+                }
+                None if round == GATE_ROUNDS => {
+                    let message = format!(
+                        "channel {channel} kept moving while its head was built; try again"
+                    );
+                    let details = json!({
+                        "commit": commit,
+                        "channel": channel,
+                        "reason": "channel kept moving",
+                    });
+                    return Err(audit_refusal(state, actor, audit_host, message, details).await);
+                }
+                None => commit,
             }
-            commit
         };
         gate_apply(state, actor, audit_host, channel, &commit).await?;
     }
-    Err(ApiError(
-        StatusCode::CONFLICT,
-        format!("channel {channel} kept moving while its head was built; try again"),
-    ))
+    unreachable!("the last round always returns")
 }
 
 /// The build gate for an apply of `commit` on `channel`: waits for its build (no-op when builds
 /// are off or the channel has no Linux host) and refuses with 409 and an `apply-refused` audit
-/// row when any host of the channel failed or the build could not run.
+/// row when any host of the channel failed, the build could not run or its result cannot be
+/// read back.
 pub(super) async fn gate_apply(
     state: &AppState,
     actor: &str,
@@ -180,10 +198,16 @@ pub(super) async fn gate_apply(
     channel: &str,
     commit: &str,
 ) -> Result<(), ApiError> {
-    match build_channel(state, channel, commit).await {
-        Ok(failed) if failed.is_empty() => Ok(()),
-        outcome => Err(refuse(state, actor, host, channel, commit, outcome).await),
-    }
+    let outcome = match build_channel(state, channel, commit).await {
+        Ok(failed) if failed.is_empty() => {
+            if known_failures(state, channel, commit).is_some() {
+                return Ok(());
+            }
+            Err(anyhow::anyhow!("result unreadable"))
+        }
+        outcome => outcome,
+    };
+    Err(refuse(state, actor, host, channel, commit, outcome).await)
 }
 
 /// Audits `apply-refused` and returns the 409 for a failed build (`Ok(failed hosts)`) or a gate
@@ -210,7 +234,18 @@ async fn refuse(
             json!({ "commit": commit, "channel": channel, "error": format!("{error:#}") }),
         ),
     };
-    eprintln!("lodestar-server: api: apply of {channel} refused: {message}");
+    audit_refusal(state, actor, host, message, details).await
+}
+
+/// Records `apply-refused` with `details` and returns the 409 with `message`.
+async fn audit_refusal(
+    state: &AppState,
+    actor: &str,
+    host: Option<&str>,
+    message: String,
+    details: serde_json::Value,
+) -> ApiError {
+    eprintln!("lodestar-server: api: apply refused: {message}");
     if let Err(error) =
         db::insert_audit(&state.db, now(), host, "apply-refused", actor, details).await
     {

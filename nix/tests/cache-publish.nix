@@ -3,22 +3,30 @@
 # `cache-publish` as the `lodestar` user (login shell, as the server's ssh does) and a
 # test key, and checks that the file cache holds only the path built here, signed so that
 # `nix store verify` accepts it; that nginx serves the cache at /nix/ (narinfos
-# `no-cache`) and hides `.roots/`; and that the prune service runs.
+# `no-cache`) and hides `.roots/`; that a publish of a commit no channel keeps leaves its
+# own entries in place; that a path substituted back from the cache (signed with its key,
+# no longer `ultimate`) stays in a later commit's roots; and that the prune service runs.
 # Needs an x86_64-linux builder with KVM.
 { pkgs, modules }:
 let
   cacheDir = "/srv/nix-cache";
   keyDir = "/var/lib/cache-test";
   commit = "1111111111111111111111111111111111111111";
+  commit2 = "2222222222222222222222222222222222222222";
+  commit3 = "3333333333333333333333333333333333333333";
   # A derivation built in the VM (so `ultimate`) whose output references hello (not).
-  smoke = pkgs.writeText "smoke.nix" ''
-    derivation {
-      name = "smoke";
-      system = builtins.currentSystem;
-      builder = builtins.storePath "${pkgs.bash}" + "/bin/bash";
-      args = [ "-c" "echo ''${builtins.storePath "${pkgs.hello}"} > $out" ];
-    }
-  '';
+  smokeNamed =
+    name:
+    pkgs.writeText "${name}.nix" ''
+      derivation {
+        name = "${name}";
+        system = builtins.currentSystem;
+        builder = builtins.storePath "${pkgs.bash}" + "/bin/bash";
+        args = [ "-c" "echo ''${builtins.storePath "${pkgs.hello}"} > $out" ];
+      }
+    '';
+  smoke = smokeNamed "smoke";
+  smoke2 = smokeNamed "smoke-two";
 in
 pkgs.testers.runNixOSTest {
   name = "lodestar-cache-publish";
@@ -92,6 +100,29 @@ pkgs.testers.runNixOSTest {
         for private in [".roots/channels.json", ".roots/${commit}", ".lock"]:
             code = cache.succeed(f"curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1/nix/{private}")
             assert code == "404", f"{private}: {code}"
+
+    with subtest("a publish of a commit no channel keeps leaves its entries in place"):
+        smoke2 = as_lodestar("nix-build --no-out-link ${smoke2}").strip()
+        smoke2_hash = smoke2.removeprefix("/nix/store/").split("-")[0]
+        as_lodestar(f"echo {shlex.quote(index)} | cache-publish ${commit2} {smoke2}")
+        cache.succeed(f"test -f ${cacheDir}/{smoke2_hash}.narinfo")
+        cache.succeed("test -f ${cacheDir}/.roots/${commit2}")
+        cache.succeed(f"test -f ${cacheDir}/{smoke_hash}.narinfo")
+
+    with subtest("a path substituted from this cache stays in the roots"):
+        cache.succeed(f"nix-store --delete {smoke}")
+        cache.succeed(f"nix copy --no-check-sigs --from file://${cacheDir} {smoke}")
+        info = json.loads(cache.succeed(f"nix path-info --json {smoke}"))
+        entry = info[smoke] if isinstance(info, dict) else info[0]
+        assert not entry.get("ultimate"), entry
+        assert any(sig.startswith("test-1:") for sig in entry.get("signatures", [])), entry
+        # commit3 replaces commit as the only kept commit; smoke must come with it.
+        index3 = json.dumps({"stable": {"current": "${commit3}", "previous": None}})
+        as_lodestar(f"echo {shlex.quote(index3)} | cache-publish ${commit3} {smoke}")
+        roots = cache.succeed("cat ${cacheDir}/.roots/${commit3}").split()
+        assert roots == [smoke], roots
+        cache.succeed(f"test -f ${cacheDir}/{smoke_hash}.narinfo")
+        cache.fail("test -e ${cacheDir}/.roots/${commit}")
 
     with subtest("the prune service runs as the cache user"):
         cache.succeed("systemctl start lodestar-cache-prune.service")

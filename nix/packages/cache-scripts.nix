@@ -4,10 +4,15 @@
 #   of the given closures that were built on this machine (`ultimate`) into the file
 #   binary cache at `cacheDir` (zstd NARs, narinfos signed with `signingKeyFile`; their
 #   references stay on cache.nixos.org), merges them into
-#   `.roots/<commit>`, stores the index as `.roots/channels.json` and runs `cache-prune`.
-# - `cache-prune [cache-dir]`: deletes every narinfo (and its NAR) whose store path is not
-#   listed in the `.roots` file of a channel's current or previous commit, then the
-#   `.roots` files of commits no channel keeps. Deletes nothing without a readable index.
+#   `.roots/<commit>`, stores the index as `.roots/channels.json` and runs `cache-prune`
+#   keeping `<commit>` too (a publish never deletes what it just wrote, also when the
+#   commit is no channel's current or previous one).
+#   Paths substituted from this cache (no longer `ultimate`, but signed with this cache's
+#   key) count as built here, so they stay in the commit's roots.
+# - `cache-prune [cache-dir [keep-commit]]`: deletes every narinfo (and its NAR) whose
+#   store path is not listed in the `.roots` file of a channel's current or previous
+#   commit (or of `keep-commit`), then the `.roots` files of commits not kept. Deletes
+#   nothing without a readable index.
 #
 # Both serialise on `<cacheDir>/.lock`. `LODESTAR_CACHE_DIR` and
 # `LODESTAR_CACHE_SIGNING_KEY` override the built-in paths of `cache-publish` (tests).
@@ -54,6 +59,7 @@ let
       hashPattern="^$nix32{32}\$"
       narUrlPattern='^nar/[A-Za-z0-9]+\.nar(\.[A-Za-z0-9]+)?$'
       cacheDir=''${1:-${cacheDir}}
+      extraCommit=''${2:-}
       log() { echo "cache-prune: $*" >&2; }
       # The `URL:` a narinfo names, if it is a file directly in nar/ (else nothing).
       narUrl() {
@@ -93,11 +99,15 @@ let
         exit 0
       fi
 
+      if [ -n "$extraCommit" ]; then
+        commits+=$'\n'$extraCommit
+      fi
+
       # The keep set: the store-path hashes listed for every kept commit.
       declare -A keepCommits=() keep=()
       while IFS= read -r commit; do
         if ! [[ $commit =~ $commitPattern ]]; then
-          log "$index names an invalid commit: deleting nothing"
+          log "invalid kept commit $(printf %q "$commit"): deleting nothing"
           exit 0
         fi
         if [ ! -f "$roots/$commit" ] || [ -L "$roots/$commit" ]; then
@@ -216,8 +226,12 @@ let
           | writeAtomically "$cacheDir/nix-cache-info"
       fi
 
-      # The closure, reduced to the paths built here (`ultimate`); the rest is signed by
+      # The closure, reduced to the paths built here (`ultimate`) or substituted from this
+      # cache (signed with its key: after a store GC the builder gets unchanged paths back
+      # from here, and they must stay in the commit's roots); the rest is signed by
       # cache.nixos.org and comes from there. Older nix prints an array, newer an object.
+      keyName=$(cut -d: -f1 "$signingKeyFile")
+      [ -n "$keyName" ] || die "signing key $signingKeyFile has no key name"
       jsonFormat=()
       if [[ $(nix path-info --help 2>/dev/null || true) == *--json-format* ]]; then
         jsonFormat=(--json-format 1)
@@ -227,16 +241,16 @@ let
       while IFS= read -r path; do
         [[ $path =~ $storePathPattern ]] || die "nix path-info returned $(printf %q "$path")"
         published+=("$path")
-      done < <(jq -r '
+      done < <(jq -r --arg key "$keyName" '
         (if type == "array" then map({ key: .path, value: . }) | from_entries else . end)
         | to_entries[]
-        | select(.value != null and .value.ultimate == true)
+        | select(.value != null and (.value.ultimate == true
+            or ((.value.signatures // []) | any(startswith($key + ":")))))
         | .key' "$workDir/closure.json" | sort)
 
       # Binary-cache entries for the paths not published yet, written here rather than
       # with `nix copy`: a file cache refuses a path whose references it lacks, and the
       # references live on cache.nixos.org (clients substitute each path independently).
-      keyName=$(cut -d: -f1 "$signingKeyFile")
       fresh=()
       for path in "''${published[@]}"; do
         base=''${path#/nix/store/}
@@ -299,7 +313,7 @@ let
       writeAtomically "$roots/channels.json" <"$workDir/channels.json"
       echo "cache-publish: $commit: ''${#published[@]} of $(jq length "$workDir/closure.json") paths built here" >&2
 
-      LODESTAR_CACHE_LOCKED=1 ${lib.getExe cache-prune} "$cacheDir"
+      LODESTAR_CACHE_LOCKED=1 ${lib.getExe cache-prune} "$cacheDir" "$commit"
     '';
   };
 in

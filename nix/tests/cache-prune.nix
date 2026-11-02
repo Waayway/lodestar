@@ -84,6 +84,29 @@ pkgs.runCommand "lodestar-cache-prune"
     present nix-cache-info "nix-cache-info"
     echo "ok: prune keeps the current and previous commits' paths only"
 
+    # --- an extra keep commit (the one cache-publish just published) is kept too --------
+    fixture
+    channels
+    printf '/nix/store/%s-pkg-E\n' "$E" > "$dir/.roots/$c3"
+    cache-prune "$dir" "$c3"
+    present "$E.narinfo" "kept by the extra commit"
+    present nar/narE.nar.zst "kept by the extra commit"
+    present ".roots/$c3" "roots of the extra commit"
+    present "$A.narinfo" "kept by the index"
+    absent "$D.narinfo" "unkept D"
+    absent ".roots/$c0" "roots of c0"
+    echo "ok: prune keeps the extra commit's paths"
+
+    # An invalid extra commit, or one without roots, deletes nothing.
+    for extra in ../x "$c3"; do
+      fixture
+      channels
+      snap
+      cache-prune "$dir" "$extra" || fail "prune with extra commit $extra must exit 0"
+      unchanged "prune with extra commit $extra"
+    done
+    echo "ok: prune with a bad or rootless extra commit deletes nothing"
+
     # --- prune without, or with an unreadable, channels.json deletes nothing ------------
     for index in missing garbage array badcommit empty; do
       fixture

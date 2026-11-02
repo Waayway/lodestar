@@ -5,6 +5,6 @@ mod fake_builder;
 mod fake_issuer;
 mod origin;
 
-pub use fake_builder::FakeBuilder;
+pub use fake_builder::{FakeBuilder, path_of};
 pub use fake_issuer::FakeIssuer;
 pub use origin::{Origin, git};

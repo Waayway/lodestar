@@ -1,6 +1,7 @@
 //! A builder for the build gate's callers: counts calls, records which commit and hosts each
 //! build had and every publish, fails chosen hosts (or all, as unreachable), fails publishes
-//! and can block until released.
+//! and can block until released. It can also keep a store: every path it builds is in it,
+//! `forget` drops one (a GC on the builder) and a publish of a path not in it fails.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -30,6 +31,18 @@ pub struct FakeBuilder {
     pub publish_error: Mutex<Option<String>>,
     /// Every publish: (commit, paths).
     pub published: Mutex<Vec<(String, Vec<String>)>>,
+    /// When set, a publish fails for a path that is not in `store`.
+    pub strict_store: AtomicBool,
+    /// The paths `build` realised and the builder has not collected since.
+    pub store: Mutex<HashSet<String>>,
+}
+
+/// The store path the fake builds for `host`.
+pub fn path_of(host: &str) -> String {
+    format!(
+        "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-nixos-system-{}",
+        host.to_lowercase()
+    )
 }
 
 impl FakeBuilder {
@@ -60,6 +73,17 @@ impl FakeBuilder {
 
     pub fn set_unreachable(&self, unreachable: bool) {
         self.unreachable.store(unreachable, Ordering::SeqCst);
+    }
+
+    /// Publishes fail for paths the store does not have (as `cache-publish` does for a path
+    /// that is neither on the builder nor in the cache).
+    pub fn keep_store(&self) {
+        self.strict_store.store(true, Ordering::SeqCst);
+    }
+
+    /// The builder's GC collected `host`'s path.
+    pub fn forget(&self, host: &str) {
+        self.store.lock().unwrap().remove(&path_of(host));
     }
 }
 
@@ -96,12 +120,10 @@ impl Builder for FakeBuilder {
                         log_tail: Some("error: builder said no".into()),
                     }
                 } else {
+                    self.store.lock().unwrap().insert(path_of(&host.name));
                     HostBuild {
                         ok: true,
-                        path: Some(format!(
-                            "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-nixos-system-{}",
-                            host.name.to_lowercase()
-                        )),
+                        path: Some(path_of(&host.name)),
                         log_tail: None,
                     }
                 };
@@ -120,9 +142,15 @@ impl Builder for FakeBuilder {
             .lock()
             .unwrap()
             .push((commit.to_string(), paths.to_vec()));
-        match self.publish_error.lock().unwrap().clone() {
-            Some(message) => anyhow::bail!("{message}"),
-            None => Ok(()),
+        if let Some(message) = self.publish_error.lock().unwrap().clone() {
+            anyhow::bail!("{message}");
         }
+        if self.strict_store.load(Ordering::SeqCst) {
+            let store = self.store.lock().unwrap();
+            if let Some(path) = paths.iter().find(|path| !store.contains(*path)) {
+                anyhow::bail!("path '{path}' is not valid");
+            }
+        }
+        Ok(())
     }
 }

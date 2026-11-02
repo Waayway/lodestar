@@ -1622,6 +1622,7 @@ async fn a_failed_channel_build_is_visible_and_retry_rebuilds_it() {
         .clone()
         .unwrap();
     assert_eq!(build.state, "ok", "{build:?}");
+    // H1 is realised again with it: the channel advances and publishes H1's path too.
     assert_eq!(builder.calls().len(), 2);
-    assert_eq!(builder.calls()[1].1, names(&["H2"]));
+    assert_eq!(builder.calls()[1].1, names(&["H1", "H2"]));
 }

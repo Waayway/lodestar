@@ -69,8 +69,9 @@ async fn gate_channel(
     };
     if let Some(failed) = known_failures(state, channel, commit) {
         if failed.is_empty() {
-            // Built already: the gate still advances the channel to it (and publishes) when it
-            // is the head and the index lags behind; that needs no building state.
+            // Built already: the gate still advances the channel to it (realising its hosts
+            // again and publishing) when it is the head and the index lags behind; the channel
+            // keeps showing the recorded result meanwhile.
             state.builds.ensure_built(state, commit, &hosts).await?;
         }
         return Ok(failed);

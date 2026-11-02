@@ -36,7 +36,8 @@ type ChannelIndex = BTreeMap<String, ChannelHeads>;
 ///
 /// A channel's entry in the index (`channels.json`, what the cache keeps) only ever moves to the
 /// channel's current mirror head, once every Linux host of the channel is built there; whenever it
-/// moves, every path of the channel at that commit is published again.
+/// moves, every host of the channel is realised on the builder again (its GC roots none of the
+/// published paths) and every path of the channel at that commit is published again.
 #[derive(Clone, Debug)]
 pub struct BuildGate {
     /// `state_dir/builds`.
@@ -97,15 +98,19 @@ impl BuildGate {
             .unwrap_or_else(|| BuildResult::empty(commit));
         let missing = result.missing(hosts);
         let channels = channels_of(hosts);
-        if missing.is_empty() {
-            // Built already; the channel may still have to advance to it (it became the head
-            // after it was recorded, or an earlier publish failed).
-            return self
-                .publish_and_write(state, result, BTreeMap::new(), &channels)
-                .await;
-        }
         // A corrupt index would fail the publish step; fail before spending a build on it.
-        self.read_index()?;
+        let index = self.read_index()?;
+        // The hosts already recorded ok on a channel that may advance to this commit: the
+        // advance publishes their paths, which the builder's GC may have collected since, so
+        // they are realised again in the same call (instant while the builder still has them).
+        let refresh = self
+            .advancing_hosts(state, &result, &index, &channels)
+            .await;
+        let mut to_build: Vec<ManagedHost> = missing.iter().chain(&refresh).cloned().collect();
+        to_build.sort_by(|left, right| left.name.cmp(&right.name));
+        if to_build.is_empty() {
+            return Ok(result);
+        }
 
         let work = self.dir.join("work").join(commit);
         std::fs::create_dir_all(self.dir.join("work"))
@@ -117,7 +122,7 @@ impl BuildGate {
             .with_context(|| format!("checking out {commit} to build it"))?;
         // In a task of its own so the worktree is removed when the builder panics too.
         let builder = state.builder.clone();
-        let (build_dir, to_build) = (work.clone(), missing.clone());
+        let build_dir = work.clone();
         let outcome = tokio::spawn(async move { builder.build(&build_dir, &to_build).await }).await;
         state.mirror.remove_worktree(&work).await;
         let builds = match outcome {
@@ -125,34 +130,37 @@ impl BuildGate {
             Err(error) if error.is_panic() => bail!("builder panicked while building {commit}"),
             Err(error) => bail!("build of {commit} was cancelled: {error}"),
         };
-        // Not reaching the builder says nothing about the commit: those hosts stay missing, so
-        // the next call builds them again.
+        // Not reaching the builder says nothing about the commit: those hosts stay missing (or
+        // keep their recorded result), so the next call builds them again.
         let unreachable = builds
             .values()
             .find(|build| is_unreachable(build))
             .and_then(|build| build.log_tail.clone());
         let built_at = clock::now();
-        let built: BTreeMap<String, HostResult> = missing
-            .iter()
-            .filter(|host| !builds.get(&host.name).is_some_and(is_unreachable))
-            .map(|host| {
-                let result = match builds.get(&host.name) {
-                    Some(build) if build.ok && build.path.is_none() => {
-                        failed("the builder reported no store path", built_at)
-                    }
-                    Some(build) => HostResult {
-                        ok: build.ok,
-                        path: build.path.clone(),
-                        log_tail: build.log_tail.clone(),
-                        built_at,
-                    },
-                    None => failed("the builder returned no result for this host", built_at),
-                };
-                (host.name.clone(), result)
-            })
-            .collect();
+        let realised = |hosts: &[ManagedHost]| -> BTreeMap<String, HostResult> {
+            hosts
+                .iter()
+                .filter(|host| !builds.get(&host.name).is_some_and(is_unreachable))
+                .map(|host| {
+                    let result = match builds.get(&host.name) {
+                        Some(build) if build.ok && build.path.is_none() => {
+                            failed("the builder reported no store path", built_at)
+                        }
+                        Some(build) => HostResult {
+                            ok: build.ok,
+                            path: build.path.clone(),
+                            log_tail: build.log_tail.clone(),
+                            built_at,
+                        },
+                        None => failed("the builder returned no result for this host", built_at),
+                    };
+                    (host.name.clone(), result)
+                })
+                .collect()
+        };
+        let (built, refreshed) = (realised(&missing), realised(&refresh));
         let result = self
-            .publish_and_write(state, result, built, &channels)
+            .publish_and_write(state, result, built, refreshed, &channels)
             .await?;
         match unreachable {
             Some(reason) => Err(anyhow::Error::msg(reason)),
@@ -160,21 +168,69 @@ impl BuildGate {
         }
     }
 
+    /// The Linux hosts recorded ok in `result` on each channel in `channels` that would advance
+    /// to the commit once all its hosts are ok: the commit is the channel's mirror head and not
+    /// its current build in `index`. Read without the index lock; `publish_and_write` checks
+    /// again under it and only advances a channel all of whose hosts were realised in the call.
+    async fn advancing_hosts(
+        &self,
+        state: &AppState,
+        result: &BuildResult,
+        index: &ChannelIndex,
+        channels: &BTreeSet<String>,
+    ) -> Vec<ManagedHost> {
+        let mut hosts = Vec::new();
+        for channel in channels {
+            if index
+                .get(channel)
+                .is_some_and(|heads| heads.current == result.commit)
+                || state.mirror.head(channel).await.as_deref() != Some(result.commit.as_str())
+            {
+                continue;
+            }
+            hosts.extend(
+                state
+                    .hosts
+                    .iter()
+                    .filter(|host| &host.channel == channel && is_built_here(host))
+                    .filter(|host| {
+                        result
+                            .hosts
+                            .get(&host.name)
+                            .is_some_and(|host_result| host_result.ok)
+                    })
+                    .cloned(),
+            );
+        }
+        hosts
+    }
+
     /// Under the commit's lock: merges the hosts in `built` that `result` has no entry for yet
-    /// (recorded results are final) into `result`, advances every channel in `channels` whose
-    /// Linux hosts are all ok at the commit when the commit is that channel's mirror head and
-    /// not its current build yet, and publishes the new ok paths plus every ok path of the
-    /// advanced channels (the cache may have pruned them). Writes the result and the index only
-    /// after the publish succeeded; a failed publish records nothing and is an error.
+    /// (recorded results are final) into `result`, and of `refreshed` (recorded hosts realised
+    /// again) the ones that now failed. Advances every channel in `channels` whose Linux hosts
+    /// are all ok at the commit and were all realised in this call (in `built` or `refreshed`),
+    /// when the commit is that channel's mirror head and not its current build yet, and
+    /// publishes the new ok paths plus every ok path of the advanced channels (the cache may
+    /// have pruned them). Writes the result and the index only after the publish succeeded; a
+    /// failed publish records nothing and is an error.
     async fn publish_and_write(
         &self,
         state: &AppState,
         mut result: BuildResult,
         mut built: BTreeMap<String, HostResult>,
+        refreshed: BTreeMap<String, HostResult>,
         channels: &BTreeSet<String>,
     ) -> anyhow::Result<BuildResult> {
         let commit = result.commit.clone();
+        let realised: BTreeSet<String> = built.keys().chain(refreshed.keys()).cloned().collect();
         built.retain(|name, _| !result.hosts.contains_key(name));
+        // A recorded host that fails now is a build failure like any other (final until a
+        // retry); one that is ok again keeps its entry.
+        built.extend(
+            refreshed
+                .into_iter()
+                .filter(|(name, host_result)| !host_result.ok || !result.hosts.contains_key(name)),
+        );
         let _index_lock = self.lock(self.dir.join(INDEX_LOCK_FILE)).await?;
         let mut index = self.read_index()?;
         result.hosts.extend(built.clone());
@@ -193,10 +249,11 @@ impl BuildGate {
                 .collect();
             let all_ok = !channel_hosts.is_empty()
                 && channel_hosts.iter().all(|host| {
-                    result
-                        .hosts
-                        .get(&host.name)
-                        .is_some_and(|host_result| host_result.ok)
+                    realised.contains(&host.name)
+                        && result
+                            .hosts
+                            .get(&host.name)
+                            .is_some_and(|host_result| host_result.ok)
                 });
             if !all_ok
                 || index
@@ -304,8 +361,14 @@ impl BuildGate {
                     .filter(|host| results.contains_key(&host.name) && is_built_here(host))
                     .cloned()
                     .collect();
-                gate.publish_and_write(&task_state, result, results, &channels_of(&hosts))
-                    .await
+                gate.publish_and_write(
+                    &task_state,
+                    result,
+                    results,
+                    BTreeMap::new(),
+                    &channels_of(&hosts),
+                )
+                .await
             }),
         )
         .await?

@@ -14,6 +14,11 @@ pub struct Client {
     pub poll: Duration,
     /// First and longest pause between retries while `--wait` cannot reach the server.
     pub retry: (Duration, Duration),
+    /// How long a request may take.
+    pub request_timeout: Duration,
+    /// How long an apply may take: the server answers it only after the build gate built the
+    /// commit, which can take as long as the builder's own timeout.
+    pub apply_timeout: Duration,
 }
 
 impl Client {
@@ -31,16 +36,25 @@ impl Client {
             base,
             http: reqwest::Client::builder()
                 .default_headers(headers)
-                .timeout(Duration::from_secs(60))
                 .build()
                 .expect("reqwest client"),
             poll: Duration::from_secs(1),
             retry: (Duration::from_secs(2), Duration::from_secs(10)),
+            request_timeout: Duration::from_secs(60),
+            apply_timeout: Duration::from_secs(7200),
         }
     }
 
     async fn send(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
-        let response = request.send().await.map_err(|error| {
+        self.send_within(request, self.request_timeout).await
+    }
+
+    async fn send_within(
+        &self,
+        request: reqwest::RequestBuilder,
+        timeout: Duration,
+    ) -> Result<reqwest::Response> {
+        let response = request.timeout(timeout).send().await.map_err(|error| {
             anyhow::Error::new(RequestError::Unreachable(format!(
                 "cannot reach the Lodestar server at {} ({error}); is Tailscale up?",
                 self.base
@@ -73,6 +87,20 @@ impl Client {
     pub(crate) async fn post(&self, path: &str, body: Value) -> Result<Value> {
         let response = self
             .send(self.http.post(format!("{}{path}", self.base)).json(&body))
+            .await?;
+        response
+            .json()
+            .await
+            .with_context(|| format!("decoding response of POST {path}"))
+    }
+
+    /// `POST` of an apply (host or channel), which may wait for the build gate.
+    pub(crate) async fn post_apply(&self, path: &str, body: Value) -> Result<Value> {
+        let response = self
+            .send_within(
+                self.http.post(format!("{}{path}", self.base)).json(&body),
+                self.apply_timeout,
+            )
             .await?;
         response
             .json()

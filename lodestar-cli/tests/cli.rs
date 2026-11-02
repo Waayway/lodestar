@@ -542,3 +542,122 @@ async fn build_retry_of_an_unknown_commit_fails() {
     .await;
     assert!(result.is_err());
 }
+
+/// A server whose applies answer after `delay`, with `GET /api/snapshot` (host H1 on `main`)
+/// and `GET /api/builds` answering `channels`.
+async fn slow_apply_server(channels: Vec<lodestar_proto::ChannelView>, delay: Duration) -> Client {
+    let snapshot = lodestar_proto::Snapshot {
+        hosts: vec![
+            serde_json::from_value(serde_json::json!({
+                "name": "H1", "os": "nixos", "channel": "main", "online": "on",
+                "last_seen": null, "running": null, "running_dirty": false, "behind": null,
+                "checkout": null, "last_apply": null, "desired_apply_id": null,
+                "last_activation": null, "versions": {}
+            }))
+            .unwrap(),
+        ],
+        channels: channels.clone(),
+        promote_candidate: None,
+        promote: None,
+        viewer: "alice".into(),
+        demo: false,
+        services: Vec::new(),
+    };
+    let apply = move || async move {
+        tokio::time::sleep(delay).await;
+        axum::Json(serde_json::json!({
+            "apply_id": "a1", "agent_status": "202",
+            "apply_ids": { "H1": "a1" }, "agent_status_by_host": {}
+        }))
+    };
+    let app = axum::Router::new()
+        .route(
+            "/api/snapshot",
+            axum::routing::get(move || {
+                let snapshot = snapshot.clone();
+                async move { axum::Json(snapshot) }
+            }),
+        )
+        .route(
+            "/api/builds",
+            axum::routing::get(move || {
+                let channels = channels.clone();
+                async move { axum::Json(channels) }
+            }),
+        )
+        .route("/api/hosts/{host}/apply", axum::routing::post(apply))
+        .route("/api/channels/{channel}/apply", axum::routing::post(apply));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut client = Client::new(&format!("http://{addr}"));
+    client.request_timeout = Duration::from_millis(200);
+    client
+}
+
+fn rebuild_channel(channel: &str) -> Command {
+    Command::Rebuild {
+        host: None,
+        channel: Some(channel.into()),
+        wait: false,
+        timeout: 30,
+    }
+}
+
+/// An apply waits for the gate's build on the server: it is not cut off by the request
+/// timeout, and the CLI says what it waits for.
+#[tokio::test]
+async fn an_apply_waits_for_the_build_past_the_request_timeout() {
+    let gate_on = Some(lodestar_proto::ChannelBuildView {
+        commit: "0123456789abcdef0123456789abcdef01234567".into(),
+        state: "ok".into(),
+        failed_hosts: Vec::new(),
+        finished_at: Some(1),
+    });
+    let building = lodestar_proto::ChannelBuildView {
+        commit: "fedcba9876543210fedcba9876543210fedcba98".into(),
+        state: "building".into(),
+        failed_hosts: Vec::new(),
+        finished_at: None,
+    };
+    // main has no result for its head yet (another channel shows the gate is on).
+    let client = slow_apply_server(
+        vec![
+            channel_view("main", None),
+            channel_view("stable", gate_on.clone()),
+        ],
+        Duration::from_millis(600),
+    )
+    .await;
+    let (code, out) = go(&client, rebuild_channel("main")).await;
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.starts_with("waiting for the build of abcdef0 on the builder…\n"),
+        "{out}"
+    );
+    assert!(out.contains("H1: apply_id a1"), "{out}");
+
+    // A host apply looks up the host's channel; a running build names its commit.
+    let client = slow_apply_server(
+        vec![channel_view("main", Some(building))],
+        Duration::from_millis(600),
+    )
+    .await;
+    let (code, out) = go(&client, rebuild("H1", false)).await;
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.starts_with("waiting for the build of fedcba9 on the builder…\n"),
+        "{out}"
+    );
+
+    // A built head, or the gate off: no note.
+    for channels in [
+        vec![channel_view("main", gate_on)],
+        vec![channel_view("main", None)],
+    ] {
+        let client = slow_apply_server(channels, Duration::ZERO).await;
+        let (code, out) = go(&client, rebuild_channel("main")).await;
+        assert_eq!(code, 0, "{out}");
+        assert!(!out.contains("waiting for the build"), "{out}");
+    }
+}

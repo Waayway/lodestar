@@ -239,6 +239,11 @@
               pkgs = linuxPkgs;
               modules = [ self.nixosModules.default ];
             };
+            # Build gate, builder over ssh-ng, signed cache and a substituting client. Needs KVM.
+            x86_64-linux.build-cache = import ./nix/tests/build-cache.nix {
+              pkgs = linuxPkgs;
+              modules = [ self.nixosModules.default ];
+            };
           };
 
       devShells = forEachSystem (

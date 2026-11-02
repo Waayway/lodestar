@@ -249,6 +249,38 @@ impl Mirror {
         Ok(head)
     }
 
+    /// Fresh detached worktree of `commit` at `dir` (removed first if present), like `worktree`.
+    /// `commit` must be a full hash that is in the mirror (fetched first when it is not).
+    pub async fn worktree_at(&self, commit: &str, dir: &Path) -> anyhow::Result<()> {
+        if !is_commit_hash(commit) {
+            bail!("invalid commit {commit:?}");
+        }
+        let _guard = self.write_lock.lock().await;
+        if !self.has_commit(commit).await {
+            self.fetch_locked().await?;
+            if !self.has_commit(commit).await {
+                bail!("commit {commit} is not in the mirror");
+            }
+        }
+        self.remove_worktree_locked(dir).await;
+        let output = self
+            .git([
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("--quiet"),
+                OsStr::new("--detach"),
+                OsStr::new("--"),
+                dir.as_os_str(),
+                OsStr::new(commit),
+            ])
+            .await?;
+        if !output.ok() {
+            self.remove_worktree_locked(dir).await;
+            bail!("git worktree add failed: {}", output.stderr.trim());
+        }
+        Ok(())
+    }
+
     /// Commits `flake.lock` in `dir` as Lodestar <lodestar@vanwaaij.com> with `message`, pushes it
     /// to `channel` iff the remote head is still `base` (never forced); returns the new commit.
     /// Only `flake.lock` may have changed in `dir`, and it must have been modified (not added or

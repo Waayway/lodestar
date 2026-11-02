@@ -291,6 +291,33 @@ async fn worktree_checks_out_channel_head() {
 }
 
 #[tokio::test]
+async fn worktree_at_checks_out_a_commit() {
+    let (origin, base) = origin_with_lock();
+    let (mirror, _state) = mirror_of(&origin).await;
+    write_lock_file(&origin.work, "{\"next\":true}\n");
+    git(&origin.work, &["add", "flake.lock"]);
+    origin.commit("next", "unstable");
+    mirror.fetch().await.unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path().join("wt");
+    mirror.worktree_at(&base, &dir).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("flake.lock")).unwrap(),
+        "{}\n"
+    );
+    assert_eq!(git(&dir, &["rev-parse", "HEAD"]), base);
+    // Again over the existing (stale) worktree.
+    mirror.worktree_at(&base, &dir).await.unwrap();
+    mirror.remove_worktree(&dir).await;
+    assert!(!dir.exists());
+    assert!(mirror.worktree_at("--detach", &dir).await.is_err());
+    assert!(mirror.worktree_at("unstable", &dir).await.is_err());
+    let unknown = "0".repeat(40);
+    assert!(mirror.worktree_at(&unknown, &dir).await.is_err());
+    assert!(!dir.exists());
+}
+
+#[tokio::test]
 async fn push_lock_fast_forwards_with_lodestar_identity() {
     let (origin, base) = origin_with_lock();
     let (mirror, _state) = mirror_of(&origin).await;

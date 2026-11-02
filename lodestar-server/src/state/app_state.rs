@@ -7,7 +7,7 @@ use tokio::sync::broadcast;
 
 use crate::agent_client::AgentClient;
 use crate::auth::AuthState;
-use crate::builds::{Builder, RemoteBuilder};
+use crate::builds::{BuildGate, Builder, RemoteBuilder};
 use crate::config::{Link, ManagedHost, ServerConfig};
 use crate::mirror::Mirror;
 use crate::tailscale::OnlineProvider;
@@ -49,6 +49,8 @@ pub struct AppState {
     /// Builds and publishes on the builder; never called while `builds.enable` is off (tests
     /// inject a fake).
     pub builder: Arc<dyn Builder>,
+    /// One build per commit: the lock and result files under `state_dir/builds`.
+    pub builds: Arc<BuildGate>,
     /// `(host, apply_id)` pairs with a live log follower.
     pub(crate) followers: Arc<Mutex<HashSet<(String, String)>>>,
     /// Serialises dashboard actions (apply, promote) from mirror fetch to recorded result, so
@@ -73,6 +75,7 @@ impl AppState {
             bin: config.nix_bin.clone(),
         });
         let builder = Arc::new(RemoteBuilder::from_config(&config));
+        let builds = Arc::new(BuildGate::new(config.state_dir.join("builds")));
         Ok(Self {
             db,
             mirror,
@@ -91,6 +94,7 @@ impl AppState {
             updates: Arc::default(),
             nix,
             builder,
+            builds,
             followers: Arc::default(),
             actions: Arc::default(),
             demo: false,

@@ -313,6 +313,44 @@ the module does not open the port, open it to your Prometheus only):
 A failed upstream check (GitHub rate limit, error, no stable release) keeps the last
 known version and does not advance the checked timestamp.
 
+## Build cache
+
+The cache host (`services.lodestar-cache`, `nixosModules.cache`) is the machine the
+server builds on (`services.lodestar-server.builds`, ssh-ng as `lodestar`) and the file
+binary cache every Linux host substitutes from. It holds only paths **built there**:
+everything signed by cache.nixos.org stays there, and clients fetch each path
+independently from whichever substituter has it.
+
+- **Serving**: nginx serves `cacheDir` at `/nix/` on `listen.port`, opened to
+  `allowedClients` only (e.g. the reverse proxy). `*.narinfo` is sent with
+  `Cache-Control: no-cache`; dotfiles (`.roots/`, `.lock`, temporary files) are 404.
+  `nix-cache-info` says `Priority: 50`, so clients try cache.nixos.org (40) first.
+- **Publish** (`cache-publish <commit> <store-path>…`, run by the server after a build,
+  channel index JSON on stdin): validates the arguments like the server (40-hex commit,
+  plain store paths) and the index, takes `<cacheDir>/.lock`, keeps the closure's
+  `ultimate` paths (built on this host), and for each one not yet in the cache signs it
+  in the local store (`nix store sign`), writes `nar/<filehash>.nar.zst` and
+  `<hash>.narinfo` (both via temp file and rename). It does not use `nix copy`: a file
+  cache refuses a path whose references it lacks. Then it **merges** the paths into
+  `.roots/<commit>` (a commit is published in several calls when hosts are built in
+  different rounds, e.g. `--retry`), writes the index to `.roots/channels.json` and prunes.
+- **Prune** (`cache-prune [dir]`, after every publish and daily via
+  `lodestar-cache-prune.timer`): the keep set is the union of `.roots/<commit>` for the
+  `current` and `previous` commit of every channel in `channels.json`. Every other
+  narinfo is deleted with its NAR (only plain files under `nar/`, never a NAR a kept
+  narinfo also names), then the `.roots` files of unkept commits. A missing or
+  unreadable index, an invalid commit in it, or a kept commit without a roots file
+  deletes nothing. A publish of a commit the index does not keep (a failed or blocked
+  build) is pruned right away; that is intended.
+- **Where**: `cacheDir` (`nix-cache-info`, `*.narinfo`, `nar/`, `.roots/`),
+  `journalctl -u lodestar-cache-prune`; publish output lands in the server's build log.
+- **Recovery**: the cache is rebuildable. If it is lost or corrupt, empty `cacheDir`
+  (keep the mount) and publish again (`lodestar build <commit> --retry`, or the next
+  build); clients build or use cache.nixos.org meanwhile. A narinfo whose NAR is
+  missing: delete the narinfo, the next publish of that commit rewrites it. A new
+  signing key: replace `signingKeyFile`, empty the cache, update the clients'
+  `trusted-public-keys`.
+
 ## Where things are
 
 Agent (every enrolled host):

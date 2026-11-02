@@ -125,7 +125,7 @@ Exports:
 
 | Output | What |
 |---|---|
-| `nixosModules.agent`, `nixosModules.server`, `nixosModules.default` (both) | NixOS modules |
+| `nixosModules.agent`, `nixosModules.server`, `nixosModules.cache`, `nixosModules.default` (all) | NixOS modules (`cache` is the build cache host, off by default) |
 | `darwinModules.agent`, `darwinModules.default` | nix-darwin module (agent only) |
 | `lib.hostsFrom { nixosConfigurations ? {}, darwinConfigurations ? {} }` | `services.lodestar-server.hosts` from every configuration that enables the agent, keyed by `hostName` |
 | `packages.<system>.{lodestar, lodestar-agent, lodestar-server, lodestar-web, default}` | `default` is the CLI |
@@ -198,6 +198,19 @@ The server needs `services.tailscale` on its host; the module makes the
 `nix.package`) into the server's config, which the updater uses for `nix flake update`,
 `nix eval` and `nix build`; pushing a bump needs `pushUrl` and `deployKeyFile` like
 promote.
+
+`services.lodestar-cache` (NixOS; the build cache host, see `docs/operations.md`
+"Build cache"):
+
+| Option | Default | |
+|---|---|---|
+| `enable` | `false` | |
+| `user` | `"lodestar"` | account the server logs in as over ssh (ssh-ng builds, `cache-publish`); a normal user with bash, no password, a trusted Nix user |
+| `authorizedKeys` | `[]` | public half of the server's `builds.sshKeyFile` |
+| `cacheDir` | `"/mnt/nix-cache"` | the file binary cache; not created by the module (mount it writable by `user`, readable by nginx) |
+| `signingKeyFile` | (required) | `nix key generate-secret` key that signs published paths, readable by `user` (outside the store) |
+| `listen.port` | `80` | nginx serves `cacheDir` at `http://<host>:<port>/nix` |
+| `allowedClients` | `[]` | the only addresses the port is opened to (iptables or nftables rules); never opened globally |
 
 ## macOS permissions
 

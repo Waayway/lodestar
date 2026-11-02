@@ -43,6 +43,7 @@
       agentDarwin = import ./nix/modules/agent/darwin.nix { inherit packagesFor; };
       server = import ./nix/modules/server.nix { inherit packagesFor; };
       links = import ./nix/modules/links.nix { inherit lib; };
+      cache = ./nix/modules/cache.nix;
 
       linuxPkgs = nixpkgs.legacyPackages.x86_64-linux;
 
@@ -177,12 +178,13 @@
 
       nixosModules = {
         agent = agentNixos;
-        inherit server links;
+        inherit server links cache;
         default = {
           imports = [
             agentNixos
             server
             links
+            cache
           ];
         };
       };
@@ -217,6 +219,8 @@
                 inherit pkgs lib;
                 nixosModule = self.nixosModules.default;
               };
+              # The cache host's prune and publish scripts against a fixture directory.
+              cache-prune = import ./nix/tests/cache-prune.nix { inherit pkgs; };
               links-from = import ./nix/tests/links-from.nix {
                 inherit pkgs lib;
                 linksFrom = self.lib.linksFrom;
@@ -227,6 +231,11 @@
             x86_64-linux.firewall = firewallCheck;
             # Server, two agents and a git remote in VMs. Needs an x86_64-linux builder with KVM.
             x86_64-linux.vm = import ./nix/tests/vm.nix {
+              pkgs = linuxPkgs;
+              modules = [ self.nixosModules.default ];
+            };
+            # The cache host publishing a real store path and serving it. Needs KVM.
+            x86_64-linux.cache-publish = import ./nix/tests/cache-publish.nix {
               pkgs = linuxPkgs;
               modules = [ self.nixosModules.default ];
             };

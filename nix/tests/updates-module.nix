@@ -2,7 +2,8 @@
 # built, so it runs on any host system) with the agent's `versions` and the server's
 # `updates` and `metrics` set. Asserts the generated versions.json, the `updates` and
 # `metrics` parts of the server's config.json, the agent's `versions_file`, and that the
-# input-name validation fires.
+# input-name validation fires. Also the cache host role (`services.lodestar-cache`): off by
+# default, and when on its user, nginx location and allowedClients-only firewall rules.
 {
   pkgs,
   lib,
@@ -70,6 +71,22 @@ let
     failedOf (mkSystem {
       services.lodestar-server.builds = builds // extra;
     }) != [ ];
+  withCache = mkSystem {
+    services.lodestar-cache = {
+      enable = true;
+      authorizedKeys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample lodestar-builder" ];
+      signingKeyFile = "/run/secrets/nix-cache-signing-key";
+      allowedClients = [
+        "10.0.10.110"
+        "fd00::110"
+      ];
+    };
+  };
+  cacheUser = withCache.config.users.users.lodestar;
+  cacheFirewall = withCache.config.networking.firewall;
+  cacheHost = withCache.config.services.nginx.virtualHosts.lodestar-cache;
+  cacheLocation = cacheHost.locations."/nix/";
+  cachePrune = withCache.config.systemd.services.lodestar-cache-prune;
   bad = mkSystem {
     services.lodestar-server.updates.software."Bad Name" = {
       input = "nix pkgs";
@@ -240,6 +257,59 @@ let
           services.lodestar-server.updates.channel = "stable";
         }) == [ ];
       what = "stable is allowed when it is not the promote target";
+    }
+    {
+      ok =
+        !plain.config.services.nginx.enable
+        && !(plain.config.users.users ? lodestar)
+        && !(plain.config.systemd.services ? lodestar-cache-prune);
+      what = "the cache role is off by default";
+    }
+    {
+      ok =
+        cacheUser.isNormalUser
+        && !cacheUser.isSystemUser
+        && cacheUser.hashedPassword == "!"
+        && lib.hasSuffix "/bin/bash" (lib.getExe cacheUser.shell)
+        &&
+          cacheUser.openssh.authorizedKeys.keys == [
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample lodestar-builder"
+          ]
+        && lib.elem "lodestar" withCache.config.nix.settings.trusted-users
+        && lib.any (p: p.name == "lodestar-cache-scripts") cacheUser.packages;
+      what = "the cache user logs in with a key only, has a shell and the scripts, and is a trusted Nix user";
+    }
+    {
+      ok =
+        cacheLocation.alias == "/mnt/nix-cache/"
+        && lib.hasInfix "location ~ /\\. {" cacheLocation.extraConfig
+        && lib.hasInfix "return 404;" cacheLocation.extraConfig
+        && lib.hasInfix ''add_header Cache-Control "no-cache";'' cacheLocation.extraConfig
+        && lib.all (l: l.port == 80) cacheHost.listen;
+      what = "nginx serves cacheDir at /nix/ on port 80, hides dotfiles, narinfos no-cache";
+    }
+    {
+      ok =
+        !(lib.elem 80 cacheFirewall.allowedTCPPorts)
+        && lib.hasInfix "iptables -w -A nixos-fw -p tcp -s 10.0.10.110 --dport 80 -j nixos-fw-accept" cacheFirewall.extraCommands
+        && lib.hasInfix "ip6tables -w -A nixos-fw -p tcp -s fd00::110 --dport 80 -j nixos-fw-accept" cacheFirewall.extraCommands
+        &&
+          lib.length (
+            lib.filter (lib.hasInfix "--dport 80") (lib.splitString "\n" cacheFirewall.extraCommands)
+          ) == 2
+        && lib.hasInfix "iptables -w -D nixos-fw -p tcp -s 10.0.10.110 --dport 80 -j nixos-fw-accept || true" cacheFirewall.extraStopCommands;
+      what = "the cache port is opened for allowedClients only";
+    }
+    {
+      ok =
+        cachePrune.serviceConfig.User == "lodestar"
+        && lib.hasSuffix "/bin/cache-prune /mnt/nix-cache" cachePrune.serviceConfig.ExecStart
+        && withCache.config.systemd.timers.lodestar-cache-prune.timerConfig.OnCalendar == "daily";
+      what = "cache-prune runs daily as the cache user";
+    }
+    {
+      ok = failedOf withCache == [ ];
+      what = "an enabled cache role passes the assertions";
     }
     {
       ok = lib.length failedBad == 3;

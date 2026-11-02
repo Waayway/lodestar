@@ -5,7 +5,9 @@
 # `nix store verify` accepts it; that nginx serves the cache at /nix/ (narinfos
 # `no-cache`) and hides `.roots/`; that a publish of a commit no channel keeps leaves its
 # own entries in place; that a path substituted back from the cache (signed with its key,
-# no longer `ultimate`) stays in a later commit's roots; and that the prune service runs.
+# no longer `ultimate`) stays in a later commit's roots; that a published path the local
+# store no longer has (collected) is published again from the cache's entry without the
+# store; and that the prune service runs.
 # Needs an x86_64-linux builder with KVM.
 { pkgs, modules }:
 let
@@ -14,6 +16,7 @@ let
   commit = "1111111111111111111111111111111111111111";
   commit2 = "2222222222222222222222222222222222222222";
   commit3 = "3333333333333333333333333333333333333333";
+  commit4 = "4444444444444444444444444444444444444444";
   # A derivation built in the VM (so `ultimate`) whose output references hello (not).
   smokeNamed =
     name:
@@ -127,6 +130,16 @@ pkgs.testers.runNixOSTest {
         assert roots == [smoke], roots
         cache.succeed(f"test -f ${cacheDir}/{smoke_hash}.narinfo")
         cache.fail("test -e ${cacheDir}/.roots/${commit}")
+
+    with subtest("a published path the store no longer has is listed from the cache"):
+        cache.succeed(f"nix-store --delete {smoke}")
+        index4 = json.dumps({"stable": {"current": "${commit4}", "previous": None}})
+        before = cache.succeed(f"cat ${cacheDir}/{smoke_hash}.narinfo")
+        as_lodestar(f"echo {shlex.quote(index4)} | cache-publish ${commit4} {smoke}")
+        cache.fail(f"test -e {smoke}")
+        assert before == cache.succeed(f"cat ${cacheDir}/{smoke_hash}.narinfo")
+        roots = cache.succeed("cat ${cacheDir}/.roots/${commit4}").split()
+        assert roots == [smoke], roots
 
     with subtest("the prune service runs as the cache user"):
         cache.succeed("systemctl start lodestar-cache-prune.service")

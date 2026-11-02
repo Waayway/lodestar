@@ -161,5 +161,29 @@ pkgs.runCommand "lodestar-cache-prune"
     grep -q "not a writable directory" err || fail "missing cache dir: unclear error: $(cat err)"
     echo "ok: publish refuses a missing cache directory"
 
+    # --- publish of a path the cache has already, absent from the local store ----------
+    # (the builder collected it): nothing touches the store, the cache keeps its entry,
+    # and the path with the closure the cache has of it (B; not the cache.nixos.org path
+    # glibc) is listed in the commit's roots.
+    fixture
+    channels
+    key=$(mktemp -d)/key
+    echo 'test-1:AAAA' > "$key"
+    glibc=$(hash 9)
+    printf 'StorePath: /nix/store/%s-pkg-A\nURL: nar/narA.nar.zst\nCompression: zstd\nReferences: %s-pkg-A %s-pkg-B %s-glibc\n' \
+      "$A" "$A" "$B" "$glibc" > "$dir/$A.narinfo"
+    [ ! -e "/nix/store/$A-pkg-A" ] || fail "the fixture path is in the store"
+    cp "$dir/$A.narinfo" narinfo.before
+    cp "$dir/nar/narA.nar.zst" nar.before
+    LODESTAR_CACHE_DIR=$dir LODESTAR_CACHE_SIGNING_KEY=$key \
+      cache-publish "$c3" "/nix/store/$A-pkg-A" <<< "$index" 2> err \
+      || fail "publish of a path the cache has: $(cat err)"
+    cmp narinfo.before "$dir/$A.narinfo" || fail "the cached narinfo changed"
+    cmp nar.before "$dir/nar/narA.nar.zst" || fail "the cached NAR changed"
+    printf '/nix/store/%s-pkg-A\n/nix/store/%s-pkg-B\n' "$A" "$B" | sort > roots.expected
+    diff roots.expected "$dir/.roots/$c3" || fail "roots of a path the cache has"
+    present "$B.narinfo" "B, in the closure of the published A"
+    echo "ok: publish of a path the cache has lists it without touching the store"
+
     touch $out
   ''

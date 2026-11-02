@@ -8,7 +8,10 @@
 #   keeping `<commit>` too (a publish never deletes what it just wrote, also when the
 #   commit is no channel's current or previous one).
 #   Paths substituted from this cache (no longer `ultimate`, but signed with this cache's
-#   key) count as built here, so they stay in the commit's roots.
+#   key) count as built here, so they stay in the commit's roots. A given path whose
+#   narinfo the cache has already is not looked up in the local store (the builder's GC
+#   may have collected it): it and the closure the cache has of it (its narinfos'
+#   references) go into the roots as they are.
 # - `cache-prune [cache-dir [keep-commit]]`: deletes every narinfo (and its NAR) whose
 #   store path is not listed in the `.roots` file of a channel's current or previous
 #   commit (or of `keep-commit`), then the `.roots` files of commits not kept. Deletes
@@ -226,82 +229,131 @@ let
           | writeAtomically "$cacheDir/nix-cache-info"
       fi
 
-      # The closure, reduced to the paths built here (`ultimate`) or substituted from this
-      # cache (signed with its key: after a store GC the builder gets unchanged paths back
-      # from here, and they must stay in the commit's roots); the rest is signed by
-      # cache.nixos.org and comes from there. Older nix prints an array, newer an object.
       keyName=$(cut -d: -f1 "$signingKeyFile")
       [ -n "$keyName" ] || die "signing key $signingKeyFile has no key name"
-      jsonFormat=()
-      if [[ $(nix path-info --help 2>/dev/null || true) == *--json-format* ]]; then
-        jsonFormat=(--json-format 1)
-      fi
-      nix path-info --recursive --json "''${jsonFormat[@]}" -- "$@" >"$workDir/closure.json"
-      published=()
-      while IFS= read -r path; do
-        [[ $path =~ $storePathPattern ]] || die "nix path-info returned $(printf %q "$path")"
-        published+=("$path")
-      done < <(jq -r --arg key "$keyName" '
-        (if type == "array" then map({ key: .path, value: . }) | from_entries else . end)
-        | to_entries[]
-        | select(.value != null and (.value.ultimate == true
-            or ((.value.signatures // []) | any(startswith($key + ":")))))
-        | .key' "$workDir/closure.json" | sort)
 
-      # Binary-cache entries for the paths not published yet, written here rather than
-      # with `nix copy`: a file cache refuses a path whose references it lacks, and the
-      # references live on cache.nixos.org (clients substitute each path independently).
-      fresh=()
-      for path in "''${published[@]}"; do
+      # A given path whose narinfo the cache has already is not looked up in the local store
+      # at all (the builder's GC may have collected it since it was published): its roots
+      # are what the cache has of its closure, read from the narinfos' references.
+      toPublish=() cached=() published=()
+      for path in "$@"; do
         base=''${path#/nix/store/}
-        [ -e "$cacheDir/''${base%%-*}.narinfo" ] || fresh+=("$path")
+        if [ -e "$cacheDir/''${base%%-*}.narinfo" ]; then cached+=("$path"); else toPublish+=("$path"); fi
       done
-      if [ ''${#fresh[@]} -gt 0 ]; then
-        mkdir -p "$cacheDir/nar"
-        nix store sign --key-file "$signingKeyFile" -- "''${fresh[@]}"
-        nix path-info --json "''${jsonFormat[@]}" -- "''${fresh[@]}" >"$workDir/fresh.json"
-        for path in "''${fresh[@]}"; do
-          jq --arg path "$path" --arg key "$keyName" '
-            (if type == "array" then map({ key: .path, value: . }) | from_entries else . end)[$path]
-            | {
-                narHash,
-                narSize,
-                references: (.references | map(sub("^/nix/store/"; "")) | join(" ")),
-                deriver: ((.deriver // "") | sub("^/nix/store/"; "")),
-                sig: ((.signatures // []) | map(select(startswith($key + ":"))) | first // "")
-              }' "$workDir/fresh.json" >"$workDir/entry.json"
-          field() { jq -r ".$1" "$workDir/entry.json"; }
-          narHash=$(field narHash)
-          case $narHash in
-            sha256:*) ;;
-            sha256-*) narHash=sha256:$(nix hash convert --hash-algo sha256 --to nix32 "$narHash") ;;
-            *) die "unexpected narHash $(printf %q "$narHash") for $path" ;;
-          esac
-          sig=$(field sig)
-          [ -n "$sig" ] || die "no $keyName signature on $path after signing"
-
-          tmp=$(mktemp "$cacheDir/nar/.tmp.XXXXXX")
-          nix-store --dump "$path" | zstd -q -T0 -c >"$tmp"
-          fileHash=$(nix-hash --type sha256 --flat --base32 "$tmp")
-          fileSize=$(stat -c %s "$tmp")
-          chmod 0644 "$tmp"
-          mv -f "$tmp" "$cacheDir/nar/$fileHash.nar.zst"
-
+      if [ ''${#cached[@]} -gt 0 ]; then
+        declare -A seen=()
+        queue=()
+        for path in "''${cached[@]}"; do
           base=''${path#/nix/store/}
-          deriver=$(field deriver)
-          {
-            echo "StorePath: $path"
-            echo "URL: nar/$fileHash.nar.zst"
-            echo "Compression: zstd"
-            echo "FileHash: sha256:$fileHash"
-            echo "FileSize: $fileSize"
-            echo "NarHash: $narHash"
-            echo "NarSize: $(field narSize)"
-            echo "References: $(field references)"
-            if [ -n "$deriver" ]; then echo "Deriver: $deriver"; fi
-            echo "Sig: $sig"
-          } | writeAtomically "$cacheDir/''${base%%-*}.narinfo"
+          queue+=("''${base%%-*}")
         done
+        while [ ''${#queue[@]} -gt 0 ]; do
+          hash=''${queue[-1]}
+          unset 'queue[-1]'
+          [ -z "''${seen[$hash]:-}" ] || continue
+          seen[$hash]=1
+          info=$cacheDir/$hash.narinfo
+          [ -f "$info" ] && [ ! -L "$info" ] || continue
+          storePath="" references=""
+          while IFS= read -r line || [ -n "$line" ]; do
+            case $line in
+              "StorePath: "*) storePath=''${line#StorePath: } ;;
+              "References: "*) references=''${line#References: } ;;
+            esac
+          done <"$info"
+          [[ $storePath =~ $storePathPattern ]] && [ "''${BASH_REMATCH[1]}" = "$hash" ] \
+            || die "$info names $(printf %q "$storePath")"
+          published+=("$storePath")
+          read -ra referenced <<<"$references"
+          for reference in "''${referenced[@]}"; do
+            if [[ /nix/store/$reference =~ $storePathPattern ]]; then
+              queue+=("''${BASH_REMATCH[1]}")
+            fi
+          done
+        done
+      fi
+
+      if [ ''${#toPublish[@]} -gt 0 ]; then
+        # The closure, reduced to the paths built here (`ultimate`) or substituted from this
+        # cache (signed with its key: after a store GC the builder gets unchanged paths back
+        # from here, and they must stay in the commit's roots); the rest is signed by
+        # cache.nixos.org and comes from there. Older nix prints an array, newer an object.
+        jsonFormat=()
+        if [[ $(nix path-info --help 2>/dev/null || true) == *--json-format* ]]; then
+          jsonFormat=(--json-format 1)
+        fi
+        nix path-info --recursive --json "''${jsonFormat[@]}" -- "''${toPublish[@]}" >"$workDir/closure.json"
+        while IFS= read -r path; do
+          [[ $path =~ $storePathPattern ]] || die "nix path-info returned $(printf %q "$path")"
+          published+=("$path")
+        done < <(jq -r --arg key "$keyName" '
+          (if type == "array" then map({ key: .path, value: . }) | from_entries else . end)
+          | to_entries[]
+          | select(.value != null and (.value.ultimate == true
+              or ((.value.signatures // []) | any(startswith($key + ":")))))
+          | .key' "$workDir/closure.json" | sort)
+
+        # Binary-cache entries for the paths not published yet, written here rather than
+        # with `nix copy`: a file cache refuses a path whose references it lacks, and the
+        # references live on cache.nixos.org (clients substitute each path independently).
+        # The given paths come last: a top-level path's narinfo exists only once everything
+        # of its closure built here is in the cache (a later publish skips it on that).
+        fresh=() freshTop=()
+        declare -A given=()
+        for path in "$@"; do given[$path]=1; done
+        for path in "''${published[@]}"; do
+          base=''${path#/nix/store/}
+          [ -e "$cacheDir/''${base%%-*}.narinfo" ] && continue
+          if [ -n "''${given[$path]:-}" ]; then freshTop+=("$path"); else fresh+=("$path"); fi
+        done
+        fresh+=("''${freshTop[@]}")
+        if [ ''${#fresh[@]} -gt 0 ]; then
+          mkdir -p "$cacheDir/nar"
+          nix store sign --key-file "$signingKeyFile" -- "''${fresh[@]}"
+          nix path-info --json "''${jsonFormat[@]}" -- "''${fresh[@]}" >"$workDir/fresh.json"
+          for path in "''${fresh[@]}"; do
+            jq --arg path "$path" --arg key "$keyName" '
+              (if type == "array" then map({ key: .path, value: . }) | from_entries else . end)[$path]
+              | {
+                  narHash,
+                  narSize,
+                  references: (.references | map(sub("^/nix/store/"; "")) | join(" ")),
+                  deriver: ((.deriver // "") | sub("^/nix/store/"; "")),
+                  sig: ((.signatures // []) | map(select(startswith($key + ":"))) | first // "")
+                }' "$workDir/fresh.json" >"$workDir/entry.json"
+            field() { jq -r ".$1" "$workDir/entry.json"; }
+            narHash=$(field narHash)
+            case $narHash in
+              sha256:*) ;;
+              sha256-*) narHash=sha256:$(nix hash convert --hash-algo sha256 --to nix32 "$narHash") ;;
+              *) die "unexpected narHash $(printf %q "$narHash") for $path" ;;
+            esac
+            sig=$(field sig)
+            [ -n "$sig" ] || die "no $keyName signature on $path after signing"
+
+            tmp=$(mktemp "$cacheDir/nar/.tmp.XXXXXX")
+            nix-store --dump "$path" | zstd -q -T0 -c >"$tmp"
+            fileHash=$(nix-hash --type sha256 --flat --base32 "$tmp")
+            fileSize=$(stat -c %s "$tmp")
+            chmod 0644 "$tmp"
+            mv -f "$tmp" "$cacheDir/nar/$fileHash.nar.zst"
+
+            base=''${path#/nix/store/}
+            deriver=$(field deriver)
+            {
+              echo "StorePath: $path"
+              echo "URL: nar/$fileHash.nar.zst"
+              echo "Compression: zstd"
+              echo "FileHash: sha256:$fileHash"
+              echo "FileSize: $fileSize"
+              echo "NarHash: $narHash"
+              echo "NarSize: $(field narSize)"
+              echo "References: $(field references)"
+              if [ -n "$deriver" ]; then echo "Deriver: $deriver"; fi
+              echo "Sig: $sig"
+            } | writeAtomically "$cacheDir/''${base%%-*}.narinfo"
+          done
+        fi
       fi
 
       # A commit can be published in parts (a retry builds only the hosts that failed):
@@ -311,7 +363,7 @@ let
         if [ ''${#published[@]} -gt 0 ]; then printf '%s\n' "''${published[@]}"; fi
       } | sort -u | writeAtomically "$roots/$commit"
       writeAtomically "$roots/channels.json" <"$workDir/channels.json"
-      echo "cache-publish: $commit: ''${#published[@]} of $(jq length "$workDir/closure.json") paths built here" >&2
+      echo "cache-publish: $commit: ''${#published[@]} paths in its roots, ''${#cached[@]} of $# given paths in the cache already" >&2
 
       LODESTAR_CACHE_LOCKED=1 ${lib.getExe cache-prune} "$cacheDir" "$commit"
     '';

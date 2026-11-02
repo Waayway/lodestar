@@ -3,18 +3,18 @@
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::Context;
 use async_trait::async_trait;
 
 use crate::config::ManagedHost;
+pub use crate::process::log_tail;
+use crate::process::{RunError, run};
 
 /// Builds may take long on a small builder.
 const BUILD_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const EVAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const LOG_TAIL_LINES: usize = 40;
 
 /// Nix operations on a worktree of the config flake (tests inject a fake).
 #[async_trait]
@@ -48,12 +48,6 @@ fn configuration(host: &ManagedHost) -> String {
     format!(".#{kind}.\"{}\"", host.name)
 }
 
-/// The last `LOG_TAIL_LINES` lines of `text`.
-pub fn log_tail(text: &str) -> String {
-    let lines: Vec<&str> = text.trim_end().lines().collect();
-    lines[lines.len().saturating_sub(LOG_TAIL_LINES)..].join("\n")
-}
-
 /// Whether the root node of the lock file at `path` has a direct input `input`.
 fn lock_has_input(path: &Path, input: &str) -> anyhow::Result<bool> {
     let text =
@@ -67,21 +61,23 @@ fn lock_has_input(path: &Path, input: &str) -> anyhow::Result<bool> {
 impl NixCommand {
     /// stdout on success; the stderr tail (or why it did not run) on failure.
     async fn run(&self, dir: &Path, args: &[&OsStr], timeout: Duration) -> Result<String, String> {
-        let child = tokio::process::Command::new(&self.bin)
+        let mut command = tokio::process::Command::new(&self.bin);
+        command
             .arg("--extra-experimental-features")
             .arg("nix-command flakes")
             .args(args)
-            .current_dir(dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| format!("starting {}: {error}", self.bin.display()))?;
-        let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(error)) => return Err(format!("running {}: {error}", self.bin.display())),
-            Err(_) => return Err(format!("nix timed out after {}s", timeout.as_secs())),
+            .current_dir(dir);
+        let output = match run(&mut command, None, timeout).await {
+            Ok(output) => output,
+            Err(RunError::Start(error)) => {
+                return Err(format!("starting {}: {error}", self.bin.display()));
+            }
+            Err(RunError::Wait(error)) => {
+                return Err(format!("running {}: {error}", self.bin.display()));
+            }
+            Err(RunError::Timeout) => {
+                return Err(format!("nix timed out after {}s", timeout.as_secs()));
+            }
         };
         if output.status.success() {
             return Ok(String::from_utf8_lossy(&output.stdout).into_owned());

@@ -2,6 +2,7 @@
 // The only module (with `feed.ts`) that talks to the network: components go through
 // `connection/hooks`.
 import type { AuditEvent } from "@/bindings/AuditEvent";
+import type { BuildsView } from "@/bindings/BuildsView";
 import type { Me } from "@/bindings/Me";
 import type { PublicService } from "@/bindings/PublicService";
 import type { Snapshot } from "@/bindings/Snapshot";
@@ -83,6 +84,11 @@ export async function getUpdates(): Promise<UpdatesView> {
 /** Starts an updater run ("Check now"); a 409 ApiError means one is already running. */
 export async function runUpdates(): Promise<void> {
   await request("POST", "/api/updates/run");
+}
+
+/** Whether the build gate is on and the newest builds, every host with its path or log. */
+export async function getRecentBuilds(): Promise<BuildsView> {
+  return (await request("GET", "/api/builds/recent")).json();
 }
 
 /** Removes the failed hosts from a commit's build result so they are built again. */

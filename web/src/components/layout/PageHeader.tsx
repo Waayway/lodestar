@@ -20,6 +20,7 @@ export function PageHeader({
   hostCount,
   route,
   downCount,
+  failedBuilds = 0,
 }: {
   feed: FeedStatus;
   /** Who the server says is looking (null before the first snapshot). */
@@ -30,6 +31,8 @@ export function PageHeader({
   route: Route;
   /** Services that are down (the count on the Services tab). */
   downCount: number;
+  /** Channels whose head failed to build (the count on the Builds tab). */
+  failedBuilds?: number;
 }) {
   const { logout } = useActions();
   return (
@@ -64,7 +67,7 @@ export function PageHeader({
           <ThemeToggle />
         </div>
       </div>
-      <NavTabs route={route} downCount={downCount} />
+      <NavTabs route={route} downCount={downCount} failedBuilds={failedBuilds} />
     </header>
   );
 }

@@ -1,17 +1,22 @@
 import type { ComponentChildren } from "preact";
-import { Machines, type Icon, Services } from "@/icons";
+import { Builds, Machines, type Icon, Services } from "@/icons";
 import { cn } from "@/lib/cn";
 import type { Route } from "@/lib/route";
 import { toneChip } from "@/lib/tones";
 
-/** The two pages, Fleet and Services (only Services when `fleet` is false); Services carries how many services are down. */
+/**
+ * The pages: Fleet, Builds and Services (only Services when `fleet` is false). Builds carries
+ * how many channels failed to build, Services how many services are down.
+ */
 export function NavTabs({
   route,
   downCount,
+  failedBuilds = 0,
   fleet = true,
 }: {
   route: Route;
   downCount: number;
+  failedBuilds?: number;
   /** Whether the Fleet tab shows (not for anonymous visitors). */
   fleet?: boolean;
 }) {
@@ -22,14 +27,15 @@ export function NavTabs({
           Fleet
         </Tab>
       )}
+      {fleet && (
+        <Tab href="#/builds" icon={Builds} current={route === "builds"}>
+          Builds
+          <Count n={failedBuilds} label="failed" />
+        </Tab>
+      )}
       <Tab href="#/services" icon={Services} current={route === "services"}>
         Services
-        {downCount > 0 && (
-          <span className={cn("rounded-sm px-1.5 text-[11.5px] leading-[18px] font-semibold tabular-nums", toneChip("bad"))}>
-            {downCount}
-            <span className="sr-only"> down</span>
-          </span>
-        )}
+        <Count n={downCount} label="down" />
       </Tab>
     </nav>
   );
@@ -58,5 +64,16 @@ function Tab({
       <Glyph aria-hidden="true" className="size-4" />
       {children}
     </a>
+  );
+}
+
+/** A red count on a tab ("2 down"); nothing when it is 0. */
+function Count({ n, label }: { n: number; label: string }) {
+  if (n === 0) return null;
+  return (
+    <span className={cn("rounded-sm px-1.5 text-[11.5px] leading-[18px] font-semibold tabular-nums", toneChip("bad"))}>
+      {n}
+      <span className="sr-only"> {label}</span>
+    </span>
   );
 }

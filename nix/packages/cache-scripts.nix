@@ -76,6 +76,8 @@ let
       }
       umask 022
 
+      # Looking inside mounts an automounted cache; `-d`/`-w` on the mount point alone don't.
+      ls "$cacheDir/." >/dev/null 2>&1 || true
       if [ ! -d "$cacheDir" ] || [ ! -w "$cacheDir" ]; then
         log "$cacheDir is not a writable directory (is the cache mounted?)"
         exit 1
@@ -204,6 +206,8 @@ let
       # Plain paths only (they end up in messages and shell words).
       safePath='^/[A-Za-z0-9._/-]+$'
       [[ $cacheDir =~ $safePath ]] || die "unsupported cache directory $(printf %q "$cacheDir")"
+      # Looking inside mounts an automounted cache; `-d`/`-w` on the mount point alone don't.
+      ls "$cacheDir/." >/dev/null 2>&1 || true
       [ -d "$cacheDir" ] && [ -w "$cacheDir" ] \
         || die "$cacheDir is not a writable directory (is the cache mounted?)"
       [ -n "$signingKeyFile" ] || die "no signing key configured"

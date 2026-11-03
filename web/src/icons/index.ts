@@ -15,6 +15,7 @@ export {
   TriangleAlertIcon as Attention,
   MonitorIcon as Machines,
   GitBranchIcon as Channel,
+  HammerIcon as Builds,
   TerminalIcon as Activation,
   HistoryIcon as Audit,
   UserRoundIcon as Viewer,

@@ -35,6 +35,9 @@ nix run github:Waayway/lodestar#lodestar-demo   # dashboard against simulated ho
   SQLite database of applies and audit events, and a poller that asks every
   agent for its status and re-sends applies to hosts that were offline.
 - **lodestar** is the CLI for the same API.
+- **Builds tab** (with the build gate on): the newest commits the builder built, every
+  Linux host with its store path or the log of its failed build, and Retry build; see
+  `docs/operations.md` "Build gate".
 - **Services tab**: links to the web applications your hosts run, declared in Nix
   (`lodestar.links`), each with a live HTTP check and the state of its machine.
 - **Public URL** (optional): a second listener behind your reverse proxy, with login

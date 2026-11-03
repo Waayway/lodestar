@@ -118,6 +118,7 @@ fn read_routes() -> Router<AppState> {
         .route("/audit", get(audit::audit))
         .route("/updates", get(updates::get_updates))
         .route("/builds", get(builds::get_builds))
+        .route("/builds/recent", get(builds::recent_builds))
         .layer(middleware::from_fn(|request, next| {
             require_need(Need::Read, request, next)
         }))

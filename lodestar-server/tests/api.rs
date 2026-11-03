@@ -1586,6 +1586,36 @@ async fn a_failed_channel_build_is_visible_and_retry_rebuilds_it() {
         "{metrics}"
     );
 
+    // The recent builds list every host of the commit: H1's store path, H2's log.
+    let recent: lodestar_proto::BuildsView = http
+        .get(format!("{}/api/builds/recent", environment.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(recent.enabled);
+    assert_eq!(recent.builds.len(), 1, "{recent:?}");
+    let listed = &recent.builds[0];
+    assert_eq!(listed.commit, head);
+    assert_eq!(listed.subject.as_deref(), Some("main one"));
+    assert_eq!(listed.head_of, names(&["main"]));
+    assert!(listed.building.is_empty() && listed.cached_for.is_empty());
+    assert!(listed.finished_at.is_some());
+    let hosts: Vec<(&str, bool, bool, Option<&str>)> = listed
+        .hosts
+        .iter()
+        .map(|h| (h.name.as_str(), h.ok, h.path.is_some(), h.log.as_deref()))
+        .collect();
+    assert_eq!(
+        hosts,
+        vec![
+            ("H1", true, true, None),
+            ("H2", false, false, Some("error: builder said no")),
+        ]
+    );
+
     // A malformed commit is a 400.
     let response = http
         .post(format!("{}/api/builds/nope/retry", environment.base))

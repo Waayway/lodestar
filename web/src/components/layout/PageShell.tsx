@@ -8,7 +8,7 @@ import { Disconnected, Forbidden } from "@/icons";
 import type { Route } from "@/lib/route";
 
 /**
- * The frame both pages share: the demo banner, the page width and padding, the header with
+ * The frame every page shares: the demo banner, the page width and padding, the header with
  * the tabs, and what to show while there is no snapshot (no access, server unreachable,
  * loading). `children` renders the page once the first snapshot is in.
  */
@@ -29,6 +29,7 @@ export function PageShell({
   const services = useServices();
   const me = useViewer();
   const downCount = services?.filter((s) => s.check.state === "down").length ?? 0;
+  const failedBuilds = snap?.channels.filter((c) => c.build?.state === "failed").length ?? 0;
   return (
     <>
       {snap?.demo && <DemoBanner />}
@@ -41,6 +42,7 @@ export function PageShell({
             hostCount={snap?.hosts.length ?? null}
             route={route}
             downCount={downCount}
+            failedBuilds={failedBuilds}
           />
           <main className="flex min-w-0 flex-col gap-[22px]">
             {feed.kind === "forbidden" ? (

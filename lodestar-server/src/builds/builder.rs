@@ -143,13 +143,87 @@ async fn run_limited(
         })
 }
 
-/// The stderr tail of a failed run, or its exit status when it logged nothing.
+/// The stderr of a failed run (its first errors and its tail), or its exit status when it
+/// logged nothing.
 fn failure(program: &str, output: &Output) -> String {
-    let tail = log_tail(&String::from_utf8_lossy(&output.stderr));
-    if tail.is_empty() {
+    let excerpt = log_excerpt(&String::from_utf8_lossy(&output.stderr));
+    if excerpt.is_empty() {
         format!("{program} failed ({})", output.status)
     } else {
+        excerpt
+    }
+}
+
+/// At most this many lines of root-cause errors go before the tail.
+const ROOT_CAUSE_LINES: usize = 80;
+
+/// The errors in `text` that are not about a failed dependency (with their indented lines, up
+/// to 80 lines), then the last 40 lines. Nix reports the real error once and then one "Cannot
+/// build … dependency failed" per dependent, which pushes it out of a plain tail.
+fn log_excerpt(text: &str) -> String {
+    let tail = log_tail(text);
+    let mut causes: Vec<&str> = Vec::new();
+    let mut in_cause = false;
+    for line in text.lines() {
+        if let Some(message) = line.strip_prefix("error:") {
+            in_cause = !(message.trim_start().starts_with("Cannot build")
+                || message.contains("dependency failed")
+                || message.contains("dependencies failed"));
+        } else if !line.starts_with(char::is_whitespace) {
+            in_cause = false;
+        }
+        if in_cause {
+            causes.push(line);
+        }
+    }
+    causes.truncate(ROOT_CAUSE_LINES);
+    let causes = causes.join("\n");
+    if causes.is_empty() || tail.contains(&causes) {
         tail
+    } else {
+        format!("{causes}\n…\n{tail}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_excerpt;
+
+    #[test]
+    fn the_root_cause_comes_before_the_dependency_noise() {
+        let mut log = String::from(
+            "building '/nix/store/a-dep.drv'...\n\
+             error: builder for '/nix/store/a-dep.drv' failed with exit code 101;\n\
+             \x20      last 2 log lines:\n\
+             \x20      > error[E0425]: cannot find value `x`\n\
+             \x20      > aborting\n",
+        );
+        for n in 0..60 {
+            log.push_str(&format!(
+                "error: Cannot build '/nix/store/{n}-x.drv'.\n       Reason: 1 dependency failed.\n"
+            ));
+        }
+        let excerpt = log_excerpt(&log);
+        assert!(excerpt.starts_with("error: builder for '/nix/store/a-dep.drv' failed"));
+        assert!(excerpt.contains("cannot find value `x`"));
+        assert!(excerpt.contains("\n…\n"));
+        assert!(excerpt.ends_with("Reason: 1 dependency failed."));
+        assert!(!excerpt.contains("building '/nix/store/a-dep.drv'"));
+    }
+
+    #[test]
+    fn a_short_log_is_its_tail() {
+        let log = "copying path\nerror: path '/nix/store/x' is not valid\n";
+        assert_eq!(
+            log_excerpt(log),
+            "copying path\nerror: path '/nix/store/x' is not valid"
+        );
+    }
+
+    #[test]
+    fn only_dependency_errors_give_the_tail() {
+        let log = "error: Cannot build '/nix/store/x.drv'.\n       Reason: 1 dependency failed.\n";
+        assert_eq!(log_excerpt(log), log.trim_end());
     }
 }
 

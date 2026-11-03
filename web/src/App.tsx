@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ConnectionProvider } from "@/connection/ConnectionProvider";
 import { useViewMode } from "@/connection/hooks";
 import { useRoute } from "@/lib/route";
+import { BuildsPage } from "@/pages/BuildsPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { PublicServicesPage } from "@/pages/PublicServicesPage";
 import { ServicesPage } from "@/pages/ServicesPage";
@@ -32,5 +33,6 @@ function Pages() {
   const mode = useViewMode();
   if (mode === "anonymous") return <PublicServicesPage />;
   if (mode === "loading" || mode === "forbidden") return <StatusPage />;
-  return route === "services" ? <ServicesPage /> : <DashboardPage />;
+  if (route === "services") return <ServicesPage />;
+  return route === "builds" ? <BuildsPage /> : <DashboardPage />;
 }

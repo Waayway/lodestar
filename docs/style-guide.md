@@ -156,7 +156,7 @@ under Lodestar names, 16 px (22 px in tiles and the promote card), `aria-hidden`
 `Apply` (play), `Promote` (chevrons-up), `Log` (scroll-text), `Applied` (check),
 `Building` (rotate-cw), `Skipped` (pen-line), `Failed` (circle-x), `Idle` (circle-dashed),
 `Off` (power), `Unreachable` (wifi-off), `Attention` (triangle-alert), `Machines` (monitor),
-`Channel` (git-branch), `Activation` (terminal), `Audit` (history), `Viewer` (user-round),
+`Channel` (git-branch), `Builds` (hammer), `Activation` (terminal), `Audit` (history), `Viewer` (user-round),
 `Queued` (clock), `Services` (layout-grid), `Up` (circle-check), `Down` (circle-x),
 `External` (external-link), `LogIn` / `LogOut` (log-in / log-out), `Close` (x), `ThemeSystem` / `ThemeLight` / `ThemeDark`
 (sun-moon / sun / moon), `Forbidden` (shield-off), `Disconnected` (cloud-off), and the toast icons

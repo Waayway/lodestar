@@ -1,9 +1,10 @@
 // How components read the dashboard's data and act on it. The only way in: no component
 // calls `fetch` or opens a socket itself.
-import { useContext, useMemo } from "preact/hooks";
+import { useContext, useEffect, useMemo, useState } from "preact/hooks";
 import type { ActivationEvent } from "@/bindings/ActivationEvent";
 import type { ApplyRecord } from "@/bindings/ApplyRecord";
 import type { AuditEvent } from "@/bindings/AuditEvent";
+import type { BuildsView } from "@/bindings/BuildsView";
 import type { Me } from "@/bindings/Me";
 import type { PublicService } from "@/bindings/PublicService";
 import type { ServiceView } from "@/bindings/ServiceView";
@@ -15,6 +16,7 @@ import {
   type ConnectionState,
   StateContext,
 } from "@/connection/ConnectionProvider";
+import * as client from "@/connection/client";
 import type { FeedStatus } from "@/connection/feed";
 import type { HeldLog } from "@/lib/applyLog";
 import { actPermission, type ViewMode } from "@/lib/viewer";
@@ -116,4 +118,42 @@ export function useActPermission(): { visible: boolean; disabledReason: string |
 /** Tracked software and the updater's runs; null until loaded. */
 export function useUpdates(): UpdatesView | null {
   return useConnection().updates;
+}
+
+/** How often the Builds page asks `/api/builds/recent` while it is open. */
+export const BUILDS_POLL_MS = 10_000;
+
+/**
+ * The newest builds for the Builds page: asked when it opens, every 10 s, and again as soon
+ * as a channel's build state changes in the feed (a build starts, ends or is retried). `error`
+ * is the last failure while there is nothing to show.
+ */
+export function useRecentBuilds(): { view: BuildsView | null; error: string | null } {
+  const { snapshot } = useConnection();
+  const [view, setView] = useState<BuildsView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const buildsKey = (snapshot?.channels ?? [])
+    .map((c) => `${c.name}:${c.build?.commit ?? ""}:${c.build?.state ?? ""}:${c.build?.failed_hosts.join(",") ?? ""}`)
+    .join(" ");
+  useEffect(() => {
+    let stopped = false;
+    const load = async () => {
+      try {
+        const next = await client.getRecentBuilds();
+        if (!stopped) {
+          setView(next);
+          setError(null);
+        }
+      } catch (e) {
+        if (!stopped) setError((e as Error).message);
+      }
+    };
+    void load();
+    const timer = setInterval(() => void load(), BUILDS_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [buildsKey]);
+  return { view, error };
 }

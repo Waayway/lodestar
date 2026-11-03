@@ -423,6 +423,33 @@ impl BuildGate {
         (result.commit == commit).then_some(result)
     }
 
+    /// Up to `limit` readable results, newest written first.
+    pub fn recent(&self, limit: usize) -> Vec<BuildResult> {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        let mut written: Vec<(i64, String)> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                let commit = name.strip_suffix(".json").filter(|c| is_commit_hash(c))?;
+                let modified = entry.metadata().ok()?.mtime();
+                Some((modified, commit.to_string()))
+            })
+            .collect();
+        written.sort_by(|left, right| right.cmp(left));
+        written
+            .into_iter()
+            .filter_map(|(_, commit)| self.read(&commit))
+            .take(limit)
+            .collect()
+    }
+
+    /// The index of built channel heads (`channels.json`); empty when it is missing or unreadable.
+    pub fn channel_heads(&self) -> BTreeMap<String, ChannelHeads> {
+        self.read_index().unwrap_or_default()
+    }
+
     /// Deletes result files (with their lock files) last written more than 30 days before `now`
     /// that no channel in the index has as current or previous commit. Commits whose lock is
     /// held are skipped. An unreadable index deletes nothing.

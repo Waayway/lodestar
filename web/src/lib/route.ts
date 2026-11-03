@@ -1,10 +1,11 @@
-// The dashboard's two pages, chosen by the URL hash.
+// The dashboard's pages, chosen by the URL hash.
 import { useEffect, useState } from "preact/hooks";
 
-export type Route = "fleet" | "services";
+export type Route = "fleet" | "builds" | "services";
 
 export function parseRoute(hash: string): Route {
-  return hash === "#/services" ? "services" : "fleet";
+  if (hash === "#/services") return "services";
+  return hash === "#/builds" ? "builds" : "fleet";
 }
 
 /** The current route; follows the browser's back/forward and link clicks. */

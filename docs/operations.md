@@ -385,8 +385,8 @@ goes through the gate:
 - **Updater**: builds the changed Linux hosts on the builder before it pushes and records
   the results for the pushed commit.
 
-States of a channel's head (`lodestar build status`, dashboard channel card,
-`GET /api/builds`):
+States of a channel's head (`lodestar build status`, dashboard channel card and Builds
+tab, `GET /api/builds`):
 
 - **building**: the gate is building it for this channel right now.
 - **ok**: every Linux host of the channel built.
@@ -440,8 +440,19 @@ Metrics (with `metrics.address`), per channel with a complete result for its hea
 | `lodestar_build_last_timestamp_seconds` | `channel` | unix time the last host result of the head was recorded |
 | `lodestar_build_duration_seconds` | `channel` | seconds the last build the server ran for the channel took (absent until one ran since start) |
 
-Build logs: `journalctl -u lodestar-server` (prebuild and re-send failures,
-`apply refused` lines) and the `log_tail` in the result file.
+The dashboard's **Builds** tab (`#/builds`, `GET /api/builds/recent`) lists the 20 newest
+commits: those building now first, then results by when they were written. Each shows its
+subject, the channels it is the head of and the channels whose cache keeps it, and every
+Linux host with its store path, or, for a failed host, its log behind "Show log". Retry
+build sits on any commit with a failed host. The tab carries a red count of channels
+whose head failed. It asks the server every 10 s while open, and at once when a channel's
+build state changes.
+
+Build logs: the Builds tab, `journalctl -u lodestar-server` (prebuild and re-send
+failures, `apply refused` lines) and the `log_tail` in the result file. A failure keeps
+the errors that are not about a failed dependency (up to 80 lines: Nix prints the real
+error once and then one "Cannot build … dependency failed" per dependent) followed by the
+last 40 lines.
 
 ## Where things are
 

@@ -33,6 +33,33 @@ Nothing on a host changes without an apply.
    `lodestar.lib.hostsFrom`, switch the server too. The host shows up in the
    dashboard once the server can reach port 7461 over Tailscale.
 
+### Host identity
+
+The server talks to a host's agent only on the tailnet node bound to it in `hosts`:
+`nodeId` (the stable node ID, `tailscale status --self --json | jq -r .Self.ID` on the
+host) and/or `dnsName` (its full MagicDNS name, e.g. `laptop.example.ts.net`). With both,
+both must match. The HostName a device reports is never used: any device can call itself
+`laptop`.
+
+- `lodestar.lib.hostsFrom { ...; tailnet = "example.ts.net"; }` sets `dnsName` to
+  `<hostName>.<tailnet>` for every host without `tailscale.nodeId` or `tailscale.dnsName`; set `services.lodestar-agent.tailscale.dnsName` on a host whose
+  machine name in the tailnet differs (e.g. `laptop-1`), and
+  `services.lodestar-agent.tailscale.nodeId` to pin the node itself. `hostsFrom` cannot
+  know node IDs: they exist only once a node has joined.
+- Host names that differ only in case are refused at start.
+- A host without either fails the server module's assertion (and a hand-written
+  `hosts.json` without them makes the server refuse to start), unless
+  `testing.staticAddresses` is set. Two hosts with the same identity are refused too.
+- A host whose identity matches no node, more than one node, a node whose DNS name
+  disagrees with `nodeId`, or a node another host also matches, is shown **off** and never
+  contacted; the server logs `lodestar-server: tailscale: <host>: <why>` (once per change).
+- A MagicDNS name belongs to whichever node holds it: renaming machines in the admin
+  console moves it. `nodeId` does not move; prefer it for hosts that matter.
+
+Upgrading from a version without identities: add `tailnet` to the `hostsFrom` call (or
+`nodeId`/`dnsName` to each hand-written host) before switching the server, or the switch
+fails evaluation.
+
 ## Applying
 
 Dashboard: `http://<server>:8080` (only the allowed Tailscale users and tags
@@ -63,6 +90,13 @@ own host and restarted it).
 
 State-changing API calls need the header `X-Lodestar: 1` (CSRF guard), e.g.
 `curl -X POST -H 'X-Lodestar: 1' http://manager:8080/api/hosts/desktop/apply`.
+
+The server does not follow redirects from an agent and reads at most 8 MiB of any agent
+answer. The agent answers a log in chunks of at most 1 MiB; the server keeps (streams and
+stores) at most 16 MiB of an apply's log; only when bytes beyond that exist does it end the
+log with `[lodestar: log truncated]` and stop following it until the apply ends. A log chunk
+whose text does not fit the bytes it claims, or for another offset, is refused, and at most
+64 log reads run back to back. The agent's own log file is complete.
 
 ## Service links
 
@@ -488,8 +522,9 @@ dashboard's audit log, with `SUDO_USER` for manual switches.
 
 ## Troubleshooting
 
-- **Host "off"**: Tailscale says the device is offline, or its name does not
-  match the agent's `hostName`.
+- **Host "off"**: Tailscale says the device is offline, or no single tailnet node has
+  the host's `nodeId` / `dnsName` (see "Host identity"; `journalctl -u lodestar-server`
+  names the reason).
 - **"agent unreachable"**: the device is online but nothing answers on 7461:
   is `lodestar-agent` running, and does the Tailscale policy allow the server
   to reach `tcp:7461` on it?

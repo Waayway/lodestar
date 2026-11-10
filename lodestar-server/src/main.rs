@@ -73,7 +73,8 @@ async fn run(command: Command) -> anyhow::Result<()> {
                 Some(path) => load_links(path)?,
                 None => Vec::new(),
             };
-            let online = tailscale::provider_from_config(&config.online, &config.tailscale_bin)?;
+            let online =
+                tailscale::provider_from_config(&config.online, &config.tailscale_bin, &hosts)?;
             server::start(config, hosts, links, online, false)
                 .await?
                 .wait()

@@ -6,23 +6,30 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 
-use super::{Identity, OnlineProvider, PeerInfo, parse_status, parse_whois};
+use super::{Identity, OnlineProvider, PeerInfo, match_peers, parse_status, parse_whois};
+use crate::config::ManagedHost;
 
 const STATUS_TTL: Duration = Duration::from_secs(30);
 const WHOIS_TTL: Duration = Duration::from_secs(60);
 const CLI_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Shells out to the `tailscale` binary; status cached 30 s, whois 60 s.
+/// Shells out to the `tailscale` binary; status cached 30 s, whois 60 s. Reports each managed
+/// host by its configured identity (see `match_peers`).
 pub struct TailscaleCli {
     bin: PathBuf,
+    hosts: Vec<ManagedHost>,
+    /// The last problems logged, so an unchanged problem is not logged at every refresh.
+    logged: Mutex<Vec<String>>,
     status: Mutex<Option<(Instant, HashMap<String, PeerInfo>)>>,
     whois: Mutex<HashMap<IpAddr, (Instant, Identity)>>,
 }
 
 impl TailscaleCli {
-    pub fn new(bin: PathBuf) -> Self {
+    pub fn new(bin: PathBuf, hosts: Vec<ManagedHost>) -> Self {
         Self {
             bin,
+            hosts,
+            logged: Mutex::new(Vec::new()),
             status: Mutex::new(None),
             whois: Mutex::new(HashMap::new()),
         }
@@ -42,6 +49,16 @@ impl TailscaleCli {
         );
         Ok(String::from_utf8(output.stdout)?)
     }
+
+    fn log_problems(&self, problems: Vec<String>) {
+        let mut logged = self.logged.lock().unwrap();
+        if *logged != problems {
+            for problem in &problems {
+                eprintln!("lodestar-server: tailscale: {problem}");
+            }
+            *logged = problems;
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -58,7 +75,11 @@ impl OnlineProvider for TailscaleCli {
             .await
             .and_then(|json| parse_status(&json))
         {
-            Ok(peers) => peers,
+            Ok(nodes) => {
+                let matched = match_peers(&self.hosts, &nodes);
+                self.log_problems(matched.problems);
+                matched.peers
+            }
             Err(_) => return cached.map(|(_, peers)| peers).unwrap_or_default(),
         };
         *self.status.lock().unwrap() = Some((Instant::now(), fresh.clone()));

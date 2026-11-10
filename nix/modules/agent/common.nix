@@ -40,6 +40,30 @@ in
       '';
     };
 
+    tailscale = {
+      nodeId = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "nAbCdEf1CNTRL";
+        description = ''
+          This host's stable Tailscale node ID (`ID` in `tailscale status --json`, or
+          `tailscale status --self --json | jq -r .Self.ID`). Read by `lodestar.lib.hostsFrom`
+          for the server, which talks to this host's agent only on the node with this ID.
+          The agent itself does not use it.
+        '';
+      };
+      dnsName = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "laptop.example.ts.net";
+        description = ''
+          This host's full MagicDNS name. Read by `lodestar.lib.hostsFrom`; null means
+          `<hostName>.<tailnet>` when `hostsFrom` is given `tailnet` and `nodeId` is null. Set it when the
+          machine's name in the tailnet differs from `hostName` (e.g. `laptop-1`).
+        '';
+      };
+    };
+
     channel = mkOption {
       type = types.str;
       default = "main";

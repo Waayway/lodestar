@@ -113,6 +113,8 @@ fn host(name: &str, os: &str) -> ManagedHost {
         user: "alice".into(),
         channel: "unstable".into(),
         os: os.into(),
+        node_id: None,
+        dns_name: None,
     }
 }
 

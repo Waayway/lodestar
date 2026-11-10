@@ -222,6 +222,8 @@ async fn state_with(links: Vec<Link>) -> (AppState, tempfile::TempDir) {
         user: "u".into(),
         channel: "stable".into(),
         os: "nixos".into(),
+        node_id: None,
+        dns_name: None,
     };
     let mut state =
         AppState::new(Arc::new(config), connection, mirror, online, vec![host]).unwrap();

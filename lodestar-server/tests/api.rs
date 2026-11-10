@@ -87,6 +87,8 @@ fn host(name: &str, channel: &str) -> ManagedHost {
         user: "u".into(),
         channel: channel.into(),
         os: "nixos".into(),
+        node_id: None,
+        dns_name: None,
     }
 }
 
@@ -989,6 +991,8 @@ fn darwin(name: &str, channel: &str) -> ManagedHost {
     ManagedHost {
         system: "aarch64-darwin".into(),
         os: "darwin".into(),
+        node_id: None,
+        dns_name: None,
         ..host(name, channel)
     }
 }

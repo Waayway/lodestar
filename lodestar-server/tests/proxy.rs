@@ -104,6 +104,8 @@ fn host() -> ManagedHost {
         user: "u".into(),
         channel: "main".into(),
         os: "nixos".into(),
+        node_id: None,
+        dns_name: None,
     }
 }
 

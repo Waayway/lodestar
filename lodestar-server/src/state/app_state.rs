@@ -66,6 +66,9 @@ pub struct AppState {
     pub(crate) resend_refused: Arc<Mutex<HashSet<(String, String)>>>,
     /// `(host, apply_id)` pairs with a live log follower.
     pub(crate) followers: Arc<Mutex<HashSet<(String, String)>>>,
+    /// `(host, apply_id)` pairs of running applies whose log reached `MAX_LOG_BYTES`: not
+    /// followed again until the apply ends.
+    pub(crate) capped_logs: Arc<Mutex<HashSet<(String, String)>>>,
     /// Serialises dashboard actions (apply, promote) from mirror fetch to recorded result, so
     /// the last press always records the newest channel head.
     pub(crate) actions: Arc<tokio::sync::Mutex<()>>,
@@ -115,6 +118,7 @@ impl AppState {
             resend_builds: Arc::default(),
             resend_refused: Arc::default(),
             followers: Arc::default(),
+            capped_logs: Arc::default(),
             actions: Arc::default(),
             demo: false,
             auth: None,

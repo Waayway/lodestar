@@ -47,6 +47,8 @@ impl OnlineProvider for DemoOnline {
                 let key = peer.host.to_lowercase();
                 let info = PeerInfo {
                     host: key.clone(),
+                    node_id: String::new(),
+                    dns_name: String::new(),
                     online,
                     last_seen: Some(last_seen),
                     os: peer.os.clone(),

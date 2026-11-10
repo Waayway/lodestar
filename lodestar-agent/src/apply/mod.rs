@@ -14,7 +14,7 @@ mod state_files;
 mod wrapper;
 
 pub use lock::try_lock_apply;
-pub use log_reader::read_log;
+pub use log_reader::{MAX_LOG_CHUNK, read_log};
 pub use marker::clear_stale_marker;
 pub use prune::prune;
 pub use record::{latest_record, read_record, settle_running};

@@ -98,6 +98,40 @@
           };
           proxied = mkSystem proxyOptions;
           incomplete = mkSystem { proxyListen.address = "10.0.10.170"; };
+          # A host without a Tailscale identity fails; hostsFrom derives one from `tailnet`.
+          unbound = mkSystem {
+            hosts.laptop = {
+              channel = "main";
+              os = "linux";
+              system = "x86_64-linux";
+              user = "alice";
+            };
+          };
+          unboundMessages = map (a: a.message) (lib.filter (a: !a.assertion) unbound.config.assertions);
+          derivedHosts = self.lib.hostsFrom {
+            nixosConfigurations.manager = system;
+            tailnet = "example.ts.net";
+          };
+          # An agent pinned by nodeId gets no derived dnsName (that would bind it twice).
+          pinnedHosts = self.lib.hostsFrom {
+            nixosConfigurations.pinned = {
+              config.services.lodestar-agent = {
+                enable = true;
+                hostName = "pinned";
+                channel = "main";
+                user = "alice";
+                tailscale = {
+                  nodeId = "nP1";
+                  dnsName = null;
+                };
+              };
+              pkgs.stdenv.hostPlatform.system = "x86_64-linux";
+            };
+            tailnet = "example.ts.net";
+          };
+          bound = mkSystem { hosts = derivedHosts; };
+          boundMessages = map (a: a.message) (lib.filter (a: !a.assertion) bound.config.assertions);
+          boundHosts = builtins.fromJSON bound.config.environment.etc."lodestar-server/hosts.json".text;
           proxiedFirewall = proxied.config.networking.firewall;
           proxiedConfig = builtins.fromJSON (
             builtins.unsafeDiscardStringContext
@@ -139,6 +173,28 @@
         ) "config.json must have no proxy section without proxyListen.address";
         assert lib.assertMsg (lib.any (lib.hasInfix "trustedProxies") failedMessages)
           "proxyListen.address without trustedProxies must fail an assertion naming trustedProxies";
+        assert lib.assertMsg (lib.any (lib.hasInfix "nodeId or dnsName") unboundMessages)
+          "a host without nodeId or dnsName must fail an assertion";
+        assert lib.assertMsg (
+          derivedHosts.manager.dnsName == "manager.example.ts.net" && derivedHosts.manager.nodeId == null
+        ) "hostsFrom must derive dnsName from tailnet (got ${builtins.toJSON derivedHosts.manager})";
+        assert lib.assertMsg (pinnedHosts.pinned.nodeId == "nP1" && pinnedHosts.pinned.dnsName == null)
+          "hostsFrom must not derive dnsName for a host pinned by nodeId (got ${builtins.toJSON pinnedHosts.pinned})";
+        assert lib.assertMsg (
+          !(lib.any (lib.hasInfix "nodeId or dnsName") boundMessages)
+          &&
+            boundHosts == [
+              {
+                name = "manager";
+                channel = "main";
+                os = "linux";
+                system = "x86_64-linux";
+                user = "alice";
+                node_id = null;
+                dns_name = "manager.example.ts.net";
+              }
+            ]
+        ) "hosts.json must carry the identity (got ${builtins.toJSON boundHosts})";
         linuxPkgs.runCommand "lodestar-firewall" { } "touch $out";
     in
     {

@@ -9,7 +9,10 @@ use super::record::read_record;
 use super::state_files::apply_file;
 use crate::config::AgentConfig;
 
-/// Log bytes from `offset` on. `eof` is true once the apply has finished and
+/// The most log bytes one read answers; the caller continues at `next`.
+pub const MAX_LOG_CHUNK: usize = 1024 * 1024;
+
+/// Log bytes from `offset` on, at most `MAX_LOG_CHUNK` of them. `eof` is true once the apply has finished and
 /// the chunk reaches the end of the log. `offset` echoes the request; the next
 /// request continues at `next` (the raw bytes consumed, which differs from
 /// `data.len()` when invalid UTF-8 was replaced).
@@ -21,7 +24,10 @@ pub fn read_log(config: &AgentConfig, id: &str, offset: u64) -> Option<LogChunk>
         let length = log_file.metadata().ok()?.len();
         if offset < length {
             log_file.seek(SeekFrom::Start(offset)).ok()?;
-            log_file.read_to_end(&mut buffer).ok()?;
+            (&mut log_file)
+                .take(MAX_LOG_CHUNK as u64)
+                .read_to_end(&mut buffer)
+                .ok()?;
         }
         at_end = offset + buffer.len() as u64 >= length;
     }

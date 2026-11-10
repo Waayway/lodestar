@@ -1,8 +1,8 @@
 mod common;
 use common::*;
 use lodestar_agent::apply::{
-    applies_dir, clear_stale_marker, latest_record, prune, read_log, read_record, run_apply,
-    settle_running, try_lock_apply,
+    MAX_LOG_CHUNK, applies_dir, clear_stale_marker, latest_record, prune, read_log, read_record,
+    run_apply, settle_running, try_lock_apply,
 };
 use lodestar_agent::git::Git;
 use lodestar_proto::{ApplyRecord, ApplyState, SkipReason};
@@ -449,4 +449,32 @@ fn wrapper_finishing_after_the_read_keeps_its_result() {
     // And the file on disk still says Ok.
     let on_disk = read_record(&fixture.config, "race").unwrap();
     assert_eq!(on_disk.state, ApplyState::Ok, "{on_disk:?}");
+}
+
+#[test]
+fn read_log_answers_at_most_one_chunk() {
+    let fixture = fixture();
+    write_record(&fixture, "big", ApplyState::Ok, 1);
+    // A two-byte char straddles the chunk boundary.
+    let mut log = vec![b'a'; MAX_LOG_CHUNK - 1];
+    log.extend("é".as_bytes());
+    log.extend(vec![b'b'; MAX_LOG_CHUNK + 10]);
+    std::fs::write(applies_dir(&fixture.config).join("big.log"), &log).unwrap();
+
+    let mut offset = 0;
+    let mut text = String::new();
+    let mut reads = 0;
+    loop {
+        let chunk = read_log(&fixture.config, "big", offset).unwrap();
+        assert!(chunk.next - offset <= MAX_LOG_CHUNK as u64);
+        assert!(chunk.next > offset || chunk.eof);
+        text.push_str(&chunk.data);
+        offset = chunk.next;
+        reads += 1;
+        if chunk.eof {
+            break;
+        }
+    }
+    assert_eq!(text.as_bytes(), &log[..]);
+    assert_eq!(reads, 3);
 }

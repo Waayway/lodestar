@@ -74,6 +74,18 @@ let
         type = types.str;
         description = "Account that owns the host's flake checkout.";
       };
+      nodeId = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "nAbCdEf1CNTRL";
+        description = "The host's stable Tailscale node ID; the server talks to its agent only on that node.";
+      };
+      dnsName = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "laptop.example.ts.net";
+        description = "The host's full MagicDNS name; with `nodeId` both must match. One of the two is required (unless `testing.staticAddresses` is set): the HostName a device reports is never trusted.";
+      };
     };
   };
 in
@@ -375,6 +387,14 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
+        assertion =
+          cfg.testing.staticAddresses != null
+          || lib.all (h: h.nodeId != null || h.dnsName != null) (lib.attrValues cfg.hosts);
+        message = "services.lodestar-server.hosts: every host needs nodeId or dnsName (its Tailscale identity), missing for: ${
+          toString (lib.attrNames (lib.filterAttrs (_: h: h.nodeId == null && h.dnsName == null) cfg.hosts))
+        }. With lodestar.lib.hostsFrom, pass `tailnet = \"<your>.ts.net\";` or set the agents' services.lodestar-agent.tailscale.nodeId.";
+      }
+      {
         assertion = cfg.promote == null || cfg.pushUrl != null;
         message = "services.lodestar-server.pushUrl must be set while promote is enabled (or set promote = null).";
       }
@@ -486,6 +506,8 @@ in
           channel
           os
           ;
+        node_id = h.nodeId;
+        dns_name = h.dnsName;
       }) cfg.hosts
     );
     environment.etc."lodestar-server/links.json".text = builtins.toJSON (

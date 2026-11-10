@@ -108,7 +108,13 @@ nix run github:Waayway/lodestar#lodestar-demo   # dashboard against simulated ho
             enable = true;
             # NixOS only; with nix-darwin hosts too:
             #   hostsFrom { inherit (self) nixosConfigurations darwinConfigurations; }
-            hosts = lodestar.lib.hostsFrom { inherit (self) nixosConfigurations; };
+            # `tailnet`: your MagicDNS domain; each host is bound to `<hostName>.<tailnet>`
+            # (or its agent's `tailscale.nodeId` / `tailscale.dnsName`), never to the
+            # HostName a device reports.
+            hosts = lodestar.lib.hostsFrom {
+              inherit (self) nixosConfigurations;
+              tailnet = "example.ts.net";
+            };
             repoUrl = "https://github.com/alice/infra";
             pushUrl = "git@github.com:alice/infra.git";
             listenAddress = "100.64.0.1";          # this host's Tailscale IP
@@ -130,7 +136,7 @@ Exports:
 |---|---|
 | `nixosModules.agent`, `nixosModules.server`, `nixosModules.cache`, `nixosModules.default` (all) | NixOS modules (`cache` is the build cache host, off by default) |
 | `darwinModules.agent`, `darwinModules.default` | nix-darwin module (agent only) |
-| `lib.hostsFrom { nixosConfigurations ? {}, darwinConfigurations ? {} }` | `services.lodestar-server.hosts` from every configuration that enables the agent, keyed by `hostName` |
+| `lib.hostsFrom { nixosConfigurations ? {}, darwinConfigurations ? {}, tailnet ? null }` | `services.lodestar-server.hosts` from every configuration that enables the agent, keyed by `hostName`, with `nodeId` from the agent's `tailscale.nodeId` and `dnsName` from its `tailscale.dnsName`, else `<hostName>.<tailnet>` |
 | `packages.<system>.{lodestar, lodestar-agent, lodestar-server, lodestar-web, default}` | `default` is the CLI |
 | `apps.<system>.{lodestar, lodestar-demo, default}` | |
 
@@ -146,6 +152,8 @@ no `specialArgs`.
 | `enable` | `false` | |
 | `user` | (required) | owns the checkout; git and `nix build` run as this user |
 | `hostName` | `networking.hostName` | the name the server knows this host by |
+| `tailscale.nodeId` | `null` | this host's stable Tailscale node ID, for `hostsFrom` (the server talks to the agent only on that node) |
+| `tailscale.dnsName` | `null` = `<hostName>.<tailnet>` in `hostsFrom` | this host's full MagicDNS name, when it differs |
 | `channel` | `"main"` | branch this host follows |
 | `managerHost` | (required) | Tailscale name of the server's host; the only accepted source |
 | `repoUrl` | (required) | git URL of the flake repository (`origin`) |
@@ -174,7 +182,7 @@ nix-darwin only:
 | Option | Default | |
 |---|---|---|
 | `enable` | `false` | |
-| `hosts` | `{}` | `attrsOf { channel; os; system; user; }`, usually `lodestar.lib.hostsFrom { ... }` |
+| `hosts` | `{}` | `attrsOf { channel; os; system; user; nodeId; dnsName; }`, usually `lodestar.lib.hostsFrom { ... }`; every host needs `nodeId` (stable Tailscale node ID) or `dnsName` (full MagicDNS name), see "Host identity" in `docs/operations.md` |
 | `repoUrl` | (required) | mirrored read-only |
 | `pushUrl` | `null` | where promote pushes; required unless `promote = null` |
 | `deployKeyFile` | `null` | SSH key with write access to `pushUrl`, readable by `lodestar-server` (outside the store, e.g. opnix or sops-nix) |

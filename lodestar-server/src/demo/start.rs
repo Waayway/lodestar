@@ -101,6 +101,8 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
             user: DEMO_USER.into(),
             channel: demo_host.channel.into(),
             os: os.into(),
+            node_id: None,
+            dns_name: None,
         });
     }
     drop(closed);

@@ -31,6 +31,8 @@ impl StaticOnline {
                 host.clone(),
                 PeerInfo {
                     host,
+                    node_id: String::new(),
+                    dns_name: String::new(),
                     online: true,
                     last_seen: None,
                     os: String::new(),

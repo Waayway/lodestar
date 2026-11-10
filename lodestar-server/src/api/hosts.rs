@@ -10,7 +10,7 @@ use super::apply_request::{find_host, request_applies, send_apply};
 use super::error::{ApiError, internal};
 use crate::access::Actor;
 use crate::db;
-use crate::poller::agent_base;
+use crate::poller::{agent_base, read_log_capped};
 use crate::state::AppState;
 
 pub(super) async fn apply_host(
@@ -49,12 +49,9 @@ pub(super) async fn apply_log(
                     format!("{} is offline", host.name),
                 )
             })?;
-            state
-                .client
-                .log(&base, &id, 0)
+            read_log_capped(&state, &base, &id)
                 .await
                 .map_err(|error| ApiError(StatusCode::BAD_GATEWAY, format!("{error:#}")))?
-                .data
         }
     };
     Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], log).into_response())

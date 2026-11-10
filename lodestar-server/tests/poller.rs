@@ -23,7 +23,7 @@ use lodestar_server::config::{
 };
 use lodestar_server::db;
 use lodestar_server::mirror::Mirror;
-use lodestar_server::poller::poll_once;
+use lodestar_server::poller::{MAX_LOG_BYTES, poll_once};
 use lodestar_server::state::{AppState, host_view};
 use lodestar_server::tailscale::{Identity, OnlineProvider, PeerInfo, StaticOnline};
 use serde::Deserialize;
@@ -47,6 +47,10 @@ struct Fake {
     log_hits: u32,
     /// The offsets `/apply/log` was asked for.
     log_offsets: Vec<u64>,
+    /// `/apply/log` answers 1 MiB of new text at every offset and never reaches eof.
+    log_endless: bool,
+    /// `/apply/log` answers no data but claims 1 MiB more consumed, never reaching eof.
+    log_forged: bool,
 }
 
 type Shared = Arc<Mutex<Fake>>;
@@ -102,6 +106,24 @@ async fn fake_agent(fake: Shared) -> SocketAddr {
         if agent.log_failures > 0 {
             agent.log_failures -= 1;
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        if agent.log_forged {
+            return Ok(Json(LogChunk {
+                apply_id: query.apply_id,
+                offset: query.offset,
+                data: String::new(),
+                next: query.offset + 1024 * 1024,
+                eof: false,
+            }));
+        }
+        if agent.log_endless {
+            return Ok(Json(LogChunk {
+                apply_id: query.apply_id,
+                offset: query.offset,
+                data: "y".repeat(1024 * 1024),
+                next: query.offset + 1024 * 1024,
+                eof: false,
+            }));
         }
         let (full, eof) = if agent.log_script.is_empty() {
             (agent.log.clone().into_bytes(), true)
@@ -183,6 +205,8 @@ fn host() -> ManagedHost {
         system: "x86_64-linux".into(),
         user: "u".into(),
         channel: "main".into(),
+        node_id: None,
+        dns_name: None,
         os: "nixos".into(),
     }
 }
@@ -414,6 +438,8 @@ impl OnlineProvider for Offline {
             "h1".to_string(),
             PeerInfo {
                 host: "h1".into(),
+                node_id: String::new(),
+                dns_name: String::new(),
                 online: false,
                 last_seen: Some(42),
                 os: "linux".into(),
@@ -584,6 +610,96 @@ async fn follow_log_streams_running_apply_once() {
     assert_eq!(stored, "one\ntwo\nthree\n");
     // One follower only: exactly one read per scripted state.
     assert_eq!(fake.lock().unwrap().log_hits, 3);
+}
+
+#[tokio::test]
+async fn follow_log_stops_at_the_log_cap() {
+    let fake = Shared::default();
+    {
+        let mut agent = fake.lock().unwrap();
+        agent.status = Some(agent_status(
+            OLD,
+            Some(record("a1", NEW, ApplyState::Running)),
+        ));
+        agent.log_endless = true;
+    }
+    let addr = fake_agent(fake.clone()).await;
+    let environment = env(addr, None).await;
+    db::insert_apply(
+        &environment.state.db,
+        "H1",
+        "alice",
+        1,
+        &record("a1", NEW, ApplyState::Running),
+    )
+    .await
+    .unwrap();
+
+    poll_once(&environment.state).await;
+
+    let stored = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let row = db::get_apply(&environment.state.db, "a1")
+                .await
+                .unwrap()
+                .unwrap();
+            if let Some(log) = row.log {
+                return log;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the follower stopped at the cap and stored the log");
+    assert!(stored.len() <= MAX_LOG_BYTES + 100, "{}", stored.len());
+    assert!(
+        stored.len() >= MAX_LOG_BYTES - 1024 * 1024,
+        "{}",
+        stored.len()
+    );
+    assert!(
+        stored.ends_with("[lodestar: log truncated]\n"),
+        "{:?}",
+        &stored[stored.len() - 40..]
+    );
+    // The follower is gone: no more reads.
+    let hits = fake.lock().unwrap().log_hits;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(fake.lock().unwrap().log_hits, hits);
+}
+
+#[tokio::test]
+async fn finished_apply_log_is_read_up_to_the_cap() {
+    let fake = Shared::default();
+    {
+        let mut agent = fake.lock().unwrap();
+        agent.status = Some(agent_status(NEW, Some(record("a1", NEW, ApplyState::Ok))));
+        agent.log_endless = true;
+    }
+    let addr = fake_agent(fake.clone()).await;
+    let environment = env(addr, None).await;
+    db::insert_apply(
+        &environment.state.db,
+        "H1",
+        "alice",
+        1,
+        &record("a1", NEW, ApplyState::Running),
+    )
+    .await
+    .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(60), poll_once(&environment.state))
+        .await
+        .expect("the poll ends although the log never does");
+
+    let row = db::get_apply(&environment.state.db, "a1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, "ok");
+    let stored = row.log.unwrap();
+    assert!(stored.len() <= MAX_LOG_BYTES + 100, "{}", stored.len());
+    assert!(stored.ends_with("[lodestar: log truncated]\n"));
 }
 
 #[tokio::test]
@@ -819,4 +935,88 @@ async fn poll_resend_backs_off_while_the_builder_is_unreachable() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(builder.calls().len(), 2);
+}
+
+/// A poller env whose agent runs (or finished) apply `a1` with the given log behaviour.
+async fn log_env(state: ApplyState, setup: impl FnOnce(&mut Fake)) -> (Env, Shared) {
+    let fake = Shared::default();
+    {
+        let mut agent = fake.lock().unwrap();
+        agent.status = Some(agent_status(OLD, Some(record("a1", NEW, state))));
+        setup(&mut agent);
+    }
+    let addr = fake_agent(fake.clone()).await;
+    let environment = env(addr, None).await;
+    db::insert_apply(
+        &environment.state.db,
+        "H1",
+        "alice",
+        1,
+        &record("a1", NEW, ApplyState::Running),
+    )
+    .await
+    .unwrap();
+    (environment, fake)
+}
+
+#[tokio::test]
+async fn forged_log_progress_is_not_followed() {
+    let (environment, fake) = log_env(ApplyState::Running, |agent| agent.log_forged = true).await;
+    poll_once(&environment.state).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let hits = fake.lock().unwrap().log_hits;
+    assert!(hits <= 3, "{hits} log reads in 3 s");
+}
+
+#[tokio::test]
+async fn forged_log_progress_does_not_hang_a_finished_apply() {
+    let (environment, fake) = log_env(ApplyState::Ok, |agent| agent.log_forged = true).await;
+    tokio::time::timeout(Duration::from_secs(10), poll_once(&environment.state))
+        .await
+        .expect("the poll ends");
+    let hits = fake.lock().unwrap().log_hits;
+    assert!(hits <= 2, "{hits} log reads");
+    // The forged log is refused: the apply stays open and is retried at the next poll.
+    let row = db::get_apply(&environment.state.db, "a1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, "running");
+}
+
+#[tokio::test]
+async fn a_truncated_log_is_not_followed_again_while_the_apply_runs() {
+    let (environment, fake) = log_env(ApplyState::Running, |agent| agent.log_endless = true).await;
+    let mut receiver = environment.state.tx.subscribe();
+    poll_once(&environment.state).await;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let row = db::get_apply(&environment.state.db, "a1")
+                .await
+                .unwrap()
+                .unwrap();
+            if row.log.is_some() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the follower stopped at the cap");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let hits = fake.lock().unwrap().log_hits;
+    while receiver.try_recv().is_ok() {}
+
+    poll_once(&environment.state).await;
+    poll_once(&environment.state).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert_eq!(fake.lock().unwrap().log_hits, hits);
+    let mut log_messages = 0;
+    while let Ok(message) = receiver.try_recv() {
+        if matches!(message, WsMessage::ApplyLog(_)) {
+            log_messages += 1;
+        }
+    }
+    assert_eq!(log_messages, 0);
 }

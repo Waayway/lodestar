@@ -153,6 +153,7 @@ async fn fixture_with(builds: bool) -> Fixture {
         deploy_key_file: None,
         state_dir: dir.path().join("state"),
         access: AccessConfig::Disabled,
+        allowed_hosts: Vec::new(),
         online: OnlineSource::Static {
             addresses: HashMap::new(),
         },

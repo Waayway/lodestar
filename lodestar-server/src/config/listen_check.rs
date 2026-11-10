@@ -1,6 +1,7 @@
 use std::net::IpAddr;
 
 use super::{AccessConfig, ServerConfig};
+use crate::access::parse_entry;
 
 /// True for Tailscale addresses: `100.64.0.0/10` and `fd7a:115c:a1e0::/48`.
 pub fn is_tailscale_ip(ip: IpAddr) -> bool {
@@ -28,6 +29,19 @@ impl ServerConfig {
                  with Tailscale access control the dashboard must listen only on the tailnet",
                 self.listen
             );
+        }
+        Ok(())
+    }
+
+    /// Every `allowed_hosts` entry must be a bare host name or IP address: no port, scheme,
+    /// path or wildcard.
+    pub fn check_allowed_hosts(&self) -> anyhow::Result<()> {
+        for entry in &self.allowed_hosts {
+            if parse_entry(entry).is_none() {
+                anyhow::bail!(
+                    "allowed_hosts entry {entry:?} is not a host name or IP address (without a port)"
+                );
+            }
         }
         Ok(())
     }
@@ -74,5 +88,22 @@ mod tests {
         config.listen = "127.0.0.1:8080".parse().unwrap();
         config.access = AccessConfig::Disabled;
         config.check_listen().unwrap();
+    }
+
+    #[test]
+    fn allowed_hosts_are_bare_names_or_addresses() {
+        let mut config: ServerConfig = serde_json::from_str(
+            r#"{"listen":"100.64.0.1:8080","agent_port":7461,"hosts_file":"/h.json",
+            "repo_url":"u","push_url":"p","state_dir":"/s",
+            "access":{"kind":"tailscale"},"online":{"kind":"tailscale"},
+            "allowed_hosts":["manager","manager.tail0000.ts.net","100.64.0.1","[fd7a:115c:a1e0::1]"]}"#,
+        )
+        .unwrap();
+        config.check_allowed_hosts().unwrap();
+        for bad in ["manager:8080", "http://manager", "*.ts.net", "", "manager/"] {
+            config.allowed_hosts = vec![bad.into()];
+            let error = config.check_allowed_hosts().unwrap_err().to_string();
+            assert!(error.contains("allowed_hosts entry"), "{bad:?}: {error}");
+        }
     }
 }

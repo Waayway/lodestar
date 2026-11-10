@@ -21,6 +21,11 @@ pub struct ServerConfig {
     pub deploy_key_file: Option<PathBuf>,
     pub state_dir: PathBuf,
     pub access: AccessConfig,
+    /// Host names (and extra addresses) the tailnet listener answers to besides its listen
+    /// address, e.g. the MagicDNS short name and FQDN; any other `Host` is refused (DNS
+    /// rebinding). Absent means the listen address only (and `localhost` on loopback).
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
     pub online: OnlineSource,
     #[serde(default = "default_mirror_fetch_secs")]
     pub mirror_fetch_secs: u64,

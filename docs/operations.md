@@ -36,7 +36,13 @@ Nothing on a host changes without an apply.
 ## Applying
 
 Dashboard: `http://<server>:8080` (only the allowed Tailscale users and tags
-get in).
+get in). Use the server's Tailscale IP or a name in `allowedHostnames` (default: the
+server's `networking.hostName`, its MagicDNS short name); add the MagicDNS FQDN
+(`manager.<tailnet>.ts.net`) and whatever name the agents' `managerHost` / `serverUrl`
+uses, or the CLI on those hosts is refused too. Any other `Host` gets a plain 403
+`forbidden` and logs `lodestar-server: refused a request for host ...`: this stops a page
+on another site from reaching the dashboard by pointing its own DNS name at the server
+(DNS rebinding). Names are matched exactly, never resolved.
 
 ```sh
 lodestar status                          # host, os, channel, online, running, behind, last apply
@@ -63,6 +69,11 @@ own host and restarted it).
 
 State-changing API calls need the header `X-Lodestar: 1` (CSRF guard), e.g.
 `curl -X POST -H 'X-Lodestar: 1' http://manager:8080/api/hosts/desktop/apply`.
+A browser's `Origin`, when sent (on POSTs and the WebSocket), must be the dashboard's own
+(`http://` + the `Host` it was loaded from); a request without one (curl, the CLI) is
+allowed. Every response carries `X-Frame-Options: DENY`,
+`Content-Security-Policy: frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`:
+the dashboard cannot be framed by another page.
 
 ## Service links
 
@@ -131,7 +142,8 @@ are unchanged. On the router entrance:
 
 Routes: the dashboard itself, `/api/me` (who you are and whether you can act),
 `/api/public/services`, the read routes (`/api/snapshot`, apply logs, `/api/audit`, the
-WebSocket `/api/ws`, which also needs the public URL as its `Origin`), the act routes,
+WebSocket `/api/ws`, which also needs the public URL as its `Origin`; so does every
+state-changing request that sends an `Origin`), the act routes,
 and `/auth/login`, `/auth/callback`, `/auth/logout`. Refusals are JSON `{"error": …}`:
 401 `log in first` (anonymous on a read or act route), 403 `only admins can do this`, 403
 `only over Tailscale`.
@@ -148,6 +160,8 @@ and `/auth/login`, `/auth/callback`, `/auth/logout`. Refusals are JSON `{"error"
   entrance, remove any `X-Homelab-Via` the client sent. The server trusts the header from
   trusted peers only, and only as a single header with the exact value `tailnet`; no
   header, or several, counts as unmarked.
+- Pass the browser's `Origin` through unchanged. The server does not check `Host` on this
+  listener (only trusted proxies reach it): the router must route by the public host.
 - The router terminates TLS; the server sets `__Host-` cookies (`Secure`), so the public
   URL must be `https://` (the server refuses to start with an `http://` one).
 
@@ -495,6 +509,8 @@ dashboard's audit log, with `SUDO_USER` for manual switches.
   to reach `tcp:7461` on it?
 - **403 from the agent**: the request did not come from `managerHost`'s
   Tailscale addresses (check that `managerHost` resolves on the agent host).
+- **Plain 403 `forbidden` for a name that resolves to the server**: the name is not in
+  `allowedHostnames` (see "Applying").
 - **Dashboard says you don't have access**: your Tailscale login is not in
   `allowedUsers` and your device has none of `allowedTags`. A tagged device
   loses its user identity in Tailscale, so tag servers, not your laptop.

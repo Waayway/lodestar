@@ -123,6 +123,7 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         deploy_key_file: None,
         state_dir: temporary_dir.path().join("state"),
         access: AccessConfig::Disabled,
+        allowed_hosts: Vec::new(),
         // Agent addresses with their ports; reachability itself comes from `DemoOnline`.
         online: OnlineSource::Static { addresses },
         mirror_fetch_secs: scaled_secs(MIRROR_FETCH_SECS, speed),

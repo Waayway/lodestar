@@ -153,6 +153,24 @@ in
       description = "TCP port of the dashboard and API.";
     };
 
+    allowedHostnames = mkOption {
+      type = types.listOf types.str;
+      default = lib.optional (config.networking.hostName != "") config.networking.hostName;
+      defaultText = lib.literalExpression ''lib.optional (config.networking.hostName != "") config.networking.hostName'';
+      example = [
+        "manager"
+        "manager.tail0000.ts.net"
+      ];
+      description = ''
+        Host names the dashboard answers to besides `listenAddress` (which always works):
+        usually this host's MagicDNS short name and its full `<host>.<tailnet>.ts.net` name.
+        A request whose `Host` is anything else is refused (403), so a page on another site
+        cannot reach the dashboard by pointing its own DNS name at this address (DNS
+        rebinding). Names are compared exactly, case-insensitively, never resolved; no ports
+        or wildcards.
+      '';
+    };
+
     allowedUsers = mkOption {
       type = types.listOf types.str;
       default = [ ];
@@ -379,6 +397,22 @@ in
         message = "services.lodestar-server.pushUrl must be set while promote is enabled (or set promote = null).";
       }
       {
+        # The server's `allowed_hosts` check (bare DNS names here; the listen address is
+        # always allowed).
+        assertion = lib.all (
+          name:
+          let
+            labels = lib.splitString "." (lib.removeSuffix "." name);
+          in
+          builtins.match "([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*\\.?" name
+          != null
+          && lib.stringLength name <= 254
+          && lib.all (label: lib.stringLength label <= 63) labels
+          && builtins.match "[0-9]+" (lib.last labels) == null
+        ) cfg.allowedHostnames;
+        message = "services.lodestar-server.allowedHostnames must be valid bare DNS names (labels at most 63 characters; no scheme, port or wildcard): ${builtins.toJSON cfg.allowedHostnames}.";
+      }
+      {
         assertion = !proxyEnabled || cfg.trustedProxies != [ ];
         message = "services.lodestar-server.trustedProxies must not be empty while proxyListen.address is set.";
       }
@@ -527,6 +561,7 @@ in
               allowed_users = cfg.allowedUsers;
               allowed_tags = cfg.allowedTags;
             };
+        allowed_hosts = cfg.allowedHostnames;
         online =
           if cfg.testing.staticAddresses != null then
             {

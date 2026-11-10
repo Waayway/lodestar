@@ -180,6 +180,7 @@ nix-darwin only:
 | `deployKeyFile` | `null` | SSH key with write access to `pushUrl`, readable by `lodestar-server` (outside the store, e.g. opnix or sops-nix) |
 | `listenAddress` | (required) | this host's Tailscale IP; anything else is refused |
 | `listenPort` | `8080` | opened on `tailscale0` |
+| `allowedHostnames` | `[ networking.hostName ]` | names the dashboard answers to besides `listenAddress` (add the MagicDNS FQDN, and the name agents use as `managerHost`); any other `Host` is refused |
 | `allowedUsers` | `[]` | Tailscale logins allowed in |
 | `allowedTags` | `[]` | Tailscale device tags allowed in |
 | `agentPort` | the agent's `port`, else `7461` | one port for all agents: keep `services.lodestar-agent.port` the same everywhere |
@@ -285,10 +286,20 @@ login in `allowedUsers`.
   `tailscale whois`; it must be an `allowedUsers` login or carry an
   `allowedTags` tag. The server only listens on its Tailscale address, so whois
   can always vouch for the peer.
+- **DNS rebinding**: on the tailnet listener the `Host` must be the listen address
+  or a name in `allowedHostnames` (matched exactly, never resolved); anything else
+  is refused before whois, so another site's page cannot reach the dashboard by
+  pointing its own DNS name at the server.
 - **CSRF**: state-changing requests need the header `X-Lodestar: 1` (a
   cross-site page cannot set it without a CORS preflight, which the server
   never allows), and browsers must report `Sec-Fetch-Site: same-origin`. The
-  dashboard and CLI send the header.
+  dashboard and CLI send the header. A browser's `Origin`, when sent on a
+  state-changing request or the WebSocket, must be the dashboard's own (`http://` +
+  `Host` on the tailnet, the public URL on the router entrance); a single, exact
+  value, else 403. Requests without one (the CLI, curl) pass.
+- **Framing and sniffing**: every dashboard response sends `X-Frame-Options: DENY`,
+  `Content-Security-Policy: frame-ancestors 'none'` and
+  `X-Content-Type-Options: nosniff`.
 - **Least privilege**: git and `nix build` run as the checkout's user; only
   the switch runs as root. The server runs as its own system user. Commit
   hashes and channel names are validated before they reach git.

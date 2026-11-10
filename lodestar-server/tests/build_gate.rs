@@ -176,6 +176,7 @@ async fn fixture_with_hosts(hosts: Vec<ManagedHost>) -> Fixture {
         deploy_key_file: None,
         state_dir: dir.path().join("state"),
         access: AccessConfig::Disabled,
+        allowed_hosts: Vec::new(),
         online: OnlineSource::Static {
             addresses: HashMap::new(),
         },

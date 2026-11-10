@@ -109,6 +109,7 @@ pub async fn start(
     demo: bool,
 ) -> anyhow::Result<ServerHandle> {
     config.check_listen()?;
+    config.check_allowed_hosts()?;
     config.check_proxy()?;
     config.check_updates()?;
     config.builds.check()?;

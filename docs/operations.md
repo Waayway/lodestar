@@ -26,12 +26,125 @@ Nothing on a host changes without an apply.
 ## Enrolling a host
 
 1. In the host's configuration: `services.lodestar-agent.enable = true;` plus
-   `user`, `managerHost`, `repoUrl` and `channel` (see `README.md`).
+   `user`, `managerHost`, `repoUrl`, `channel` and `tokenFile`, and on the
+   server `agentTokenFiles.<host>` with the same token (see "Agent tokens").
 2. Make `flakePath` (default `~/.flake` of `user`) a clean clone of the
    repository, on the channel branch, tracking `origin`.
 3. Switch the host once by hand. If the server's `hosts` come from
    `lodestar.lib.hostsFrom`, switch the server too. The host shows up in the
    dashboard once the server can reach port 7461 over Tailscale.
+
+## Agent tokens
+
+Every agent request (status, apply, apply log, activations) must carry
+`Authorization: Bearer <token>`, where the token is the one for that host. The
+source check (`managerHost`) still applies too: a request needs both. So a
+process on the server's host, which connects from an allowed address, still
+cannot apply unless it can read the token.
+
+- **One token per host.** Generate it with `openssl rand -hex 32`. A token
+  must be 32 bytes encoded as 64 lowercase hex digits or 43 unpadded
+  base64url characters. Only the format is checked: the agent and server
+  cannot tell random bytes from predictable ones, so always generate the
+  token with a CSPRNG such as `openssl rand -hex 32`, never by hand.
+- **Agent side**: `services.lodestar-agent.tokenFile`. This is a file owned by
+  root with mode 0400 or 0600, outside the Nix store. The agent config holds
+  only the path.
+- **Server side**: `services.lodestar-server.agentTokenFiles.<host>`, the same
+  token in a file owned by `lodestar-server` with mode 0400 or 0600. Every key
+  of `hosts` needs an entry.
+- **Files only.** Tokens never go in the Nix store, on a command line, in
+  environment variables, in git or in logs. Error messages name the file and
+  the reason, never the token.
+- **Fails closed.** Without a usable token file, a module assertion fails. If
+  the file is still missing at runtime, the daemon refuses to start, and the
+  server refuses to start while a host has no entry or any token file is
+  unusable.
+- **Weak or exposed files** are refused: a file that group or others can read,
+  a symlink, anything but a regular file, a file in a directory that group or
+  others may write (unless the directory is sticky), an empty file, or a
+  token not in the format above. Each file is opened once and checked on that
+  descriptor before it is read, so it cannot be swapped in between.
+- **When a file breaks while running**: an agent answers 503 to everything
+  (it never falls back to the source check alone), and the server skips that
+  host ("agent unreachable", with the reason in its log).
+- **No redirects, no proxies.** The server never follows a redirect from an
+  agent and ignores proxy settings from the environment (`HTTP_PROXY`,
+  `ALL_PROXY`, ...), so the token only goes to the agent's own address.
+
+Provisioning with sops-nix (agenix and opnix work the same way: owner, mode,
+path):
+
+```nix
+# every host with an agent
+sops.secrets.lodestar-agent-token = { mode = "0400"; };   # owner root
+services.lodestar-agent.tokenFile = config.sops.secrets.lodestar-agent-token.path;
+
+# the server's host: one secret per managed host, readable by the server
+sops.secrets = lib.mapAttrs' (name: _: lib.nameValuePair "lodestar-agent-${name}" {
+  owner = "lodestar-server";
+  mode = "0400";
+}) config.services.lodestar-server.hosts;
+services.lodestar-server.agentTokenFiles = lib.mapAttrs
+  (name: _: config.sops.secrets."lodestar-agent-${name}".path)
+  config.services.lodestar-server.hosts;
+```
+
+On the server's own host the agent runs as root and can read the server's
+`lodestar-server`-owned copy, so its `tokenFile` may point at
+`agentTokenFiles.<this host>` instead of a second file. On a Mac without a
+secrets module, place the file once by hand:
+`sudo sh -c 'umask 077; cat > /var/lib/lodestar-agent/token'`.
+Paste the token, then press Ctrl-D. Set `tokenFile` to that path.
+
+### Rotation
+
+Both sides read their file on every request, so a rotation needs no restart:
+
+1. Append the new token as a second line of the agent's `tokenFile`. The
+   agent accepts every token in the file.
+2. Replace the server's `agentTokenFiles.<host>` with the new token. The
+   server's file holds exactly one token.
+3. Once the host shows "on" again, remove the old line from the agent's file.
+
+To revoke a leaked token, replace both files. The old token stops working on
+the next request.
+
+### Migrating from IP-only agents
+
+An upgraded agent without `tokenFile`, and an upgraded server without
+`agentTokenFiles` for every host, fail evaluation. There is no IP-only mode to
+fall back to.
+
+1. Provision a token per host on both sides (above).
+2. Deploy the server and its agent first, then the other hosts. Until a host
+   switches to the new agent it ignores the header. Once it switches, it
+   demands the token, and the server already sends it.
+
+An old server against a new agent gets 401s ("agent unreachable") until the
+server is upgraded.
+
+### Demo and tests
+
+`lodestar-server demo` generates a fresh random token per simulated host in its
+throwaway directory (mode 0600). Its simulated agents demand the token like
+real ones. The Rust tests write fixed tokens to temporary files (mode 0600).
+The NixOS VM test writes fixed TEST ONLY tokens with tmpfiles, so in that test
+they are in the store.
+
+### What the token does not cover
+
+Anything that can read a token file can act as the server towards that agent:
+
+- root on any host;
+- the `lodestar-server` user on the server's host, including any process that
+  runs as that user. Server-side Nix evaluation of the fleet's flake (the build
+  gate and the updater) currently runs as `lodestar-server`, so until that
+  evaluation is isolated from the server's secrets, code in the evaluated flake
+  is in the same risk set as these token files.
+
+Traffic is plain HTTP inside the tailnet. Tailscale (WireGuard) provides
+confidentiality between hosts; the token is not a replacement for it.
 
 ## Applying
 
@@ -472,6 +585,7 @@ Agent (every enrolled host):
   `lodestar-apply-<id>` (`journalctl -u 'lodestar-apply-*'`)
 - darwin: launchd label `org.lodestar.agent`, log `/var/log/lodestar-agent.log`
 - tracked versions: `/etc/lodestar/versions.json` (from `versions`)
+- token: `tokenFile` (root, 0400/0600; the config holds only its path)
 
 Server:
 
@@ -481,6 +595,7 @@ Server:
   `updater/<input>` while an updater run works on that input, `builds/` for the build
   gate)
 - `systemctl status lodestar-server`, runs as user `lodestar-server`
+- agent tokens: `agentTokenFiles` (one per host, `lodestar-server`, 0400/0600)
 
 Every activation of an enrolled host (applies, manual `nixos-rebuild` /
 `darwin-rebuild`, boots) is appended to `activations.jsonl` and shows up in the
@@ -495,6 +610,14 @@ dashboard's audit log, with `SUDO_USER` for manual switches.
   to reach `tcp:7461` on it?
 - **403 from the agent**: the request did not come from `managerHost`'s
   Tailscale addresses (check that `managerHost` resolves on the agent host).
+- **401 from the agent**: the request had no token, or not this host's (compare
+  the server's `agentTokenFiles.<host>` with the agent's `tokenFile`; after a
+  rotation, the agent file must still list the token the server sends).
+- **503 from the agent**, or it does not start: its `tokenFile` is missing, empty,
+  a symlink, not in the token format, or readable by group/others; the agent's log says which (never the token).
+- **Server does not start: "no agent token file"** or **"agent token for <host>"**:
+  a host in `hosts` has no `agentTokenFiles` entry, or its file is unusable (the
+  server checks every token file before it serves).
 - **Dashboard says you don't have access**: your Tailscale login is not in
   `allowedUsers` and your device has none of `allowedTags`. A tagged device
   loses its user identity in Tailscale, so tag servers, not your laptop.

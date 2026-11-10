@@ -18,7 +18,7 @@ use lodestar_server::db;
 use lodestar_server::mirror::Mirror;
 use lodestar_server::state::AppState;
 use lodestar_server::tailscale::StaticOnline;
-use support::{FakeBuilder as CommitBuilder, Origin, git, path_of};
+use support::{FakeBuilder as CommitBuilder, Origin, agent_token_files, git, path_of};
 use tokio::sync::Semaphore;
 
 const DAY: i64 = 24 * 60 * 60;
@@ -191,6 +191,10 @@ async fn fixture_with_hosts(hosts: Vec<ManagedHost>) -> Fixture {
         },
         metrics: None,
         nix_bin: "nix".into(),
+        agent_token_files: agent_token_files(
+            dir.path(),
+            hosts.iter().map(|managed_host| managed_host.name.as_str()),
+        ),
     };
     let connection = db::connect(&config.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());

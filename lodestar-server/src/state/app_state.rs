@@ -93,7 +93,10 @@ impl AppState {
             db,
             mirror,
             online,
-            client: AgentClient::new()?,
+            client: AgentClient::new(
+                config.agent_token_files.clone(),
+                hosts.iter().map(|host| host.name.as_str()),
+            )?,
             hosts,
             links: Arc::default(),
             checks: Arc::default(),

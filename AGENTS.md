@@ -9,9 +9,12 @@ does; `docs/operations.md` for how it is run.
   - `lodestar-proto/`: wire types shared by agent, server and web, one type per
     file (`agent/`: what the agent serves, `dashboard/`: what the server sends
     the web). Exported to TypeScript with ts-rs into `web/src/bindings/`
-    (generated, never edit).
+    (generated, never edit). `agent/agent_token.rs` (`AgentToken`, the bearer token
+    agent and server share: strength rules, token files, constant-time match) is
+    not exported.
   - `lodestar-agent/`: the daemon (`daemon/`: bind loop, background fetch) and
-    its HTTP API (`api/`, one file per route), the apply wrapper (`apply/`:
+    its HTTP API (`api/`, one file per route; `source_check.rs` and
+    `token_check.rs` guard every route), the apply wrapper (`apply/`:
     record, lock, marker, log reader, prune, wrapper; state files under
     `/var/lib/lodestar-agent`), `launcher.rs` (systemd-run / detach), git as
     the user (`git.rs`, `privileges.rs`), pre-apply checks (`checks.rs`),

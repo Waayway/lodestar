@@ -45,6 +45,7 @@ async fn lock_commit_ignores_identity_from_the_environment() {
         builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
+        agent_token_files: Default::default(),
     };
     let mirror = Mirror::open_or_init(&config).await.unwrap();
     let worktree = dir.path().join("wt");

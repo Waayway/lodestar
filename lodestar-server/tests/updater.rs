@@ -19,7 +19,7 @@ use lodestar_server::updates::nix_runner::NixRunner;
 use lodestar_server::updates::update_run::{UpdateOutcome, UpdateRun, VersionChange};
 use lodestar_server::updates::updater::{commit_message, restore_last, run_all, run_input};
 use lodestar_server::updates::updater_loop::{newest_finished, next_run_at};
-use support::{Origin, git};
+use support::{Origin, agent_token_files, git};
 use tokio::sync::Notify;
 
 const INPUT: &str = "nixpkgs-unstable";
@@ -177,6 +177,7 @@ async fn fixture_with(builds: bool) -> Fixture {
         },
         metrics: None,
         nix_bin: "nix".into(),
+        agent_token_files: agent_token_files(dir.path(), ["a", "b"]),
     };
     let connection = db::connect(&config.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());

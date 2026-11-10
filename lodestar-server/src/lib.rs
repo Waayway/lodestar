@@ -1,5 +1,6 @@
 pub mod access;
 pub mod agent_client;
+mod agent_endpoint;
 pub mod api;
 pub mod auth;
 pub mod builds;

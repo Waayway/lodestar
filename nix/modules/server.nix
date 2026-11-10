@@ -240,6 +240,23 @@ in
       };
     };
 
+    agentTokenFiles = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      example = lib.literalExpression ''
+        lib.mapAttrs (name: _: config.sops.secrets."lodestar-agent-''${name}".path)
+          config.services.lodestar-server.hosts
+      '';
+      description = ''
+        Per managed host (every key of `hosts` needs one), the file with the token the
+        server sends to that host's agent (`Authorization: Bearer <token>`): the same token
+        as the agent's `services.lodestar-agent.tokenFile`. Paths outside the Nix store,
+        owned by `lodestar-server` with mode 0400 or 0600 (the server refuses a file group
+        or others may read), one token per file. Read on every call: a rotation needs no
+        restart. The server refuses to start while a host has none.
+      '';
+    };
+
     agentPort = mkOption {
       type = types.port;
       default = config.services.lodestar-agent.port or 7461;
@@ -426,6 +443,14 @@ in
         message = "services.lodestar-server.builds.publishCommand must not be empty while builds.enable is true.";
       }
     ]
+    ++ map (name: {
+      assertion = cfg.agentTokenFiles ? ${name};
+      message = "services.lodestar-server.agentTokenFiles.${name} must be set: the server authenticates to every agent with its token file.";
+    }) (lib.attrNames cfg.hosts)
+    ++ lib.mapAttrsToList (name: path: {
+      assertion = lib.hasPrefix "/" path && !(lib.hasPrefix builtins.storeDir path);
+      message = "services.lodestar-server.agentTokenFiles.${name} must be an absolute path outside the Nix store (a secret file).";
+    }) cfg.agentTokenFiles
     ++ lib.concatLists (
       lib.mapAttrsToList (name: sw: [
         {
@@ -510,6 +535,8 @@ in
       {
         listen = "${cfg.listenAddress}:${toString cfg.listenPort}";
         agent_port = cfg.agentPort;
+        # Paths only: the tokens never enter the Nix store.
+        agent_token_files = cfg.agentTokenFiles;
         hosts_file = "/etc/lodestar-server/hosts.json";
         links_file = "/etc/lodestar-server/links.json";
         repo_url = cfg.repoUrl;

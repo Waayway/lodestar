@@ -27,7 +27,7 @@ use lodestar_server::poller::poll_once;
 use lodestar_server::state::{AppState, host_view};
 use lodestar_server::tailscale::{Identity, OnlineProvider, PeerInfo, StaticOnline};
 use serde::Deserialize;
-use support::{FakeBuilder, Origin};
+use support::{FakeBuilder, Origin, agent_token_files, require_agent_token};
 
 const OLD: &str = "0000000000000000000000000000000000000000";
 const NEW: &str = "1111111111111111111111111111111111111111";
@@ -125,6 +125,7 @@ async fn fake_agent(fake: Shared) -> SocketAddr {
         .route("/activations", get(activations))
         .route("/apply", post(apply))
         .route("/apply/log", get(log))
+        .layer(axum::middleware::from_fn(require_agent_token))
         .with_state(fake);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -243,6 +244,7 @@ async fn env_in(
         },
         metrics: None,
         nix_bin: "nix".into(),
+        agent_token_files: agent_token_files(dir.path(), ["H1"]),
     };
     let connection = db::connect(&config.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());

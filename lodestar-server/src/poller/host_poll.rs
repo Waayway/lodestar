@@ -8,6 +8,7 @@ use lodestar_proto::{AgentStatus, ApplyRequest, WsMessage};
 use super::activation_ingest::ingest_activations;
 use super::apply_recording::record_apply;
 use super::reachability::{agent_base, reachability_change};
+use crate::agent_client::AgentEndpoint;
 use crate::builds::{build_channel, known_failures, skips_gate};
 use crate::clock::now;
 use crate::config::ManagedHost;
@@ -68,7 +69,12 @@ async fn poll_host(
     change
 }
 
-async fn handle_status(state: &AppState, host: &ManagedHost, base: &str, status: &AgentStatus) {
+async fn handle_status(
+    state: &AppState,
+    host: &ManagedHost,
+    base: &AgentEndpoint,
+    status: &AgentStatus,
+) {
     let name = host.name.as_str();
     state
         .versions
@@ -130,7 +136,7 @@ async fn handle_status(state: &AppState, host: &ManagedHost, base: &str, status:
     }
 }
 
-async fn resend(state: &AppState, name: &str, base: &str, request: &ApplyRequest) {
+async fn resend(state: &AppState, name: &str, base: &AgentEndpoint, request: &ApplyRequest) {
     if let Some(code) = log_err(
         "re-sending desired apply",
         name,
@@ -163,13 +169,18 @@ fn refuse_resend(state: &AppState, name: &str, request: &ApplyRequest, failed: &
 /// Builds the desired apply's commit for the host's channel in the background (the poller never
 /// waits for a build), then re-sends it when the build is good and it is still the desired apply.
 /// At most one such task per apply.
-fn spawn_gated_resend(state: &AppState, host: &ManagedHost, base: &str, request: ApplyRequest) {
+fn spawn_gated_resend(
+    state: &AppState,
+    host: &ManagedHost,
+    base: &AgentEndpoint,
+    request: ApplyRequest,
+) {
     let key = (host.name.clone(), request.apply_id.clone());
     if !state.resend_builds.lock().unwrap().insert(key.clone()) {
         return;
     }
     let state = state.clone();
-    let (name, channel, base) = (host.name.clone(), host.channel.clone(), base.to_string());
+    let (name, channel, base) = (host.name.clone(), host.channel.clone(), base.clone());
     tokio::spawn(async move {
         match build_channel(&state, &channel, &request.commit).await {
             Ok(failed) if failed.is_empty() => {

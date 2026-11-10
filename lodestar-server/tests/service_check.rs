@@ -1,5 +1,7 @@
 //! HTTP probe of service links against an in-process axum app on 127.0.0.1:0.
 
+mod support;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -20,6 +22,7 @@ use lodestar_server::mirror::Mirror;
 use lodestar_server::poller::service_check::{CHECK_TIMEOUT, Probers, check_round, probe};
 use lodestar_server::state::{AppState, snapshot};
 use lodestar_server::tailscale::StaticOnline;
+use support::agent_token_files;
 
 static HITS: AtomicUsize = AtomicUsize::new(0);
 static FLIP: AtomicUsize = AtomicUsize::new(0);
@@ -212,6 +215,7 @@ async fn state_with(links: Vec<Link>) -> (AppState, tempfile::TempDir) {
         builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
+        agent_token_files: agent_token_files(dir.path(), ["alpha"]),
     };
     let connection = db::connect(&config.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());

@@ -1,6 +1,6 @@
 # Evaluation check of the agent modules without nix-darwin: the darwin module is
 # evaluated against stub declarations of the few nix-darwin options it sets. Asserts
-# that launchd and the agent config use binaryPath, that signing and the firewall rule
+# that launchd and the agent config use binaryPath, that token_file comes from tokenFile (required), that signing and the firewall rule
 # follow their options, and shellchecks the generated activation snippets (darwin with
 # and without signing, NixOS).
 {
@@ -78,6 +78,7 @@ let
             package = fakeAgent;
             cliPackage = fakeAgent;
             versions.tailscale = "1.104.2";
+            tokenFile = "/var/lib/lodestar-agent/token";
           };
         }
         extra
@@ -93,6 +94,8 @@ let
     services.lodestar-agent.macos.stableSigning.certificate = "-----BEGIN CERTIFICATE-----\n";
   };
   custom = evalDarwin { services.lodestar-agent.binaryPath = "/opt/lodestar/agent"; };
+  tokenless = evalDarwin { services.lodestar-agent.tokenFile = lib.mkForce null; };
+  failedOf = config: lib.filter (assertion: !assertion.assertion) config.assertions;
 
   programOf =
     config: builtins.head config.launchd.daemons.lodestar-agent.serviceConfig.ProgramArguments;
@@ -108,6 +111,19 @@ let
   };
 
   checks = [
+    {
+      ok =
+        (builtins.fromJSON signed.environment.etc."lodestar-agent/config.json".text).token_file
+        == "/var/lib/lodestar-agent/token";
+      what = "the agent config names token_file";
+    }
+    {
+      ok =
+        failedOf signed == [ ]
+        && failedOf tokenless != [ ]
+        && lib.all (failure: lib.hasInfix "tokenFile" failure.message) (failedOf tokenless);
+      what = "a darwin agent without tokenFile fails an assertion";
+    }
     {
       ok =
         signed.environment.etc."lodestar/versions.json".text == builtins.toJSON { tailscale = "1.104.2"; };

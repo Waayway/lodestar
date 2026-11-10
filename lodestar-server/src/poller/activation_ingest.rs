@@ -1,5 +1,6 @@
 use sea_orm::TransactionTrait;
 
+use crate::agent_client::AgentEndpoint;
 use crate::db;
 use crate::state::AppState;
 
@@ -8,7 +9,7 @@ use crate::state::AppState;
 pub(super) async fn ingest_activations(
     state: &AppState,
     host: &str,
-    base: &str,
+    base: &AgentEndpoint,
 ) -> anyhow::Result<()> {
     let since = db::activations_next(&state.db, host).await?;
     let response = state.client.activations(base, since.max(0) as u64).await?;

@@ -2,7 +2,8 @@
 # built, so it runs on any host system) with the agent's `versions` and the server's
 # `updates` and `metrics` set. Asserts the generated versions.json, the `updates` and
 # `metrics` parts of the server's config.json, the agent's `versions_file`, and that the
-# input-name validation fires. Also the cache host role (`services.lodestar-cache`): off by
+# input-name validation fires. The agent token: tokenFile reaches the agent's config.json,
+# agentTokenFiles the server's, and missing or store-path token files fail assertions. Also the cache host role (`services.lodestar-cache`): off by
 # default, and when on its user, nginx location and allowedClients-only firewall rules.
 {
   pkgs,
@@ -32,6 +33,7 @@ let
             managerHost = "manager";
             repoUrl = "https://example.com/infra.git";
             versions.tailscale = "1.104.2";
+            tokenFile = "/run/secrets/lodestar-agent-token";
           };
           services.lodestar-server = {
             enable = true;
@@ -95,6 +97,21 @@ let
   };
   failedBad = lib.filter (a: !a.assertion) bad.config.assertions;
   failedOf = system: lib.filter (a: !a.assertion) system.config.assertions;
+  # Whether exactly the assertions mentioning `needle` fail.
+  failsOn =
+    needle: extra:
+    let
+      failures = failedOf (mkSystem extra);
+    in
+    failures != [ ] && lib.all (failure: lib.hasInfix needle failure.message) failures;
+  withHost = {
+    services.lodestar-server.hosts.box = {
+      channel = "main";
+      os = "linux";
+      system = "x86_64-linux";
+      user = "alice";
+    };
+  };
   channelFails =
     extra:
     let
@@ -178,6 +195,47 @@ let
         (builtins.fromJSON (etcText plain "lodestar-agent/config.json")).versions_file
         == "/etc/lodestar/versions.json";
       what = "the agent config names versions_file";
+    }
+    {
+      ok =
+        (builtins.fromJSON (etcText plain "lodestar-agent/config.json")).token_file
+        == "/run/secrets/lodestar-agent-token";
+      what = "the agent config names token_file (the path only, never the token)";
+    }
+    {
+      ok = failsOn "tokenFile" { services.lodestar-agent.tokenFile = lib.mkForce null; };
+      what = "an agent without tokenFile fails an assertion";
+    }
+    {
+      ok = failsOn "tokenFile" {
+        services.lodestar-agent.tokenFile = lib.mkForce "${pkgs.writeText "token" "x"}";
+      };
+      what = "an agent tokenFile in the Nix store fails an assertion";
+    }
+    {
+      ok = failsOn "agentTokenFiles" withHost;
+      what = "a managed host without an agent token file fails an assertion";
+    }
+    {
+      ok = failsOn "agentTokenFiles" (
+        lib.recursiveUpdate withHost {
+          services.lodestar-server.agentTokenFiles.box = "${pkgs.writeText "token" "x"}";
+        }
+      );
+      what = "an agentTokenFiles entry in the Nix store fails an assertion";
+    }
+    {
+      ok =
+        let
+          system = mkSystem (
+            lib.recursiveUpdate withHost {
+              services.lodestar-server.agentTokenFiles.box = "/run/secrets/lodestar-agent-box";
+            }
+          );
+        in
+        failedOf system == [ ]
+        && (serverJson system).agent_token_files == { box = "/run/secrets/lodestar-agent-box"; };
+      what = "agentTokenFiles reaches config.json as agent_token_files";
     }
     {
       ok =

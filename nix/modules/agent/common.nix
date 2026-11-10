@@ -52,7 +52,26 @@ in
       example = "manager";
       description = ''
         Tailscale (MagicDNS) name of the host running `lodestar-server`. The agent only
-        accepts requests from the addresses this name resolves to.
+        accepts requests from the addresses this name resolves to, and only with the
+        server's token (`tokenFile`).
+      '';
+    };
+
+    tokenFile = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = lib.literalExpression "config.sops.secrets.lodestar-agent-token.path";
+      description = ''
+        Required. File with the token the server must present on every request
+        (`Authorization: Bearer <token>`), in addition to coming from `managerHost`. A
+        path outside the Nix store, owned by root with mode 0400 or 0600 (the agent refuses
+        a file group or others may read), from a secrets module such as sops-nix, agenix
+        or opnix. One token per line, 32 random bytes as 64 lowercase hex digits
+        (`openssl rand -hex 32`) or 43 unpadded base64url characters (only the format is
+        checked, not the randomness); not a symlink, in a directory group and others cannot write (unless sticky);
+        every listed token is accepted, so a rotation can list the old and the new one for
+        a while. Read on every request: a rotation needs no restart. The same token goes
+        in the server's `services.lodestar-server.agentTokenFiles.<hostName>`.
       '';
     };
 
@@ -184,6 +203,15 @@ in
     ]
     ++ [
       {
+        assertion =
+          cfg.tokenFile != null
+          && lib.hasPrefix "/" cfg.tokenFile
+          && !(lib.hasPrefix builtins.storeDir cfg.tokenFile);
+        message = "services.lodestar-agent.tokenFile must be set to an absolute path outside the Nix store (a secret file with the token the server presents); the agent refuses requests without it.";
+      }
+    ]
+    ++ [
+      {
         assertion = lib.hasPrefix "/" cfg.binaryPath && !(lib.hasSuffix "/" cfg.binaryPath);
         message = "services.lodestar-agent.binaryPath must be an absolute file path.";
       }
@@ -225,6 +253,8 @@ in
       os = if isDarwin then "darwin" else "linux";
       agent_exe = cfg.binaryPath;
       versions_file = "/etc/lodestar/versions.json";
+      # The path only: the token itself never enters the Nix store.
+      token_file = cfg.tokenFile;
     };
   };
 }

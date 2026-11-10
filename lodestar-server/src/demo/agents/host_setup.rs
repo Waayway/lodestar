@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use lodestar_proto::AgentToken;
+
 use super::Script;
 
 /// A simulated host as its agent sees it.
@@ -16,4 +18,6 @@ pub struct HostSetup {
     pub activated_at: i64,
     /// Tracked software versions the host reports.
     pub versions: BTreeMap<String, String>,
+    /// The token the server must present (generated per host by the demo).
+    pub token: AgentToken,
 }

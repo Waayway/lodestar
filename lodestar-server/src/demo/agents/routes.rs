@@ -4,14 +4,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
-use axum::extract::{DefaultBodyLimit, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{DefaultBodyLimit, Query, Request, State};
+use axum::http::{StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use lodestar_proto::{
     ActivationsResponse, AgentStatus, ApplyRecord, ApplyRequest, ApplyState, LogChunk,
-    is_commit_hash,
+    bearer_token, is_commit_hash,
 };
 use serde::Deserialize;
 use tokio::task::JoinHandle;
@@ -137,6 +138,20 @@ async fn get_activations(
     })
 }
 
+/// 401 unless the request carries the host's token, like the real agent.
+async fn check_token(State(agent): State<Arc<SimAgent>>, request: Request, next: Next) -> Response {
+    let presented = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(bearer_token);
+    if presented.is_some_and(|presented| agent.token.matches(presented)) {
+        next.run(request).await
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
 pub fn router(agent: Arc<SimAgent>) -> Router {
     Router::new()
         .route("/status", get(get_status))
@@ -144,6 +159,7 @@ pub fn router(agent: Arc<SimAgent>) -> Router {
         .route("/apply/log", get(get_log))
         .route("/activations", get(get_activations))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
+        .layer(middleware::from_fn_with_state(agent.clone(), check_token))
         .with_state(agent)
 }
 

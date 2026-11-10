@@ -2,8 +2,19 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use std::os::unix::fs::PermissionsExt;
+
 use lodestar_agent::config::{AgentConfig, Launcher};
 use tempfile::TempDir;
+
+/// The token the fixture's agent accepts (written to `<tmp>/agent-token`, mode 0600).
+pub const TOKEN: &str = "3f9c1a7e5b2d4c6f8a0e1b3d5f7a9c2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d1f3a";
+
+/// Writes `content` to `path` with `mode`.
+pub fn write_secret(path: &Path, content: &str, mode: u32) {
+    std::fs::write(path, content).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
 
 pub struct Fixture {
     pub _tmp: TempDir,
@@ -85,7 +96,9 @@ pub fn fixture() -> Fixture {
         agent_exe: None,
         os: "linux".into(),
         versions_file: temporary_dir.path().join("versions.json"),
+        token_file: Some(temporary_dir.path().join("agent-token")),
     };
+    write_secret(&temporary_dir.path().join("agent-token"), TOKEN, 0o600);
     Fixture {
         _tmp: temporary_dir,
         remote,

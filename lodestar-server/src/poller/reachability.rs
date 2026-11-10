@@ -3,18 +3,23 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
+use crate::agent_client::AgentEndpoint;
 use crate::config::{ManagedHost, OnlineSource, ServerConfig};
 use crate::state::AppState;
 use crate::tailscale::PeerInfo;
 
-/// `host:port` of a host's agent, or `None` when Tailscale doesn't report it online with an
+/// A host's agent (its name and `host:port`), or `None` when Tailscale doesn't report it online with an
 /// address. With `OnlineSource::Static`, an address that already has a port (tests/dev only)
 /// is used as-is; otherwise `agent_port` is appended.
 pub fn agent_base(
     config: &ServerConfig,
     host: &ManagedHost,
     peers: &HashMap<String, PeerInfo>,
-) -> Option<String> {
+) -> Option<AgentEndpoint> {
+    let endpoint = |addr: SocketAddr| AgentEndpoint {
+        host: host.name.clone(),
+        addr: addr.to_string(),
+    };
     let peer = peers.get(&host.name.to_lowercase())?;
     let ip = peer.addr.filter(|_| peer.online)?;
     if let OnlineSource::Static { addresses } = &config.online
@@ -23,9 +28,9 @@ pub fn agent_base(
             .find(|(name, _)| name.eq_ignore_ascii_case(&host.name))
             .and_then(|(_, address)| address.parse::<SocketAddr>().ok())
     {
-        return Some(with_port.to_string());
+        return Some(endpoint(with_port));
     }
-    Some(SocketAddr::new(ip, config.agent_port).to_string())
+    Some(endpoint(SocketAddr::new(ip, config.agent_port)))
 }
 
 /// Remembers whether `host`'s agent answered and returns a log line when that changed:

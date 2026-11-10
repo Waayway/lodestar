@@ -4,6 +4,7 @@ use lodestar_proto::{ApplyRecord, ApplyState};
 use sea_orm::TransactionTrait;
 
 use super::log_follower::follow_log;
+use crate::agent_client::AgentEndpoint;
 use crate::clock::now;
 use crate::config::ManagedHost;
 use crate::db;
@@ -31,7 +32,7 @@ fn is_terminal(state: &str) -> bool {
 pub(super) async fn record_apply(
     state: &AppState,
     host: &ManagedHost,
-    base: &str,
+    base: &AgentEndpoint,
     record: &ApplyRecord,
 ) -> anyhow::Result<()> {
     if record.state == ApplyState::Running {
@@ -70,7 +71,11 @@ pub(super) async fn record_apply(
 }
 
 /// Reads a finished apply's log from the start to eof.
-async fn read_full_log(state: &AppState, base: &str, apply_id: &str) -> anyhow::Result<String> {
+async fn read_full_log(
+    state: &AppState,
+    base: &AgentEndpoint,
+    apply_id: &str,
+) -> anyhow::Result<String> {
     let mut log = String::new();
     let mut offset = 0;
     loop {

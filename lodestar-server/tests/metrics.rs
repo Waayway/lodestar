@@ -291,6 +291,7 @@ async fn metrics_listener_serves_and_dashboard_does_not() {
             listen: "127.0.0.1:0".parse().unwrap(),
         }),
         nix_bin: "nix".into(),
+        agent_token_files: Default::default(),
     };
     let online = Arc::new(StaticOnline::new(&HashMap::new()).unwrap());
     let handle = server::start(config, vec![], vec![], online, false)

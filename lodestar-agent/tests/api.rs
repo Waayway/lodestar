@@ -47,10 +47,26 @@ async fn call(
     uri: &str,
     body: Option<String>,
 ) -> (StatusCode, Vec<u8>) {
-    let request = Request::builder()
+    let authorization = format!("Bearer {TOKEN}");
+    call_as(app, method, uri, body, Some(&authorization)).await
+}
+
+/// Like `call`, with `authorization` as the `Authorization` header (none when `None`).
+async fn call_as(
+    app: &Router,
+    method: Method,
+    uri: &str,
+    body: Option<String>,
+    authorization: Option<&str>,
+) -> (StatusCode, Vec<u8>) {
+    let mut request = Request::builder()
         .method(method)
         .uri(uri)
-        .header("content-type", "application/json")
+        .header("content-type", "application/json");
+    if let Some(authorization) = authorization {
+        request = request.header("authorization", authorization);
+    }
+    let request = request
         .body(body.map(Body::from).unwrap_or_else(Body::empty))
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -93,22 +109,119 @@ async fn wait_state(app: &Router, want: ApplyState) -> AgentStatus {
     }
 }
 
+/// Every route, with the request the server would send.
+fn every_route() -> Vec<(Method, &'static str, Option<String>)> {
+    vec![
+        (Method::GET, "/status", None),
+        (Method::POST, "/apply", apply_body("a1", &"0".repeat(40))),
+        (Method::GET, "/apply/log?apply_id=a1&offset=0", None),
+        (Method::GET, "/activations?since=0", None),
+    ]
+}
+
+const WRONG: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
 #[tokio::test]
-async fn rejects_foreign_source() {
+async fn manager_source_without_the_token_is_refused_on_every_route() {
+    let fixture = configured();
+    // A local process on the manager host connects from the manager's own address.
+    let app = app(&fixture, MANAGER);
+    for (method, uri, body) in every_route() {
+        for authorization in [
+            None,
+            Some(format!("Bearer {WRONG}")),
+            Some(format!("Bearer {}", &TOKEN[..40])),
+            Some(format!("Basic {TOKEN}")),
+            Some(TOKEN.to_string()),
+            Some("Bearer ".to_string()),
+        ] {
+            let (code, body) = call_as(
+                &app,
+                method.clone(),
+                uri,
+                body.clone(),
+                authorization.as_deref(),
+            )
+            .await;
+            assert_eq!(
+                code,
+                StatusCode::UNAUTHORIZED,
+                "{method} {uri} {authorization:?}"
+            );
+            assert!(body.is_empty(), "{method} {uri}");
+        }
+    }
+    assert!(
+        lodestar_agent::apply::read_record(&fixture.config, "a1").is_none(),
+        "an unauthenticated apply must not run"
+    );
+}
+
+#[tokio::test]
+async fn foreign_source_is_refused_even_with_the_token() {
     let fixture = configured();
     let app = app(&fixture, "10.9.9.9:1234");
+    for (method, uri, body) in every_route() {
+        let (code, _) = call(&app, method.clone(), uri, body).await;
+        assert_eq!(code, StatusCode::FORBIDDEN, "{method} {uri}");
+    }
+}
+
+#[tokio::test]
+async fn every_token_in_the_file_is_accepted_and_the_file_is_reread() {
+    let fixture = configured();
+    let app = app(&fixture, MANAGER);
+    let token_file = fixture.config.token_file.clone().unwrap();
+    write_secret(&token_file, &format!("{TOKEN}\n{WRONG}\n"), 0o600);
+    for token in [TOKEN, WRONG] {
+        let authorization = format!("Bearer {token}");
+        let (code, _) = call_as(&app, Method::GET, "/status", None, Some(&authorization)).await;
+        assert_eq!(code, StatusCode::OK);
+    }
+    // Rotation done: the old token stops working without a restart.
+    write_secret(&token_file, WRONG, 0o600);
     let (code, _) = call(&app, Method::GET, "/status", None).await;
-    assert_eq!(code, StatusCode::FORBIDDEN);
-    let (code, _) = call(
-        &app,
-        Method::POST,
-        "/apply",
-        apply_body("a1", &"0".repeat(40)),
-    )
-    .await;
-    assert_eq!(code, StatusCode::FORBIDDEN);
-    let (code, _) = call(&app, Method::GET, "/activations?since=0", None).await;
-    assert_eq!(code, StatusCode::FORBIDDEN);
+    assert_eq!(code, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_token_file_that_breaks_while_running_fails_closed() {
+    let fixture = configured();
+    let app = app(&fixture, MANAGER);
+    let token_file = fixture.config.token_file.clone().unwrap();
+    std::fs::remove_file(&token_file).unwrap();
+    let (code, _) = call(&app, Method::GET, "/status", None).await;
+    assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
+    write_secret(&token_file, TOKEN, 0o644);
+    let (code, _) = call(&app, Method::GET, "/status", None).await;
+    assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[test]
+fn agent_refuses_to_start_without_a_usable_token_file() {
+    let fixture = configured();
+    let config_path = fixture._tmp.path().join("config.json");
+    let start = |config: &lodestar_agent::config::AgentConfig| {
+        AppState::new(
+            config.clone(),
+            config_path.clone(),
+            SourceGuard::new("127.0.0.1".into()),
+        )
+        .err()
+        .map(|error| format!("{error:#}"))
+    };
+    let mut config = fixture.config.clone();
+    config.token_file = None;
+    assert!(start(&config).unwrap().contains("token_file"));
+
+    let token_file = fixture.config.token_file.clone().unwrap();
+    for (content, mode) in [("short", 0o600), ("", 0o600), (TOKEN, 0o640)] {
+        write_secret(&token_file, content, mode);
+        let error = start(&fixture.config).expect("must refuse");
+        assert!(!error.contains(TOKEN), "{error}");
+    }
+    std::fs::remove_file(&token_file).unwrap();
+    assert!(start(&fixture.config).is_some());
 }
 
 #[tokio::test]

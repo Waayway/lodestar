@@ -100,6 +100,7 @@ async fn state(fake: Fake) -> (AppState, tempfile::TempDir) {
         builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
+        agent_token_files: Default::default(),
     };
     let connection = db::connect(&config.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());

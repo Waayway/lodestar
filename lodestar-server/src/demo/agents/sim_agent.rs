@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use lodestar_proto::{ActivationEvent, AgentStatus, ApplyRecord, CheckoutStatus};
+use lodestar_proto::{ActivationEvent, AgentStatus, AgentToken, ApplyRecord, CheckoutStatus};
 
 use super::store_paths::system_path;
 use super::{HostSetup, Script};
@@ -31,6 +31,8 @@ pub struct SimAgent {
     pub(super) os: String,
     pub(super) script: Script,
     versions: BTreeMap<String, String>,
+    /// Checked on every request, like the real agent.
+    pub(super) token: AgentToken,
     speed: f64,
     pub(super) inner: Mutex<Inner>,
 }
@@ -64,6 +66,7 @@ impl SimAgent {
             os: setup.os,
             script: setup.script,
             versions: setup.versions,
+            token: setup.token,
             speed,
             inner: Mutex::new(Inner {
                 running: setup.running,

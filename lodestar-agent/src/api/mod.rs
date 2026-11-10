@@ -8,6 +8,7 @@ mod log;
 mod router;
 mod source_check;
 mod status;
+mod token_check;
 
 pub use app_state::AppState;
 pub(crate) use app_state::live_pending;

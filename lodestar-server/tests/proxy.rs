@@ -25,7 +25,7 @@ use lodestar_server::state::AppState;
 use lodestar_server::tailscale::StaticOnline;
 use sea_orm::EntityTrait;
 use serde_json::{Value, json};
-use support::{FakeIssuer, Origin};
+use support::{FakeIssuer, Origin, agent_token_files};
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -94,6 +94,7 @@ fn server_config(dir: &Path, origin: &Origin, agent: SocketAddr) -> ServerConfig
         builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
+        agent_token_files: agent_token_files(dir, ["h"]),
     }
 }
 

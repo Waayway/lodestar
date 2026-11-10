@@ -16,24 +16,39 @@ let
     ${pkgs.coreutils}/bin/cat ${revFile} 2>/dev/null || true
   '';
 
-  agentNode = {
-    imports = modules;
-    services.lodestar-agent = {
-      enable = true;
-      inherit user repoUrl;
-      channel = "unstable";
-      managerHost = "manager";
-      listen = "0.0.0.0:7461";
-      rebuildCommand = [ "${fakeRebuild}" ];
-      revisionCommand = [ "${fakeRevision}" ];
+  # TEST ONLY: a fixed token per host, written by tmpfiles at boot (so it is in the store
+  # here; real deployments use a secrets module). Every agent request needs it.
+  agentToken = host: builtins.hashString "sha256" "lodestar-vm-test-only-${host}";
+  managedHosts = [
+    "manager"
+    "laptop1"
+    "laptop2"
+  ];
+
+  agentNode =
+    { config, ... }:
+    {
+      imports = modules;
+      services.lodestar-agent = {
+        enable = true;
+        inherit user repoUrl;
+        channel = "unstable";
+        managerHost = "manager";
+        listen = "0.0.0.0:7461";
+        rebuildCommand = [ "${fakeRebuild}" ];
+        revisionCommand = [ "${fakeRevision}" ];
+        tokenFile = "/run/lodestar-agent-token";
+      };
+      systemd.tmpfiles.rules = [
+        "f /run/lodestar-agent-token 0400 root root - ${agentToken config.networking.hostName}"
+      ];
+      users.users.${user}.isNormalUser = true;
+      environment.systemPackages = [ pkgs.git ];
+      # TEST ONLY: the module opens the agent port on tailscale0, which these VMs
+      # lack; open it on the test network instead. (checks.x86_64-linux.firewall
+      # asserts the module opens it on tailscale0.)
+      networking.firewall.interfaces.eth1.allowedTCPPorts = [ 7461 ];
     };
-    users.users.${user}.isNormalUser = true;
-    environment.systemPackages = [ pkgs.git ];
-    # TEST ONLY: the module opens the agent port on tailscale0, which these VMs
-    # lack; open it on the test network instead. (checks.x86_64-linux.firewall
-    # asserts the module opens it on tailscale0.)
-    networking.firewall.interfaces.eth1.allowedTCPPorts = [ 7461 ];
-  };
 
   # Kanidm on https://acme.test with the snakeoil certificate nixpkgs' tests use (copied
   # to the store as nixpkgs does, for kanidm's mount namespace).
@@ -94,6 +109,14 @@ pkgs.testers.runNixOSTest {
           kanidmClient
         ];
         environment.systemPackages = [ pkgs.jq ];
+        # TEST ONLY: the server's token files (see agentToken).
+        systemd.tmpfiles.rules = [
+          "d /run/lodestar-server-tokens 0700 lodestar-server lodestar-server -"
+        ]
+        ++ map (
+          host:
+          "f /run/lodestar-server-tokens/${host} 0400 lodestar-server lodestar-server - ${agentToken host}"
+        ) managedHosts;
         # TEST ONLY: as for the agent port, the dashboard port is opened on tailscale0
         # by the module; there is no tailscale0 here. The module never opens the
         # metrics port (9466).
@@ -104,23 +127,22 @@ pkgs.testers.runNixOSTest {
         services.lodestar-server = {
           enable = true;
           inherit repoUrl;
-          hosts = pkgs.lib.genAttrs [ "manager" "laptop1" "laptop2" ] (_: {
+          hosts = pkgs.lib.genAttrs managedHosts (_: {
             inherit user;
             system = "x86_64-linux";
             channel = "unstable";
             os = "linux";
           });
+          # The server's copies of the agent tokens, readable by lodestar-server only.
+          agentTokenFiles = pkgs.lib.genAttrs managedHosts (host: "/run/lodestar-server-tokens/${host}");
           pushUrl = repoUrl;
           links = {
-            # The agent answers on 7461 (its / is not a route: 404 counts as up here).
+            # The agent answers on 7461 (a request without its token gets 401: up here).
             agent = {
               url = "http://laptop1:7461/";
               host = "laptop1";
               group = "Fleet";
-              check.expectStatus = [
-                200
-                404
-              ];
+              check.expectStatus = [ 401 ];
             };
             closed = {
               url = "http://localhost:1/";
@@ -323,6 +345,35 @@ pkgs.testers.runNixOSTest {
     # 5. Source check: laptop1 is not the manager, so laptop2's agent refuses it.
     code = laptop1.succeed("curl -4 -s -o /dev/null -w '%{http_code}' laptop2:7461/status").strip()
     assert code == "403", f"expected 403 from laptop2, got {code}"
+
+    # 5b. Token check: a local process on the manager (the trusted source) without the
+    # server's token is refused on every route, also by the manager's own agent, and an
+    # apply it posts never runs; with the token the agent answers.
+    rogue = json.dumps({"apply_id": "rogue", "commit": "0" * 40})
+    wrong = "Authorization: Bearer vm-test-only-wrong-3f9c1a7e5b2d4c6f8a0e1b3d5f7a9c2e"
+    # The manager's own agent through its eth1 address, as the server reaches it ("manager"
+    # resolves to loopback there, a source the agent refuses before looking at the token).
+    manager_ip = manager.succeed("ip -4 -o addr show dev eth1 | awk '{print $4}' | cut -d/ -f1").strip()
+    for name, target in [("manager", manager_ip), ("laptop2", "laptop2")]:
+        requests = [
+            ("GET", "/status", ""),
+            ("GET", "/activations?since=0", ""),
+            ("GET", "/apply/log?apply_id=x&offset=0", ""),
+            ("POST", "/apply", f"-H 'Content-Type: application/json' -d '{rogue}'"),
+            ("POST", "/apply", f"-H '{wrong}' -H 'Content-Type: application/json' -d '{rogue}'"),
+        ]
+        for method, path, extra in requests:
+            code = manager.succeed(
+                f"curl -4 -s -o /dev/null -w '%{{http_code}}' -X {method} {extra} '{target}:7461{path}'"
+            ).strip()
+            assert code == "401", f"{method} {path} on {target} ({extra}): expected 401, got {code}"
+        code = manager.succeed(
+            "curl -4 -s -o /dev/null -w '%{http_code}' "
+            f"-H \"Authorization: Bearer $(cat /run/lodestar-server-tokens/{name})\" {target}:7461/status"
+        ).strip()
+        assert code == "200", f"status on {name} with the token: expected 200, got {code}"
+    manager.fail("test -e /var/lib/lodestar-agent/applies/rogue.json")
+    laptop2.fail("test -e /var/lib/lodestar-agent/applies/rogue.json")
 
     # 6. Agent down: the apply cannot be delivered. After the agent is back, the
     # server's poller re-sends it within two poll intervals (poll_secs = 5).

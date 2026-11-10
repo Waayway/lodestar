@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -45,6 +46,11 @@ pub struct ServerConfig {
     pub metrics: Option<MetricsConfig>,
     #[serde(default = "default_nix_bin")]
     pub nix_bin: PathBuf,
+    /// Per managed host (by name), the secret file with the token the server sends to its
+    /// agent (`Authorization: Bearer`). Every host needs one: the server refuses to start
+    /// otherwise.
+    #[serde(default)]
+    pub agent_token_files: BTreeMap<String, PathBuf>,
 }
 
 fn default_mirror_fetch_secs() -> u64 {

@@ -1,9 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
+use std::io::Write;
 use std::net::SocketAddr;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use lodestar_proto::AgentToken;
 
 use super::DemoHandle;
 use super::agents::{self, HostSetup, SimAgent};
@@ -53,6 +57,9 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
     let mut hosts = Vec::new();
     let mut peers = Vec::new();
     let mut addresses = HashMap::new();
+    let mut agent_token_files = BTreeMap::new();
+    let tokens_dir = temporary_dir.path().join("agent-tokens");
+    std::fs::create_dir(&tokens_dir).context("creating the demo token dir")?;
     let start = now();
     // The port for agents that don't answer. Held until every simulated agent is bound, so
     // none of them can get it; dropped afterwards, so nothing listens on it.
@@ -70,6 +77,8 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
             commits.len()
         };
         let running = commits[head - 1 - demo_host.behind].clone();
+        let (token_file, token) = write_demo_token(&tokens_dir, demo_host.name)?;
+        agent_token_files.insert(demo_host.name.to_string(), token_file);
         let addr = if demo_host.unreachable {
             closed_addr
         } else {
@@ -83,6 +92,7 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
                 generation: 40 + 7 * index as u64,
                 activated_at: start - (2 + index as i64) * 3600,
                 versions: demo_versions(index),
+                token,
             };
             let (addr, task) = agents::serve(Arc::new(SimAgent::new(setup, speed))).await?;
             tasks.push(task);
@@ -134,6 +144,7 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
+        agent_token_files,
     };
     let (links, services_task): (Vec<Link>, _) = start_demo_services().await?;
     tasks.push(services_task);
@@ -170,6 +181,24 @@ pub async fn start(listen: SocketAddr, speed: f64) -> anyhow::Result<DemoHandle>
         tasks: Tasks(tasks),
         _tmp: temporary_dir,
     })
+}
+
+/// A fresh random token for `host`'s simulated agent, written to `<dir>/<host>` (mode 0600)
+/// for the server: the demo authenticates its agents like a real fleet.
+fn write_demo_token(dir: &Path, host: &str) -> anyhow::Result<(PathBuf, AgentToken)> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).context("operating system randomness unavailable")?;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let token = AgentToken::parse(&hex)?;
+    let path = dir.join(host);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .and_then(|mut file| writeln!(file, "{hex}"))
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok((path, token))
 }
 
 /// Demo software versions: the first host is current, the second one behind.

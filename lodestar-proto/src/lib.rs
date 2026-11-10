@@ -6,8 +6,8 @@ mod commit_hash;
 mod dashboard;
 
 pub use agent::{
-    ActivationEvent, ActivationsResponse, AgentStatus, ApplyRecord, ApplyRequest, ApplyState,
-    CheckoutStatus, LogChunk, SkipReason,
+    ActivationEvent, ActivationsResponse, AgentStatus, AgentToken, ApplyRecord, ApplyRequest,
+    ApplyState, CheckoutStatus, LogChunk, SkipReason, bearer_token,
 };
 pub use commit_hash::is_commit_hash;
 pub use dashboard::{

@@ -47,6 +47,11 @@ pub struct AgentConfig {
     /// JSON object of tracked software name to version, written by the system configuration.
     #[serde(default = "default_versions_file")]
     pub versions_file: PathBuf,
+    /// Secret file (outside the Nix store, mode 0400/0600) with the token(s) the server
+    /// must present as `Authorization: Bearer <token>`, one per line. Required: the daemon
+    /// refuses to start without a usable one.
+    #[serde(default)]
+    pub token_file: Option<PathBuf>,
 }
 
 fn default_port() -> u16 {

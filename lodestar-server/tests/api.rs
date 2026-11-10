@@ -31,7 +31,7 @@ use lodestar_server::updates::upstream::LatestVersion;
 use sea_orm::EntityTrait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use support::{FakeBuilder, Origin, git};
+use support::{FakeBuilder, Origin, agent_token_files, git, require_agent_token};
 
 /// A client that sends the header the dashboard sends (`X-Lodestar: 1`, CSRF guard).
 fn dashboard_client() -> reqwest::Client {
@@ -73,6 +73,7 @@ async fn fake_agent(fake: Shared) -> SocketAddr {
     let app = Router::new()
         .route("/apply", post(apply))
         .route("/apply/log", get(log))
+        .layer(axum::middleware::from_fn(require_agent_token))
         .with_state(fake);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -179,6 +180,10 @@ async fn env_build(
         },
         metrics: None,
         nix_bin: "nix".into(),
+        agent_token_files: agent_token_files(
+            dir.path(),
+            hosts.iter().map(|managed_host| managed_host.name.as_str()),
+        ),
     };
     let connection = db::connect(&config.state_dir).await.unwrap();
     let mirror = Arc::new(Mirror::open_or_init(&config).await.unwrap());

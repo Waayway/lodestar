@@ -17,6 +17,8 @@ let
   cacheDir = "/srv/nix-cache";
   stateDir = "/var/lib/lodestar-server";
   sshKey = "${stateDir}/builder-key";
+  tokenFile = "/run/lodestar-build-cache-token";
+  testToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
   # Builds of the test flake use it as `/bin/busybox` (same path on builder and client,
   # so both evaluate the same derivations).
@@ -41,7 +43,10 @@ pkgs.testers.runNixOSTest {
           basePath = "/srv/git";
           exportAll = true;
         };
-        systemd.tmpfiles.rules = [ "d /srv/git 0755 root root -" ];
+        systemd.tmpfiles.rules = [
+          "d /srv/git 0755 root root -"
+          "f ${tokenFile} 0400 lodestar-server lodestar-server - ${testToken}"
+        ];
         programs.git = {
           enable = true;
           config.safe.directory = "*";
@@ -60,6 +65,7 @@ pkgs.testers.runNixOSTest {
           enable = true;
           inherit repoUrl;
           pushUrl = repoUrl;
+          agentTokenFiles.client = tokenFile;
           hosts.client = {
             inherit user;
             system = "x86_64-linux";
@@ -121,12 +127,14 @@ pkgs.testers.runNixOSTest {
       services.lodestar-agent = {
         enable = true;
         inherit user repoUrl;
+        tokenFile = tokenFile;
         channel = "unstable";
         managerHost = "manager";
         listen = "0.0.0.0:7461";
         revisionCommand = [ "${fakeRevision}" ];
       };
       users.users.${user}.isNormalUser = true;
+      systemd.tmpfiles.rules = [ "f ${tokenFile} 0400 root root - ${testToken}" ];
       environment.systemPackages = [
         pkgs.git
         pkgs.curl

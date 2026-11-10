@@ -3,7 +3,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, post};
 
-use super::{AppState, activations, apply, log, source_check, status};
+use super::{AppState, activations, apply, log, source_check, status, token_check};
 
 const BODY_LIMIT: usize = 4096;
 
@@ -14,6 +14,11 @@ pub fn router(state: AppState) -> Router {
         .route("/apply/log", get(log::get_log))
         .route("/activations", get(activations::get_activations))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
+        // Inner layer: the source check (outer) runs first, then the token check.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            token_check::check_token,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             source_check::check_source,

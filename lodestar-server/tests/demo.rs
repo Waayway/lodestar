@@ -102,6 +102,42 @@ async fn wait_polled(demo_handle: &DemoHandle, name: &str) {
 }
 
 #[tokio::test]
+async fn demo_agents_demand_their_own_generated_token() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let demo_handle = start().await;
+    let config = &demo_handle.state.config;
+    let lodestar_server::config::OnlineSource::Static { addresses } = &config.online else {
+        panic!("demo uses static addresses");
+    };
+    let url = format!("http://{}/status", addresses["laptop-1"]);
+    let client = reqwest::Client::new();
+    let refused = client.get(&url).send().await.unwrap();
+    assert_eq!(refused.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let token_file = &config.agent_token_files["laptop-1"];
+    let mode = std::fs::metadata(token_file).unwrap().permissions().mode();
+    assert_eq!(mode & 0o077, 0, "demo token files are private");
+    let token = std::fs::read_to_string(token_file).unwrap();
+    let other = std::fs::read_to_string(&config.agent_token_files["desktop"]).unwrap();
+    assert_ne!(token.trim(), other.trim(), "one token per host");
+    let wrong = client
+        .get(&url)
+        .bearer_auth(other.trim())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let accepted = client
+        .get(&url)
+        .bearer_auth(token.trim())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+}
+
+#[tokio::test]
 async fn demo_starts_and_serves_snapshot() {
     let demo_handle = start().await;
     let fleet = wait_for(&demo_handle, 10, "laptop-1 checkout", |fleet| {

@@ -26,10 +26,11 @@ nix run github:Waayway/lodestar#lodestar-demo   # dashboard against simulated ho
 
 - **lodestar-agent** runs as root on every enrolled host. It listens on the
   host's Tailscale address (port 7461) and only accepts requests from the
-  server's host. An apply fetches the repository into the user's checkout
-  (default `~/.flake`), fast-forwards it to the requested commit, runs
-  `nix build` **as that user**, then switches **as root** (systemd-run on
-  NixOS, a detached process on darwin, so the switch can restart the agent).
+  server's host that carry the server's token for this host. An apply fetches
+  the repository into the user's checkout (default `~/.flake`), fast-forwards
+  it to the requested commit, runs `nix build` **as that user**, then switches
+  **as root** (systemd-run on NixOS, a detached process on darwin, so the
+  switch can restart the agent).
 - **lodestar-server** runs on one NixOS host: the dashboard and REST/WebSocket
   API, a read-only git mirror (channel heads, "N behind", commit subjects), a
   SQLite database of applies and audit events, and a poller that asks every
@@ -85,6 +86,9 @@ nix run github:Waayway/lodestar#lodestar-demo   # dashboard against simulated ho
             channel = "unstable";
             managerHost = "manager";               # Tailscale name of the server's host
             repoUrl = "https://github.com/alice/infra";
+            # Secret file (root, 0400, not in the store) with this host's agent
+            # token, e.g. from sops-nix; see docs/operations.md "Agent tokens".
+            tokenFile = "/run/secrets/lodestar-agent-token";
           };
         }
         ./hosts/desktop.nix
@@ -103,12 +107,16 @@ nix run github:Waayway/lodestar#lodestar-demo   # dashboard against simulated ho
             channel = "stable";
             managerHost = "manager";
             repoUrl = "https://github.com/alice/infra";
+            tokenFile = "/run/secrets/lodestar-agent-token";
           };
           services.lodestar-server = {
             enable = true;
             # NixOS only; with nix-darwin hosts too:
             #   hostsFrom { inherit (self) nixosConfigurations darwinConfigurations; }
             hosts = lodestar.lib.hostsFrom { inherit (self) nixosConfigurations; };
+            # The server's copy of every host's token (owner lodestar-server, 0400).
+            agentTokenFiles = nixpkgs.lib.genAttrs [ "desktop" "manager" ]
+              (name: "/run/secrets/lodestar-agent-${name}");
             repoUrl = "https://github.com/alice/infra";
             pushUrl = "git@github.com:alice/infra.git";
             listenAddress = "100.64.0.1";          # this host's Tailscale IP
@@ -148,6 +156,7 @@ no `specialArgs`.
 | `hostName` | `networking.hostName` | the name the server knows this host by |
 | `channel` | `"main"` | branch this host follows |
 | `managerHost` | (required) | Tailscale name of the server's host; the only accepted source |
+| `tokenFile` | (required) | secret file (outside the store, root, 0400/0600) with the token(s) the server must send, one per line; read per request (see `docs/operations.md` "Agent tokens") |
 | `repoUrl` | (required) | git URL of the flake repository (`origin`) |
 | `flakePath` | `~user/.flake` (`/Users/<user>/.flake` on darwin) | the checkout |
 | `flakeAttr` | `nixosConfigurations.<hostName>.config.system.build.toplevel` / `darwinConfigurations.<hostName>.system` | what is built and switched to |
@@ -182,6 +191,7 @@ nix-darwin only:
 | `listenPort` | `8080` | opened on `tailscale0` |
 | `allowedUsers` | `[]` | Tailscale logins allowed in |
 | `allowedTags` | `[]` | Tailscale device tags allowed in |
+| `agentTokenFiles` | `{}` | per host name, the secret file (outside the store, owner `lodestar-server`, 0400/0600) with that agent's token; required for every `hosts` entry |
 | `agentPort` | the agent's `port`, else `7461` | one port for all agents: keep `services.lodestar-agent.port` the same everywhere |
 | `promote` | `{ from = "unstable"; to = "stable"; }` | `null` disables promote |
 | `updates.software.<name>.input` | (required) | flake input that provides `<name>` (`[A-Za-z0-9_-]+`); `<name>` is `[a-z0-9_-]+` and matches the agents' `versions` keys |
@@ -278,9 +288,16 @@ login in `allowedUsers`.
 
 ## Security model
 
-- **Agent source check**: an agent only answers requests from the addresses
-  `managerHost` resolves to (plus its own Tailscale addresses when it is the
-  server's host).
+- **Agent authentication**: every agent request (status, apply, log,
+  activations) must carry `Authorization: Bearer <token>` with the host's
+  token, checked in constant time against `tokenFile`; the agent refuses to
+  start without a usable token file and answers 401 without the token (503
+  when the file breaks while running). The source check stays as defence in
+  depth: an agent only answers requests from the addresses `managerHost`
+  resolves to (plus its own Tailscale addresses when it is the server's
+  host), so a process on the server's host that cannot read the token cannot
+  apply. The server never follows a redirect from an agent, so the token is
+  only sent to the agent's own address. See `docs/operations.md` "Agent tokens".
 - **Dashboard access**: every request's peer is looked up with
   `tailscale whois`; it must be an `allowedUsers` login or carry an
   `allowedTags` tag. The server only listens on its Tailscale address, so whois

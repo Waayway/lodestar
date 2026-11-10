@@ -87,6 +87,7 @@ fn config(state_dir: &Path, repository_url: &str) -> ServerConfig {
         builds: Default::default(),
         metrics: None,
         nix_bin: "nix".into(),
+        agent_token_files: Default::default(),
     }
 }
 

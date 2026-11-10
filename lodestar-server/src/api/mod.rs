@@ -1,8 +1,10 @@
 //! The dashboard HTTP surface: JSON API under `/api`, the WebSocket at `/api/ws`, and the
 //! embedded frontend for everything else. On the tailnet listener every route, the WebSocket
-//! upgrade and the static files included, sits behind `require_access`; on the router entrance
-//! behind `require_trusted_peer` and `load_viewer`. Route groups need a viewer that permits
-//! them; state-changing requests also need `require_same_site` (CSRF).
+//! upgrade and the static files included, sits behind `require_known_host` (DNS rebinding)
+//! and `require_access`; on the router entrance behind `require_trusted_peer` and
+//! `load_viewer`. Route groups need a viewer that permits them; state-changing requests also
+//! need `require_same_site` (CSRF, `Origin`), the WebSocket a browser `Origin` of our own.
+//! Every response refuses framing and sniffing (`harden`).
 
 mod app;
 mod apply_request;
@@ -16,6 +18,7 @@ mod me;
 mod metrics;
 mod promote;
 mod public_services;
+mod security_headers;
 mod snapshot;
 mod updates;
 

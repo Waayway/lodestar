@@ -5,11 +5,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
-use super::{Actor, Viewer};
+use super::{Actor, OriginPolicy, Viewer};
 use crate::auth::cookie::{SESSION_COOKIE, read_cookie};
 use crate::auth::{AuthState, SessionId};
 use crate::state::AppState;
@@ -78,19 +78,14 @@ pub async fn load_viewer(
     next.run(request).await
 }
 
-/// Middleware for the WebSocket upgrade: 403 unless `Origin` is exactly the public URL's
-/// origin. Browsers always send it on a WebSocket; another site's page sends its own.
+/// Middleware for the WebSocket upgrade: 403 unless `Origin` is sent once and is the public
+/// URL's origin. Browsers always send it on a WebSocket; another site's page sends its own.
 pub async fn require_public_origin(
     State(auth): State<Arc<AuthState>>,
     request: Request,
     next: Next,
 ) -> Response {
-    let expected = auth.config.public_origin();
-    let matches = request
-        .headers()
-        .get(header::ORIGIN)
-        .is_some_and(|origin| !expected.is_empty() && origin.as_bytes() == expected.as_bytes());
-    if matches {
+    if OriginPolicy::public(&auth.config).allows(request.headers(), request.uri(), true) {
         next.run(request).await
     } else {
         (StatusCode::FORBIDDEN, "forbidden").into_response()

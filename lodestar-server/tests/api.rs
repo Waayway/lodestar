@@ -164,6 +164,7 @@ async fn env_build(
         deploy_key_file: None,
         state_dir: dir.path().join("state"),
         access,
+        allowed_hosts: Vec::new(),
         online: OnlineSource::Static {
             addresses: addresses.clone(),
         },

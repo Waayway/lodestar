@@ -35,6 +35,7 @@ async fn lock_commit_ignores_identity_from_the_environment() {
         deploy_key_file: None,
         state_dir: state_dir.clone(),
         access: AccessConfig::Disabled,
+        allowed_hosts: Vec::new(),
         online: OnlineSource::Tailscale,
         mirror_fetch_secs: 300,
         poll_secs: 60,

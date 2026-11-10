@@ -82,6 +82,7 @@ fn server_config(dir: &Path, origin: &Origin, agent: SocketAddr) -> ServerConfig
         deploy_key_file: None,
         state_dir: dir.join("state"),
         access: AccessConfig::Disabled,
+        allowed_hosts: Vec::new(),
         online: OnlineSource::Static {
             addresses: HashMap::from([("h".to_string(), agent.to_string())]),
         },
@@ -883,4 +884,146 @@ async fn logout_needs_csrf_header_and_deletes_session() {
     let me = me(base, Some(&cookie)).await;
     assert_eq!(me.role, Role::Anonymous);
     assert!(!me.session);
+}
+
+// ---- Origin on the router entrance, and the hardening headers ----
+
+/// `POST /auth/logout` with `origin`s (each appended): the status.
+async fn logout_with(base: &str, origins: &[&str]) -> StatusCode {
+    let mut request = client()
+        .post(format!("{base}/auth/logout"))
+        .header("x-lodestar", "1");
+    for origin in origins {
+        request = request.header("origin", *origin);
+    }
+    request.send().await.unwrap().status()
+}
+
+#[tokio::test]
+async fn post_origin_must_be_public_url_when_sent() {
+    let environment = env().await;
+    let base = &environment.base;
+    for origins in [
+        &[][..],
+        &[PUBLIC_URL][..],
+        &["https://LODESTAR.example.com"][..],
+        &["https://lodestar.example.com:443"][..],
+    ] {
+        assert_eq!(
+            logout_with(base, origins).await,
+            StatusCode::NO_CONTENT,
+            "{origins:?}"
+        );
+    }
+    for origins in [
+        &["https://evil.example.com"][..],
+        &["null"][..],
+        &["http://lodestar.example.com"][..],
+        &["https://lodestar.example.com:8443"][..],
+        &["https://lodestar.example.com/"][..],
+        &["https://lodestar.example.com.evil.example.com"][..],
+        &[PUBLIC_URL, "https://evil.example.com"][..],
+    ] {
+        assert_eq!(
+            logout_with(base, origins).await,
+            StatusCode::FORBIDDEN,
+            "{origins:?}"
+        );
+    }
+
+    // An admin's apply over the marked entrance from another site's page.
+    let (cookie, _) = login(&environment.state, "bob", Role::Admin, now() + 3600).await;
+    let response = client()
+        .post(format!("{base}/api/hosts/h/apply"))
+        .header("cookie", &cookie)
+        .header("x-lodestar", "1")
+        .header(MARK, "tailnet")
+        .header("origin", "https://evil.example.com")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(
+        db::recent_audit(&environment.state.db, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn websocket_origin_parses_exactly() {
+    let environment = env().await;
+    let base = &environment.base;
+    let (cookie, _) = login(&environment.state, "bob", Role::Admin, now() + 3600).await;
+    let open = |origins: &'static [&'static str]| {
+        let url = format!("{}/api/ws", base.replacen("http", "ws", 1));
+        let cookie = cookie.clone();
+        async move {
+            let mut request = url.into_client_request().unwrap();
+            request
+                .headers_mut()
+                .insert("cookie", cookie.parse().unwrap());
+            for origin in origins {
+                request
+                    .headers_mut()
+                    .append("origin", origin.parse().unwrap());
+            }
+            match tokio_tungstenite::connect_async(request).await {
+                Ok(_) => StatusCode::SWITCHING_PROTOCOLS,
+                Err(tungstenite::Error::Http(response)) => response.status(),
+                Err(other) => panic!("websocket: {other:?}"),
+            }
+        }
+    };
+    for origins in [
+        &["https://LODESTAR.EXAMPLE.COM"][..],
+        &["https://lodestar.example.com:443"][..],
+    ] {
+        assert_eq!(
+            open(origins).await,
+            StatusCode::SWITCHING_PROTOCOLS,
+            "{origins:?}"
+        );
+    }
+    for origins in [
+        &[PUBLIC_URL, "https://evil.example.com"][..],
+        &[PUBLIC_URL, PUBLIC_URL][..],
+        &["https://lodestar.example.com/"][..],
+        &["http://lodestar.example.com"][..],
+        &["null"][..],
+    ] {
+        assert_eq!(open(origins).await, StatusCode::FORBIDDEN, "{origins:?}");
+    }
+}
+
+#[tokio::test]
+async fn proxy_responses_refuse_framing_and_sniffing() {
+    let environment = env().await;
+    let refused = env_with(&["192.0.2.1"], Duration::from_secs(60)).await;
+    for url in [
+        format!("{}/", environment.base),
+        format!("{}/api/me", environment.base),
+        format!("{}/auth/nope", environment.base),
+        format!("{}/", refused.base),
+    ] {
+        let response = client().get(&url).send().await.unwrap();
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .map(|value| value.to_str().unwrap().to_string())
+        };
+        assert_eq!(header("x-frame-options").as_deref(), Some("DENY"), "{url}");
+        assert_eq!(
+            header("content-security-policy").as_deref(),
+            Some("frame-ancestors 'none'"),
+            "{url}"
+        );
+        assert_eq!(
+            header("x-content-type-options").as_deref(),
+            Some("nosniff"),
+            "{url}"
+        );
+    }
 }

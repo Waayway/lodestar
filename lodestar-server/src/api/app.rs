@@ -6,36 +6,52 @@ use axum::{Extension, Router, middleware};
 
 use super::error::ApiError;
 use super::{
-    audit, builds, channels, csrf, hosts, me, metrics, promote, public_services, snapshot, updates,
+    audit, builds, channels, csrf, hosts, me, metrics, promote, public_services, security_headers,
+    snapshot, updates,
 };
 use crate::access::{
-    AccessState, Need, load_viewer, require_access, require_need, require_public_origin,
-    require_trusted_peer,
+    AccessState, HostAllowlist, Need, OriginPolicy, load_viewer, require_access,
+    require_known_host, require_need, require_origin, require_public_origin, require_trusted_peer,
 };
 use crate::auth::AuthState;
 use crate::state::AppState;
 use crate::{auth, embed, websocket};
 
-/// The complete dashboard app on the tailnet listener. Serve it with
-/// `into_make_service_with_connect_info::<SocketAddr>()` (access control needs the peer).
+/// The complete dashboard app on the tailnet listener: only requests naming this server
+/// (listen address, `allowed_hosts`) get to the access check; a browser's `Origin` must be
+/// the request's own. Serve it with `into_make_service_with_connect_info::<SocketAddr>()`
+/// (access control needs the peer).
 pub fn app(state: AppState) -> Router {
     let access = AccessState {
         provider: state.online.clone(),
         config: Arc::new(state.config.access.clone()),
     };
-    let websocket = Router::new().route("/ws", get(websocket::handler));
+    let hosts = Arc::new(HostAllowlist::new(
+        state.config.listen,
+        &state.config.allowed_hosts,
+    ));
+    let websocket =
+        Router::new()
+            .route("/ws", get(websocket::handler))
+            .layer(middleware::from_fn_with_state(
+                OriginPolicy::SameAsHost,
+                require_origin,
+            ));
     Router::new()
-        .nest("/api", api_routes(websocket))
+        .nest("/api", api_routes(websocket, OriginPolicy::SameAsHost))
         .route("/metrics", get(not_found))
         .fallback(embed::static_handler)
         .layer(middleware::from_fn_with_state(access, require_access))
+        .layer(middleware::from_fn_with_state(hosts, require_known_host))
+        .layer(middleware::from_fn(security_headers::harden))
         .with_state(state)
 }
 
 /// The dashboard app on the router entrance: only trusted proxies get in; the viewer comes
 /// from the session cookie and the router's tailnet mark; the WebSocket also needs a logged-in
-/// viewer and the public URL as its `Origin`; `/auth` logs people in and out. Serve it like
-/// [`app`].
+/// viewer and the public URL as its `Origin`, as does every state-changing request that sends
+/// one; `/auth` logs people in and out. `Host` is the router's to check: only trusted proxies
+/// reach this listener. Serve it like [`app`].
 ///
 /// Panics when `state.auth` is `None` (the server sets it whenever a router entrance is
 /// configured).
@@ -44,6 +60,7 @@ pub fn proxy_app(state: AppState) -> Router {
         .auth
         .clone()
         .expect("the router entrance needs AppState.auth");
+    let origin = OriginPolicy::public(&auth.config);
     let websocket = Router::new()
         .route("/ws", get(websocket::handler))
         .layer(middleware::from_fn_with_state(
@@ -54,12 +71,13 @@ pub fn proxy_app(state: AppState) -> Router {
             require_need(Need::Read, request, next)
         }));
     Router::new()
-        .nest("/api", api_routes(websocket))
-        .nest("/auth", auth_routes(auth.clone()))
+        .nest("/api", api_routes(websocket, origin.clone()))
+        .nest("/auth", auth_routes(auth.clone(), origin))
         .route("/metrics", get(not_found))
         .fallback(embed::static_handler)
         .layer(middleware::from_fn_with_state(state.clone(), load_viewer))
         .layer(middleware::from_fn_with_state(auth, require_trusted_peer))
+        .layer(middleware::from_fn(security_headers::harden))
         .with_state(state)
 }
 
@@ -72,28 +90,34 @@ pub fn metrics_app(state: AppState) -> Router {
 }
 
 /// Login, its callback, and logout (state-changing, so behind the CSRF guard).
-fn auth_routes(auth: Arc<AuthState>) -> Router<AppState> {
+fn auth_routes(auth: Arc<AuthState>, origin: OriginPolicy) -> Router<AppState> {
     Router::new()
         .route("/login", get(auth::login))
         .route("/callback", get(auth::callback))
         .route(
             "/logout",
-            post(auth::logout).layer(middleware::from_fn(csrf::require_same_site)),
+            post(auth::logout).layer(middleware::from_fn_with_state(
+                origin,
+                csrf::require_same_site,
+            )),
         )
         .fallback(not_found)
         .layer(Extension(auth))
 }
 
 /// Everything under `/api`: the route groups, the given WebSocket route, a JSON 404 for
-/// unknown paths, and the CSRF guard.
-fn api_routes(websocket: Router<AppState>) -> Router<AppState> {
+/// unknown paths, and the CSRF guard with the listener's `origin` policy.
+fn api_routes(websocket: Router<AppState>, origin: OriginPolicy) -> Router<AppState> {
     Router::new()
         .merge(public_api_routes())
         .merge(read_routes())
         .merge(act_routes())
         .merge(websocket)
         .fallback(not_found)
-        .layer(middleware::from_fn(csrf::require_same_site))
+        .layer(middleware::from_fn_with_state(
+            origin,
+            csrf::require_same_site,
+        ))
 }
 
 async fn not_found() -> ApiError {

@@ -77,6 +77,7 @@ fn config(state_dir: &Path, repository_url: &str) -> ServerConfig {
         deploy_key_file: None,
         state_dir: state_dir.to_path_buf(),
         access: AccessConfig::Disabled,
+        allowed_hosts: Vec::new(),
         online: OnlineSource::Tailscale,
         mirror_fetch_secs: 300,
         poll_secs: 60,

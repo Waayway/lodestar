@@ -1670,6 +1670,7 @@ dependencies = [
  "clap",
  "futures",
  "getrandom 0.3.4",
+ "libc",
  "lodestar-migration",
  "lodestar-proto",
  "mime_guess",

@@ -16,7 +16,7 @@ pub use access_config::AccessConfig;
 pub use builds_config::BuildsConfig;
 pub use link::{Link, LinkCheck, load_links};
 pub use listen_check::is_tailscale_ip;
-pub use managed_host::{ManagedHost, load_hosts};
+pub use managed_host::{ManagedHost, load_hosts, valid_host_name};
 pub use oidc_config::OidcConfig;
 pub use online_source::OnlineSource;
 pub use proxy_config::ProxyConfig;

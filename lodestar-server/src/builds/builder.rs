@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
@@ -12,7 +13,9 @@ use lodestar_proto::is_commit_hash;
 use tokio::process::Command;
 use tokio::time::Instant;
 
-use crate::config::{ManagedHost, ServerConfig};
+use crate::config::{ManagedHost, ServerConfig, valid_host_name};
+use crate::flake_lock::{COMMITTED_LOCK, FlakeLock, RESTRICTED_EVALUATION};
+use crate::nix_sandbox::{Access, NixSandbox};
 use crate::process::{RunError, log_tail, run};
 
 /// Prefix of every failure reason caused by not reaching the builder (the gate relies on it).
@@ -86,20 +89,14 @@ pub struct RemoteBuilder {
     pub publish_command: Vec<String>,
     /// For a whole build (all evaluations and the build) and for a publish.
     pub timeout: Duration,
+    /// Confines every `nix` it runs.
+    pub sandbox: NixSandbox,
 }
 
 /// The SSH destination and port of a store URL.
 struct Destination {
     target: String,
     port: Option<String>,
-}
-
-/// `[A-Za-z0-9_.-]+`.
-fn valid_host_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
 /// `/nix/store/<32 base-32 chars>-<name>` with only `[A-Za-z0-9+._=-]` in the name (not
@@ -185,48 +182,6 @@ fn log_excerpt(text: &str) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::log_excerpt;
-
-    #[test]
-    fn the_root_cause_comes_before_the_dependency_noise() {
-        let mut log = String::from(
-            "building '/nix/store/a-dep.drv'...\n\
-             error: builder for '/nix/store/a-dep.drv' failed with exit code 101;\n\
-             \x20      last 2 log lines:\n\
-             \x20      > error[E0425]: cannot find value `x`\n\
-             \x20      > aborting\n",
-        );
-        for n in 0..60 {
-            log.push_str(&format!(
-                "error: Cannot build '/nix/store/{n}-x.drv'.\n       Reason: 1 dependency failed.\n"
-            ));
-        }
-        let excerpt = log_excerpt(&log);
-        assert!(excerpt.starts_with("error: builder for '/nix/store/a-dep.drv' failed"));
-        assert!(excerpt.contains("cannot find value `x`"));
-        assert!(excerpt.contains("\n…\n"));
-        assert!(excerpt.ends_with("Reason: 1 dependency failed."));
-        assert!(!excerpt.contains("building '/nix/store/a-dep.drv'"));
-    }
-
-    #[test]
-    fn a_short_log_is_its_tail() {
-        let log = "copying path\nerror: path '/nix/store/x' is not valid\n";
-        assert_eq!(
-            log_excerpt(log),
-            "copying path\nerror: path '/nix/store/x' is not valid"
-        );
-    }
-
-    #[test]
-    fn only_dependency_errors_give_the_tail() {
-        let log = "error: Cannot build '/nix/store/x.drv'.\n       Reason: 1 dependency failed.\n";
-        assert_eq!(log_excerpt(log), log.trim_end());
-    }
-}
-
 impl RemoteBuilder {
     /// The builder `config.builds` describes, with the server's `nix`.
     pub fn from_config(config: &ServerConfig) -> Self {
@@ -237,6 +192,7 @@ impl RemoteBuilder {
             ssh_key_file: config.builds.ssh_key_file.clone(),
             publish_command: config.builds.publish_command.clone(),
             timeout: Duration::from_secs(config.builds.timeout_secs),
+            sandbox: NixSandbox::new(config.state_dir.join("nix-sandbox")),
         }
     }
 
@@ -292,15 +248,33 @@ impl RemoteBuilder {
         options
     }
 
-    /// `nix --extra-experimental-features 'nix-command flakes' <args>` in `dir`.
-    fn nix(&self, dir: &Path, args: &[&str]) -> Command {
+    /// `nix --extra-experimental-features 'nix-command flakes' <RESTRICTED_EVALUATION> <args>`
+    /// in `dir`, confined for `access`; the ruleset must live until the command ran.
+    fn nix(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        access: Access<'_>,
+    ) -> Result<(Command, OwnedFd), String> {
         let mut command = Command::new(&self.nix_bin);
         command
             .arg("--extra-experimental-features")
             .arg("nix-command flakes")
+            .args(RESTRICTED_EVALUATION)
             .args(args)
             .current_dir(dir);
-        command
+        let ruleset = self
+            .sandbox
+            .confine(&mut command, dir, access)
+            .map_err(|error| format!("{error:#}"))?;
+        Ok((command, ruleset))
+    }
+
+    /// What a command that talks to the builder may read besides the evaluation's needs.
+    fn builder_access(&self) -> Access<'_> {
+        Access::Builder {
+            key: self.ssh_key_file.as_deref(),
+        }
     }
 
     /// Runs `command` until `deadline` (part of the whole `timeout`); the output, or why there
@@ -318,7 +292,11 @@ impl RemoteBuilder {
 
     /// Whether the builder store answers (`nix store info`); why not, when it doesn't.
     async fn probe(&self, dir: &Path) -> Result<(), String> {
-        let mut command = self.nix(dir, &["store", "info", "--store", &self.store]);
+        let (mut command, _ruleset) = self.nix(
+            dir,
+            &["store", "info", "--store", &self.store],
+            self.builder_access(),
+        )?;
         command.env("NIX_SSHOPTS", self.nix_sshopts());
         let output = run_limited(
             &self.nix_bin,
@@ -343,7 +321,11 @@ impl RemoteBuilder {
         deadline: Instant,
     ) -> Result<String, String> {
         let attribute = format!("{attribute}.outPath");
-        let mut command = self.nix(dir, &["eval", "--raw", "--no-write-lock-file", &attribute]);
+        let (mut command, _ruleset) = self.nix(
+            dir,
+            &["eval", "--raw", COMMITTED_LOCK, &attribute],
+            Access::Evaluate,
+        )?;
         let output = self
             .run_until(&self.nix_bin, &mut command, None, deadline)
             .await?;
@@ -358,11 +340,47 @@ impl RemoteBuilder {
         }
     }
 
+    /// The toplevel `drvPath` of `host`, evaluated locally. Realising this later needs no
+    /// flake evaluation at all, so it never has to run with `Access::Builder` (which, for the
+    /// builder's own SSH key, is exactly the access an evaluation of attacker-controlled Nix
+    /// code must never have).
+    async fn drv_path(
+        &self,
+        dir: &Path,
+        attribute: &str,
+        deadline: Instant,
+    ) -> Result<String, String> {
+        let attribute = format!("{attribute}.drvPath");
+        let (mut command, _ruleset) = self.nix(
+            dir,
+            &["eval", "--raw", COMMITTED_LOCK, &attribute],
+            Access::Evaluate,
+        )?;
+        let output = self
+            .run_until(&self.nix_bin, &mut command, None, deadline)
+            .await?;
+        if !output.status.success() {
+            return Err(failure("nix eval", &output));
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if valid_store_path(&path) {
+            Ok(path)
+        } else {
+            Err(format!("nix eval printed {path:?}, not a derivation path"))
+        }
+    }
+
     /// Whether `path` is valid in the builder store (built earlier, or built although a failure
     /// of another host made `nix build` exit without printing it). Gets at least
     /// `PROBE_TIMEOUT`, even when a long build used up the deadline.
     async fn on_store(&self, dir: &Path, path: &str, deadline: Instant) -> bool {
-        let mut command = self.nix(dir, &["path-info", "--store", &self.store, path]);
+        let Ok((mut command, _ruleset)) = self.nix(
+            dir,
+            &["path-info", "--store", &self.store, path],
+            self.builder_access(),
+        ) else {
+            return false;
+        };
         command.env("NIX_SSHOPTS", self.nix_sshopts());
         let limit = deadline
             .saturating_duration_since(Instant::now())
@@ -407,15 +425,28 @@ impl Builder for RemoteBuilder {
             }
             return results;
         }
-        // (host name, toplevel attribute, expected out path) of every host to build.
-        let mut wanted: Vec<(String, String, String)> = Vec::new();
+        // Nothing of the channel's flake is evaluated while its lock names a local source.
+        if let Err(error) = FlakeLock::check_dir(dir) {
+            let reason = format!("{error:#}");
+            for host in candidates {
+                results.insert(host.name.clone(), HostBuild::failed(reason.clone()));
+            }
+            return results;
+        }
+        // (host name, toplevel attribute, expected out path, derivation path to realise).
+        let mut wanted: Vec<(String, String, String, String)> = Vec::new();
         for host in candidates {
             let attribute = format!(
                 ".#nixosConfigurations.\"{}\".config.system.build.toplevel",
                 host.name
             );
             match self.out_path(dir, &attribute, deadline).await {
-                Ok(path) => wanted.push((host.name.clone(), attribute, path)),
+                Ok(path) => match self.drv_path(dir, &attribute, deadline).await {
+                    Ok(drv) => wanted.push((host.name.clone(), attribute, path, drv)),
+                    Err(reason) => {
+                        results.insert(host.name.clone(), HostBuild::failed(reason));
+                    }
+                },
                 Err(reason) => {
                     results.insert(host.name.clone(), HostBuild::failed(reason));
                 }
@@ -425,27 +456,29 @@ impl Builder for RemoteBuilder {
             return results;
         }
 
-        let mut args = vec![
-            "build",
-            "--no-link",
-            "--print-out-paths",
-            "--keep-going",
-            "--no-write-lock-file",
-            "--store",
-            &self.store,
-            "--eval-store",
-            "auto",
-        ];
-        args.extend(wanted.iter().map(|(_, attribute, _)| attribute.as_str()));
-        let mut command = self.nix(dir, &args);
-        command.env("NIX_SSHOPTS", self.nix_sshopts());
-        let output = match self
-            .run_until(&self.nix_bin, &mut command, None, deadline)
-            .await
-        {
+        // Every derivation is already fixed by the evaluations above, so realising it needs
+        // no flake evaluation at all: `Access::Builder` (which exposes the builder's SSH key)
+        // never coexists with evaluation of the channel's Nix code.
+        let targets: Vec<String> = wanted
+            .iter()
+            .map(|(_, _, _, drv)| format!("{drv}^*"))
+            .collect();
+        let mut args = vec!["build", "--no-link", "--print-out-paths", "--keep-going"];
+        args.push("--store");
+        args.push(&self.store);
+        args.extend(targets.iter().map(String::as_str));
+        let output = match self.nix(dir, &args, self.builder_access()) {
+            Ok((mut command, _ruleset)) => {
+                command.env("NIX_SSHOPTS", self.nix_sshopts());
+                self.run_until(&self.nix_bin, &mut command, None, deadline)
+                    .await
+            }
+            Err(reason) => Err(reason),
+        };
+        let output = match output {
             Ok(output) => output,
             Err(reason) => {
-                for (name, _, _) in wanted {
+                for (name, _, _, _) in wanted {
                     results.insert(name, HostBuild::failed(reason.clone()));
                 }
                 return results;
@@ -459,13 +492,13 @@ impl Builder for RemoteBuilder {
             && let Err(probe) = self.probe(dir).await
         {
             let reason = format!("{UNREACHABLE}{probe}");
-            for (name, _, _) in wanted {
+            for (name, _, _, _) in wanted {
                 results.insert(name, HostBuild::failed(reason.clone()));
             }
             return results;
         }
         let reason = failure("nix build", &output);
-        for (name, _, path) in wanted {
+        for (name, _, path, _) in wanted {
             let built =
                 printed.contains(path.as_str()) || self.on_store(dir, &path, deadline).await;
             let result = if built {
@@ -523,5 +556,47 @@ impl Builder for RemoteBuilder {
             anyhow::bail!("{UNREACHABLE}{reason}");
         }
         anyhow::bail!("publishing {commit} failed: {reason}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_excerpt;
+
+    #[test]
+    fn the_root_cause_comes_before_the_dependency_noise() {
+        let mut log = String::from(
+            "building '/nix/store/a-dep.drv'...\n\
+             error: builder for '/nix/store/a-dep.drv' failed with exit code 101;\n\
+             \x20      last 2 log lines:\n\
+             \x20      > error[E0425]: cannot find value `x`\n\
+             \x20      > aborting\n",
+        );
+        for n in 0..60 {
+            log.push_str(&format!(
+                "error: Cannot build '/nix/store/{n}-x.drv'.\n       Reason: 1 dependency failed.\n"
+            ));
+        }
+        let excerpt = log_excerpt(&log);
+        assert!(excerpt.starts_with("error: builder for '/nix/store/a-dep.drv' failed"));
+        assert!(excerpt.contains("cannot find value `x`"));
+        assert!(excerpt.contains("\n…\n"));
+        assert!(excerpt.ends_with("Reason: 1 dependency failed."));
+        assert!(!excerpt.contains("building '/nix/store/a-dep.drv'"));
+    }
+
+    #[test]
+    fn a_short_log_is_its_tail() {
+        let log = "copying path\nerror: path '/nix/store/x' is not valid\n";
+        assert_eq!(
+            log_excerpt(log),
+            "copying path\nerror: path '/nix/store/x' is not valid"
+        );
+    }
+
+    #[test]
+    fn only_dependency_errors_give_the_tail() {
+        let log = "error: Cannot build '/nix/store/x.drv'.\n       Reason: 1 dependency failed.\n";
+        assert_eq!(log_excerpt(log), log.trim_end());
     }
 }

@@ -254,7 +254,9 @@ One run at a time, for every input that some tracked software uses, one after th
 1. A scratch worktree of the channel's head under `/var/lib/lodestar-server/updater/<input>`
    (removed afterwards).
 2. Every host's `versions` at the current lock (`nix eval`).
-3. `nix flake update <input>`; lock unchanged: `no-change`.
+3. `nix flake update <input>`; lock unchanged: `no-change`. A lock that moved any other
+   input too, or locks a source that is not remote, is put back: `eval-failed` (see
+   [What the server evaluates](#what-the-server-evaluates)).
 4. The versions again; nothing tracked got newer on any host (or something got older):
    `no-change`, nothing is committed.
 5. Build every Linux host whose tracked versions changed (darwin hosts are evaluated
@@ -447,6 +449,74 @@ Linux host with its store path, or, for a failed host, its log behind "Show log"
 build sits on any commit with a failed host. The tab carries a red count of channels
 whose head failed. It asks the server every 10 s while open, and at once when a channel's
 build state changes.
+
+### What the server evaluates
+
+A writer of a channel branch controls the flake the server evaluates (prebuild, gate,
+updater) before any apply, and failure logs end up in the Builds tab and the audit log.
+So every `nix` command on a channel's flake runs with the lock **as committed** and under
+**restricted evaluation**:
+
+- `--no-update-lock-file`: an input missing from `flake.lock` fails the build (`requires
+  lock file changes`) instead of being locked in memory. Commit an up-to-date
+  `flake.lock` (`nix flake lock`) with every change to `flake.nix`'s inputs.
+  (`--no-write-lock-file` is not used: Nix then ignores `--no-update-lock-file`.)
+- `restrict-eval` with `allowed-uris` `github: gitlab: sourcehut: https: git+https:
+  tarball+https: file+https:`: flake inputs and fetchers (`builtins.fetchTree`,
+  `builtins.fetchurl`, …) reach only those; a `path:`/`file://`/`http://` source outside
+  the flake is refused. `nixConfig` in the flake is ignored (`accept-flake-config =
+  false`). Git over SSH is refused too: it would log in with the server's own SSH
+  identities.
+- `allow-import-from-derivation = false`: nothing is built while evaluating. An imported
+  derivation is built by the Nix daemon, outside these limits (a fixed-output
+  `builtin:fetchurl` reaches any address the host reaches, `localhost` included), so a
+  configuration that imports from a derivation fails here.
+- Every `nix` (and what it starts: git, ssh) is confined with **Landlock** (Linux 5.13+,
+  `landlock` in the kernel's `lsm=`, the NixOS default). It can read the Nix store,
+  `/etc/nix`, `/etc/static`, `/etc/ssl`, `/etc/pki`, `/etc/ssh`, `/run/current-system`,
+  the resolver and user database files, the worktree and its git directory in
+  `mirror.git`, and write only its own home, cache and temporary directory in
+  `/var/lib/lodestar-server/nix-sandbox/` (and the worktree, for the updater's
+  `nix flake update`). The commands that talk to the builder can also read
+  `builds.sshKeyFile` and `~/.ssh/config`, and write `~/.ssh/known_hosts`. Nothing else
+  is reachable, so no input can make Nix read, or copy to the store, the deploy key, the
+  OIDC client secret or the database. Without Landlock no Nix command runs: every
+  build and update fails with `Landlock is not available`.
+- Before Nix runs, `flake.lock` must be a regular file whose every node is locked from a
+  remote source (`github`, `gitlab`, `sourcehut`, `git` over `https://`/`ssh://`,
+  `tarball`/`file` over `https://`) or a relative `path` inside the flake. Anything else
+  (an absolute `path`, a `file://` URL, `http://`, `hg`) fails every host with
+  `flake.lock: input "<name>" has a "<type>" source that is not remote`.
+- The updater's `nix flake update <input>` must move that input only: if Nix also
+  locked or changed another input, or the new lock fails the check above, the lock is
+  put back and the run is `eval-failed`.
+
+Still reachable, and not contained by Lodestar:
+
+- **Internal HTTPS hosts during evaluation.** Flake inputs and fetchers can reach any
+  `https://` host the server can reach (a tailnet service with a `*.ts.net`
+  certificate, an internal host with a publicly trusted certificate). A wrong hash prints
+  the right one, and with it the answer can reach a failure log.
+- **Fixed-output derivations while building.** `nix build` runs the flake's
+  derivations; fixed-output ones have the network of the host that builds them: the
+  builder (build gate), or this server's Nix daemon (the updater with the build gate
+  off). Their output can reach the build log.
+- The ruleset limits files, not network.
+
+To contain these, deployment changes are needed (not done by the module, not tested):
+
+1. Builds: drop egress from the build users to internal ranges on every host that
+   builds a channel (the builder, and this server unless `builds.enable`), e.g. an
+   nftables rule `meta skgid nixbld ip daddr { 10.0.0.0/8, 172.16.0.0/12,
+   192.168.0.0/16, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16 } drop` (and the IPv6
+   equivalents; with `auto-allocate-uids`, match its uid range instead). Keep
+   `builds.enable` on, so the server's daemon builds nothing of a channel.
+2. Evaluation: run the evaluating `nix` in a unit of its own (its own user, no access to
+   the server's secrets, `IPAddressDeny=` for the internal ranges, `IPAddressAllow=` for
+   the resolver), started by the server through a socket. The `lodestar-server` unit
+   itself cannot be filtered so: it reaches the agents over the tailnet. The build
+   command still has to reach the builder, so it needs an allow for the builder's
+   address only.
 
 Build logs: the Builds tab, `journalctl -u lodestar-server` (prebuild and re-send
 failures, `apply refused` lines) and the `log_tail` in the result file. A failure keeps

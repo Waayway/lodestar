@@ -10,6 +10,7 @@ use crate::auth::AuthState;
 use crate::builds::{BuildBackoff, BuildGate, Builder, PrebuildQueue, RemoteBuilder};
 use crate::config::{Link, ManagedHost, ServerConfig};
 use crate::mirror::Mirror;
+use crate::nix_sandbox::NixSandbox;
 use crate::tailscale::OnlineProvider;
 use crate::updates::nix_runner::{NixCommand, NixRunner};
 use crate::updates::updates_state::UpdatesState;
@@ -86,6 +87,7 @@ impl AppState {
         let (sender, _) = broadcast::channel(BROADCAST_CAPACITY);
         let nix = Arc::new(NixCommand {
             bin: config.nix_bin.clone(),
+            sandbox: NixSandbox::new(config.state_dir.join("nix-sandbox")),
         });
         let builder = Arc::new(RemoteBuilder::from_config(&config));
         let builds = Arc::new(BuildGate::new(config.state_dir.join("builds")));

@@ -150,6 +150,9 @@ in
 
     system.activationScripts.postActivation.text = lib.mkAfter ''
       mkdir -p /var/lib/lodestar-agent
+      # Apply logs under here routinely contain full store paths and service names;
+      # mkdir's default mode is world-readable.
+      chmod 0700 /var/lib/lodestar-agent
       ${import ./audit-hook.nix { inherit pkgs; }}
     '';
   };

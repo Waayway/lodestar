@@ -42,6 +42,10 @@ in
       serviceConfig = {
         ExecStart = "${cfg.binaryPath} serve --config /etc/lodestar-agent/config.json";
         StateDirectory = "lodestar-agent";
+        # Apply logs under here (nix build and switch-to-configuration output) routinely
+        # contain full store paths and service names; default systemd mode is 0755,
+        # readable by any local user.
+        StateDirectoryMode = "0700";
         Restart = "always";
         RestartSec = 5;
       };

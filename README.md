@@ -292,6 +292,16 @@ login in `allowedUsers`.
 - **Least privilege**: git and `nix build` run as the checkout's user; only
   the switch runs as root. The server runs as its own system user. Commit
   hashes and channel names are validated before they reach git.
+- **Channel flakes are untrusted**: the server evaluates and builds a channel's
+  flake only with its committed `flake.lock` (`--no-update-lock-file`), under
+  restricted evaluation that reaches remote sources only, after checking that
+  the lock names no local source, without building anything while evaluating;
+  the updater's bump may move its own input only. Every `nix` the server runs
+  is confined with Landlock to the store, its configuration and the worktree,
+  so it cannot read (or copy to the store) the server's secrets. The network is
+  not contained: a flake can still reach internal HTTPS hosts while it is
+  evaluated, and its fixed-output derivations reach whatever the building host
+  reaches (see `docs/operations.md`, "What the server evaluates").
 - The agent never applies a commit that is not on its channel, never
   discards local changes, and never moves a checkout that has commits the
   channel lacks: it skips and says why.

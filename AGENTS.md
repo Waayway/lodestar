@@ -21,7 +21,9 @@ does; `docs/operations.md` for how it is run.
     trusted-peer gate, session viewers and tailnet mark (`access/`, `tailscale/`),
     OIDC login against Kanidm and sessions (`auth/`: client, pending logins,
     cookies, the `/auth` login, callback and logout routes, error page),
-    git mirror and promote (`mirror/`), poller (`poller/`), shared state and
+    git mirror and promote (`mirror/`), the checks and Nix options for evaluating
+    a channel's untrusted flake (`flake_lock.rs`) and their Landlock confinement
+    (`nix_sandbox.rs`), poller (`poller/`), shared state and
     views (`state/`), SeaORM/SQLite (`db/`, one file per table concern;
     `migration/`), `config/`, the embedded frontend (`embed.rs`, `build.rs`:
     `LODESTAR_WEB_DIST`, else `../web/dist`), and demo mode (`demo/`:

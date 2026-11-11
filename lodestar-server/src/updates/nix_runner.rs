@@ -9,6 +9,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 
 use crate::config::ManagedHost;
+use crate::flake_lock::{COMMITTED_LOCK, FlakeLock, RESTRICTED_EVALUATION};
+use crate::nix_sandbox::{Access, NixSandbox};
 pub use crate::process::log_tail;
 use crate::process::{RunError, run};
 
@@ -32,9 +34,11 @@ pub trait NixRunner: Send + Sync {
     async fn build(&self, dir: &Path, host: &ManagedHost) -> Result<(), String>;
 }
 
-/// Runs `nix --extra-experimental-features 'nix-command flakes' …` in the worktree.
+/// Runs `nix --extra-experimental-features 'nix-command flakes' …` in the worktree, confined
+/// by `sandbox`.
 pub struct NixCommand {
     pub bin: PathBuf,
+    pub sandbox: NixSandbox,
 }
 
 /// The flake attribute set of `host`'s configuration, with the host name quoted so a `.`
@@ -48,25 +52,36 @@ fn configuration(host: &ManagedHost) -> String {
     format!(".#{kind}.\"{}\"", host.name)
 }
 
-/// Whether the root node of the lock file at `path` has a direct input `input`.
-fn lock_has_input(path: &Path, input: &str) -> anyhow::Result<bool> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let lock: serde_json::Value =
-        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    let root = lock["root"].as_str().unwrap_or("root");
-    Ok(lock["nodes"][root]["inputs"].get(input).is_some())
+/// The lock after `nix flake update <input>`: remote sources only, and only `input` moved.
+fn check_updated(dir: &Path, old: &FlakeLock, input: &str) -> anyhow::Result<()> {
+    let Some(new) = FlakeLock::read(dir)? else {
+        anyhow::bail!("flake.lock is missing after the update");
+    };
+    new.check_sources()?;
+    old.check_update(&new, input)
 }
 
 impl NixCommand {
-    /// stdout on success; the stderr tail (or why it did not run) on failure.
-    async fn run(&self, dir: &Path, args: &[&OsStr], timeout: Duration) -> Result<String, String> {
+    /// stdout on success; the stderr tail (or why it did not run) on failure. Every command
+    /// runs with `RESTRICTED_EVALUATION`, confined for `access`.
+    async fn run(
+        &self,
+        dir: &Path,
+        args: &[&OsStr],
+        access: Access<'_>,
+        timeout: Duration,
+    ) -> Result<String, String> {
         let mut command = tokio::process::Command::new(&self.bin);
         command
             .arg("--extra-experimental-features")
             .arg("nix-command flakes")
+            .args(RESTRICTED_EVALUATION)
             .args(args)
             .current_dir(dir);
+        let _ruleset = self
+            .sandbox
+            .confine(&mut command, dir, access)
+            .map_err(|error| format!("{error:#}"))?;
         let output = match run(&mut command, None, timeout).await {
             Ok(output) => output,
             Err(RunError::Start(error)) => {
@@ -97,20 +112,35 @@ impl NixRunner for NixCommand {
         if input.starts_with('-') {
             anyhow::bail!("invalid input name {input:?}");
         }
+        let path = dir.join("flake.lock");
+        let Some(old) = FlakeLock::read(dir)? else {
+            anyhow::bail!("reading {}: no such file", path.display());
+        };
         // `nix flake update <unknown>` only warns; without this check a misspelt input would
         // read as "no change" forever.
-        if !lock_has_input(&dir.join("flake.lock"), input)? {
+        if !old.has_input(input) {
             anyhow::bail!("flake.lock has no input {input:?}");
         }
+        old.check_sources()?;
+        let old_text =
+            std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
         self.run(
             dir,
             &[OsStr::new("flake"), OsStr::new("update"), OsStr::new(input)],
+            Access::Update,
             EVAL_TIMEOUT,
         )
         .await
-        .map(drop)
         .map_err(anyhow::Error::msg)
-        .with_context(|| format!("nix flake update {input}"))
+        .with_context(|| format!("nix flake update {input}"))?;
+        // Nix also locks any input the lock lacks (one the channel added to `flake.nix`): such
+        // a lock is put back before anything evaluates it.
+        if let Err(error) = check_updated(dir, &old, input) {
+            std::fs::write(&path, &old_text)
+                .with_context(|| format!("restoring {}", path.display()))?;
+            return Err(error.context(format!("nix flake update {input}")));
+        }
+        Ok(())
     }
 
     async fn eval_versions(
@@ -121,17 +151,20 @@ impl NixRunner for NixCommand {
         // A configuration whose agent module predates the `versions` option tracks nothing;
         // any other evaluation error is an error.
         let attribute = format!("{}.config.services.lodestar-agent", configuration(host));
+        FlakeLock::check_dir(dir)
+            .with_context(|| format!("evaluating the versions of {}", host.name))?;
         let stdout = self
             .run(
                 dir,
                 &[
                     OsStr::new("eval"),
                     OsStr::new("--json"),
-                    OsStr::new("--no-write-lock-file"),
+                    OsStr::new(COMMITTED_LOCK),
                     OsStr::new(&attribute),
                     OsStr::new("--apply"),
                     OsStr::new("agent: agent.versions or { }"),
                 ],
+                Access::Evaluate,
                 EVAL_TIMEOUT,
             )
             .await
@@ -142,6 +175,7 @@ impl NixRunner for NixCommand {
     }
 
     async fn build(&self, dir: &Path, host: &ManagedHost) -> Result<(), String> {
+        FlakeLock::check_dir(dir).map_err(|error| format!("{error:#}"))?;
         let configuration = configuration(host);
         if host.os == "darwin" {
             // Can't be built here; evaluating the system derivation catches most breakage.
@@ -151,9 +185,10 @@ impl NixRunner for NixCommand {
                 &[
                     OsStr::new("eval"),
                     OsStr::new("--raw"),
-                    OsStr::new("--no-write-lock-file"),
+                    OsStr::new(COMMITTED_LOCK),
                     OsStr::new(&attribute),
                 ],
+                Access::Evaluate,
                 EVAL_TIMEOUT,
             )
             .await
@@ -165,9 +200,10 @@ impl NixRunner for NixCommand {
                 &[
                     OsStr::new("build"),
                     OsStr::new("--no-link"),
-                    OsStr::new("--no-write-lock-file"),
+                    OsStr::new(COMMITTED_LOCK),
                     OsStr::new(&attribute),
                 ],
+                Access::Evaluate,
                 BUILD_TIMEOUT,
             )
             .await

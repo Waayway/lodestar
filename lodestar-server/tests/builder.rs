@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use lodestar_server::builds::{Builder, RemoteBuilder};
 use lodestar_server::config::ManagedHost;
+use lodestar_server::flake_lock::RESTRICTED_EVALUATION;
+use lodestar_server::nix_sandbox::NixSandbox;
 
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const STORE: &str = "ssh-ng://alice@example.com:2222";
@@ -68,7 +70,9 @@ fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
 /// `path-info` knows a and c; `store info` runs STORE.
 const NIX: &str = r#"
 dir=$(dirname "$0")
-case "$3" in
+# Skip `--extra-experimental-features` and the restricted-evaluation options.
+shift 14
+case "$1" in
   eval)
     pwd > "$dir/eval.cwd"
     case "$*" in
@@ -82,9 +86,9 @@ case "$3" in
     printf '%s' "$NIX_SSHOPTS" > "$dir/build.sshopts"
     BUILD ;;
   path-info)
-    case "$6" in
-      *aaaaaaaa*|*cccccccc*) printf '%s\n' "$6" ;;
-      *) echo "error: path '$6' is not valid" >&2; exit 1 ;;
+    case "$4" in
+      *aaaaaaaa*|*cccccccc*) printf '%s\n' "$4" ;;
+      *) echo "error: path '$4' is not valid" >&2; exit 1 ;;
     esac ;;
   store)
     STORE ;;
@@ -115,6 +119,7 @@ fn fixture_with(nix: &str, ssh: &str, timeout: Duration) -> Fixture {
         ssh_key_file: Some(PathBuf::from("/run/keys/builder")),
         publish_command: vec!["cache-publish".into()],
         timeout,
+        sandbox: NixSandbox::new(dir.path().join("sandbox")).also_allow(dir.path()),
     };
     Fixture { dir, builder }
 }
@@ -132,7 +137,7 @@ fn nix_calls(fixture: &Fixture, subcommand: &str) -> Vec<String> {
     fixture
         .calls("nix")
         .split("\n\n")
-        .filter(|call| call.lines().nth(2) == Some(subcommand))
+        .filter(|call| call.lines().nth(2 + RESTRICTED_EVALUATION.len()) == Some(subcommand))
         .map(str::to_string)
         .collect()
 }
@@ -165,24 +170,37 @@ async fn built_hosts_are_found_on_the_store_and_failed_ones_get_the_log_tail() {
         .unwrap()
         .lines()
         .collect();
-    assert_eq!(
-        build,
-        [
-            "--extra-experimental-features",
-            "nix-command flakes",
-            "build",
-            "--no-link",
-            "--print-out-paths",
-            "--keep-going",
-            "--no-write-lock-file",
-            "--store",
-            STORE,
-            "--eval-store",
-            "auto",
-            ".#nixosConfigurations.\"a\".config.system.build.toplevel",
-            ".#nixosConfigurations.\"b\".config.system.build.toplevel",
-        ]
+    let (target_a, target_b) = (format!("{PATH_A}^*"), format!("{PATH_B}^*"));
+    let mut expected = vec!["--extra-experimental-features", "nix-command flakes"];
+    expected.extend(RESTRICTED_EVALUATION);
+    expected.extend([
+        "build",
+        "--no-link",
+        "--print-out-paths",
+        "--keep-going",
+        "--store",
+        STORE,
+        // `nix build` realises already-evaluated derivations: no flake attribute, and so no
+        // flake evaluation, ever runs with the builder's SSH key (M-2).
+        target_a.as_str(),
+        target_b.as_str(),
+    ]);
+    assert_eq!(build, expected);
+    assert!(
+        !build.iter().any(|argument| argument.starts_with(".#")),
+        "a build run with the builder's SSH key must never carry a flake attribute: {build:?}"
     );
+    // Every evaluation uses the lock as committed, under restricted evaluation.
+    for eval in nix_calls(&fixture, "eval") {
+        let eval: Vec<&str> = eval.lines().collect();
+        assert_eq!(
+            eval[2..2 + RESTRICTED_EVALUATION.len()],
+            *RESTRICTED_EVALUATION,
+            "{eval:?}"
+        );
+        assert!(eval.contains(&"--no-update-lock-file"), "{eval:?}");
+    }
+    assert!(!calls.contains("--no-write-lock-file"), "{calls}");
     assert_eq!(
         std::fs::read_to_string(fixture.path("build.sshopts")).unwrap(),
         "-i /run/keys/builder -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10"
@@ -264,6 +282,41 @@ async fn invalid_and_darwin_hosts_fail_before_any_process_runs() {
 }
 
 #[tokio::test]
+async fn a_lock_with_a_local_source_fails_every_host_before_nix_runs() {
+    let fixture = fixture();
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": { "inputs": { "keys": "keys" } },
+            "keys": {
+                "flake": false,
+                "locked": { "type": "path", "path": "/run/keys", "narHash": "sha256-x" },
+            },
+        },
+        "root": "root",
+        "version": 7,
+    });
+    std::fs::write(fixture.flake().join("flake.lock"), lock.to_string()).unwrap();
+    let results = fixture
+        .builder
+        .build(&fixture.flake(), &[host("a", "linux"), host("b", "linux")])
+        .await;
+    for name in ["a", "b"] {
+        let result = &results[name];
+        assert!(!result.ok);
+        assert!(!is_unreachable_reason(result.log_tail.as_deref()));
+        assert_eq!(
+            result.log_tail.as_deref(),
+            Some("flake.lock: input \"keys\" has a \"path\" source that is not remote")
+        );
+    }
+    assert_eq!(fixture.calls("nix"), "");
+}
+
+fn is_unreachable_reason(reason: Option<&str>) -> bool {
+    reason.is_some_and(|reason| reason.starts_with("builder unreachable"))
+}
+
+#[tokio::test]
 async fn connection_errors_in_a_build_log_do_not_make_the_builder_unreachable() {
     let build = r#"echo "test_db: connect to 127.0.0.1 port 5432: Connection refused" >&2; echo "Could not resolve host: example.com" >&2; exit 1"#;
     let fixture = fixture_with(&nix(build, STORE_ANSWERS), SSH, Duration::from_secs(30));
@@ -296,17 +349,10 @@ async fn a_store_that_does_not_answer_makes_every_host_unreachable() {
     }
     let probe = nix_calls(&fixture, "store");
     assert_eq!(probe.len(), 1);
-    assert_eq!(
-        probe[0].lines().collect::<Vec<_>>(),
-        [
-            "--extra-experimental-features",
-            "nix-command flakes",
-            "store",
-            "info",
-            "--store",
-            STORE
-        ]
-    );
+    let mut expected = vec!["--extra-experimental-features", "nix-command flakes"];
+    expected.extend(RESTRICTED_EVALUATION);
+    expected.extend(["store", "info", "--store", STORE]);
+    assert_eq!(probe[0].lines().collect::<Vec<_>>(), expected);
     assert!(nix_calls(&fixture, "path-info").is_empty());
 }
 

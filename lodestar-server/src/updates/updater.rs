@@ -13,7 +13,7 @@ use super::updates_state::AlreadyRunning;
 use super::version::compare_versions;
 use crate::builds::is_built_here;
 use crate::clock;
-use crate::config::ManagedHost;
+use crate::config::{ManagedHost, valid_host_name};
 use crate::db::{insert_audit, recent_audit_of_kind};
 use crate::mirror::PushError;
 use crate::state::AppState;
@@ -130,14 +130,6 @@ fn valid_input(input: &str) -> bool {
         && input
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
-}
-
-/// Host names become part of a flake attribute path.
-fn valid_host_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
 /// Steps 1-6 in the worktree at `dir`; the second value is an extra audit detail (key, value).
